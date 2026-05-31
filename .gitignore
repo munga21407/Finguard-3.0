@@ -1,0 +1,75 @@
+# ─── OS & Editor ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
+
+# ─── Environment & Secrets ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# ─── Frontend (Next.js) ─────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.vercel/
+frontend/.turbo/
+frontend/dist/
+frontend/build/
+frontend/coverage/
+frontend/.eslintcache
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
+
+# ─── Backend (Python / FastAPI) ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.log
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ─── Docker ─────────────────────────────────────────────────────────────────
+*.env.docker
+
+# ─── Infrastructure / Observability ─────────────────────────────────────────
+infrastructure/grafana/data/
+infrastructure/prometheus/data/
+infrastructure/nginx/certs/
+*.pem
+*.key
+*.crt
+
+# ─── Database & Migrations ──────────────────────────────────────────────────
+*.sqlite
+*.sqlite3
+*.db
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+*.bak
+*.tmp
+.cache/
+tmp/
