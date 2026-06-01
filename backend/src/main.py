@@ -76,7 +76,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-Instrumentator().instrument(app).expose(app)
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 register_exception_handlers(app)
 
 app.include_router(identity_router, prefix="/api/v1/identity", tags=["identity"])

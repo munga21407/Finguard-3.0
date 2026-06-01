@@ -12,8 +12,10 @@ scrape_configs:
     metrics_path: /metrics
 
   # Celery Flower — exposes worker task state and throughput metrics.
-  # Only reachable when the `workers` profile is active; Prometheus marks
-  # the target DOWN otherwise (expected, not an error).
+  # Flower 2.x exposes a Prometheus-compatible endpoint at /metrics on its
+  # main HTTP port by default (no extra flag required).  Only reachable when
+  # the `workers` profile is active; Prometheus marks the target DOWN
+  # otherwise (expected, not an error).
   - job_name: "flower-celery"
     static_configs:
       - targets: ["flower:5555"]

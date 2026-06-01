@@ -43,6 +43,13 @@ jobs:
       - name: Run architecture guardrail tests
         # --noconftest: skip the app-level conftest that requires live DB env vars.
         # Architecture tests use only stdlib (ast, pathlib) — no app bootstrap needed.
+        #
+        # NOTE — path filter scope: this workflow triggers only when files under
+        # backend/src/domains/**, backend/tests/architecture/**, or this workflow
+        # file itself change.  A boundary violation introduced via a shared utility
+        # module outside those paths will NOT trigger this job.  If you add a new
+        # shared-code location that could carry cross-domain imports, extend the
+        # paths: filter above to include it.
         run: pytest tests/architecture/ -v --tb=short --noconftest
 
       - name: Summarise results
