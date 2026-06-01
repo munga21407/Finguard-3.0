@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -27,6 +28,12 @@ from sklearn.ensemble import IsolationForest
 
 from src.core.config import settings
 from src.core.logging import logger
+from src.core.metrics import (
+    AGENT_E_ANOMALY_SCORE,
+    AGENT_E_STATE_PROBABILITY,
+    AGENT_LLM_LATENCY,
+    AGENT_LLM_PROCESSING,
+)
 from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.prompts.e_watchdog import WATCHDOG_SYSTEM
 from src.domains.intelligence.schemas import OrchestratorState, WatchdogAnalysis
@@ -284,6 +291,11 @@ def make_e_watchdog_node(llm=None):  # llm kept for signature compatibility
         anomaly_detected: bool = current_state == STATE_LABELS[STATE_CRITICAL]
         anomaly_score: float = _weighted_anomaly_score(hidden_states)
 
+        # Publish HMM results to Prometheus (observed after each watchdog run).
+        AGENT_E_ANOMALY_SCORE.set(anomaly_score)
+        for label, prob in zip(STATE_LABELS, state_probs.tolist()):
+            AGENT_E_STATE_PROBABILITY.labels(state=label).set(prob)
+
         # ── IsolationForest ──────────────────────────────────────────────────
         iso_score: float = _isolation_score(amounts)
 
@@ -348,9 +360,18 @@ def make_e_watchdog_node(llm=None):  # llm kept for signature compatibility
         }, indent=2)
         full_prompt = f"{WATCHDOG_SYSTEM}\n\nAnalysis data:\n{prompt_data}"
         try:
+            _t0 = time.monotonic()
             gemini_resp = await get_gemini_client().aio.models.generate_content(
                 model=settings.GEMINI_MODEL,
                 contents=full_prompt,
+            )
+            _elapsed = time.monotonic() - _t0
+            AGENT_LLM_LATENCY.labels(agent="e_watchdog", model=settings.GEMINI_MODEL).observe(
+                _elapsed
+            )
+            # D3-spec canonical metric (label: agent_id)
+            AGENT_LLM_PROCESSING.labels(agent_id="e_watchdog", model=settings.GEMINI_MODEL).observe(
+                _elapsed
             )
             summary = gemini_resp.text or current_state
         except Exception:

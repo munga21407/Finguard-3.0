@@ -11,6 +11,7 @@ from slowapi.errors import RateLimitExceeded
 from src.core.config import settings
 from src.core.exceptions import register_exception_handlers
 from src.core.logging import configure_logging
+import src.core.metrics as _metrics  # noqa: F401 — registers all custom collectors
 from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
 from src.infrastructure.database.postgres import close_db, init_db

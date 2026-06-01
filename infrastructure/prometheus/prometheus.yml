@@ -3,15 +3,27 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
+  # FastAPI backend — exposes /metrics via prometheus-fastapi-instrumentator
+  # plus all custom finguard_* metrics registered in src/core/metrics.py.
   - job_name: "finguard-backend"
     static_configs:
       - targets: ["backend:8000"]
     metrics_path: /metrics
 
-  - job_name: "postgres"
+  # Celery Flower — exposes worker task state and throughput metrics.
+  # Only available when the `workers` profile is active; scrape failures
+  # while the profile is inactive are expected and suppressed via honor_labels.
+  - job_name: "flower"
     static_configs:
-      - targets: ["postgres-exporter:9187"]
+      - targets: ["flower:5555"]
+    metrics_path: /metrics
 
+  # Redis exporter — exposes redis_* metrics for memory, hit/miss, etc.
   - job_name: "redis"
     static_configs:
       - targets: ["redis-exporter:9121"]
+
+  # PostgreSQL exporter — exposes pg_* metrics for connection pool, WAL lag, etc.
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres-exporter:9187"]

@@ -1,0 +1,60 @@
+name: Backend — Architecture Guardrails
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/src/domains/**"
+      - "backend/tests/architecture/**"
+      - ".github/workflows/backend-architecture-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "backend/src/domains/**"
+      - "backend/tests/architecture/**"
+      - ".github/workflows/backend-architecture-ci.yml"
+
+jobs:
+  architecture-guardrails:
+    name: Domain Isolation & Schema Compliance
+    runs-on: ubuntu-latest
+
+    # No database services needed — tests are pure static AST analysis.
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install pytest
+        # Architecture tests depend only on stdlib (ast, pathlib) + pytest.
+        # No application dependencies are required.
+        run: pip install pytest
+
+      - name: Run architecture guardrail tests
+        # --noconftest: skip the app-level conftest that requires live DB env vars.
+        # Architecture tests use only stdlib (ast, pathlib) — no app bootstrap needed.
+        run: pytest tests/architecture/ -v --tb=short --noconftest
+
+      - name: Summarise results
+        if: always()
+        run: |
+          echo "### Architecture Guardrail Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Checked domain isolation boundaries and schema placement rules." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Rule | Scope |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`identity\` must not import from \`finance\` or \`intelligence\` | AST static analysis |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`finance\` must not import from \`intelligence\` | AST static analysis |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`crm\` must not import from \`finance\` or \`intelligence\` | AST static analysis |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`VaultType\` sourced exclusively from \`finance/types.py\` | AST static analysis |" >> $GITHUB_STEP_SUMMARY

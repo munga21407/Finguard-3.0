@@ -1,4 +1,64 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FinGuard 3.0 — Docker Compose
+#
+# Usage
+# ─────
+#   Core only (API + infra):
+#     docker compose up
+#
+#   Core + background workers (Celery worker, Beat, Flower):
+#     docker compose --profile workers up
+#
+#   Core + full observability stack (Prometheus, Grafana, Redis Exporter):
+#     docker compose --profile monitoring up
+#
+#   Everything:
+#     docker compose --profile workers --profile monitoring up
+#
+# Profiles
+# ────────
+#   workers     celery-worker · celery-beat · flower
+#   monitoring  prometheus · grafana · redis-exporter
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Reusable YAML anchors ─────────────────────────────────────────────────────
+
+# Shared environment for every backend process: API server and all workers.
+# Using x-backend-env so both `backend` and worker services can merge it.
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-finguard}:${POSTGRES_PASSWORD:-finguard}@postgres:5432/${POSTGRES_DB:-finguard}
+  MONGODB_URL: mongodb://${MONGO_USER:-finguard}:${MONGO_PASSWORD:-finguard}@mongodb:27017
+  MONGO_URI: mongodb://${MONGO_USER:-finguard}:${MONGO_PASSWORD:-finguard}@mongodb:27017
+  REDIS_URL: redis://:${REDIS_PASSWORD:-finguard}@redis:6379/0
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-finguard}:${RABBITMQ_PASSWORD:-finguard}@rabbitmq:5672/
+  SECRET_KEY: ${SECRET_KEY}
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  # Celery-specific overrides — explicit so the app never falls back to REDIS_URL.
+  CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-finguard}:${RABBITMQ_PASSWORD:-finguard}@rabbitmq:5672/
+  CELERY_REDIS_URL: redis://:${REDIS_PASSWORD:-finguard}@redis:6379/0
+  CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-finguard}@redis:6379/0
+
+# depends_on block reused by celery-worker (needs DB + both brokers healthy).
+x-worker-depends: &worker-depends
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  rabbitmq:
+    condition: service_healthy
+
+# Build config for the backend dev image (all extras including flower).
+# Workers mount the source tree so code changes are reflected without rebuild.
+x-worker-build: &worker-build
+  context: ../backend
+  target: dev
+
+# ── Services ──────────────────────────────────────────────────────────────────
+
 services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
   postgres:
     image: postgres:16
     environment:
@@ -24,6 +84,11 @@ services:
       - mongo_data:/data/db
     ports:
       - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -32,6 +97,11 @@ services:
       - redis_data:/data
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-finguard} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -41,37 +111,31 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "5672:5672"      # AMQP
+      - "15672:15672"    # Management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Application ─────────────────────────────────────────────────────────────
 
   backend:
     build: ../backend
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-finguard}:${POSTGRES_PASSWORD:-finguard}@postgres:5432/${POSTGRES_DB:-finguard}
-      MONGODB_URL: mongodb://${MONGO_USER:-finguard}:${MONGO_PASSWORD:-finguard}@mongodb:27017
-      REDIS_URL: redis://:${REDIS_PASSWORD:-finguard}@redis:6379/0
-      RABBITMQ_URL: amqp://${RABBITMQ_USER:-finguard}:${RABBITMQ_PASSWORD:-finguard}@rabbitmq:5672/
-      SECRET_KEY: ${SECRET_KEY}
-      ENVIRONMENT: ${ENVIRONMENT:-production}
+      <<: *backend-env
     depends_on:
       postgres:
         condition: service_healthy
+      mongodb:
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "8000:8000"
-
-  celery_worker:
-    build: ../backend
-    command: uv run celery -A src.workers.tasks.celery_app worker --loglevel=info
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-finguard}:${POSTGRES_PASSWORD:-finguard}@postgres:5432/${POSTGRES_DB:-finguard}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-finguard}@redis:6379/0
-      RABBITMQ_URL: amqp://${RABBITMQ_USER:-finguard}:${RABBITMQ_PASSWORD:-finguard}@rabbitmq:5672/
-    depends_on:
-      - backend
 
   frontend:
     build: ../frontend
@@ -93,25 +157,122 @@ services:
       - backend
       - frontend
 
+  # ── Observability (profile: monitoring) ─────────────────────────────────────
+  # Start with: docker compose --profile monitoring up
+
   prometheus:
     image: prom/prometheus:latest
+    profiles: ["monitoring"]
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Primary config — sourced from monitoring/ at the repo root.
+      # Scrape jobs: finguard-backend · flower-celery · redis-exporter
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     ports:
       - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.enable-lifecycle"   # enables /-/reload via POST /-/reload
 
   grafana:
     image: grafana/grafana:latest
+    profiles: ["monitoring"]
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      # Default home dashboard — points to the D3 AI overview.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /monitoring/dashboards/finguard_ai_overview.json
     volumes:
       - ./grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      # Dashboard provider config: tells Grafana to load JSON files from /monitoring/dashboards
+      - ../monitoring/dashboards/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      # Dashboard JSON files (finguard_ai_overview.json + any others placed here)
+      - ../monitoring/dashboards:/monitoring/dashboards:ro
       - grafana_data:/var/lib/grafana
     ports:
-      - "3001:3000"
+      - "3001:3000"    # host 3001 avoids collision with frontend on 3000
     depends_on:
       - prometheus
+
+  # Redis Exporter — translates Redis INFO stats to Prometheus /metrics.
+  # Prometheus scrapes it at redis-exporter:9121 (see prometheus/prometheus.yml).
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    profiles: ["monitoring"]
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-finguard}
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ── Workers (profile: workers) ───────────────────────────────────────────────
+  # Start with: docker compose --profile workers up
+  #
+  # All three services:
+  #   • build from the `dev` Dockerfile target so flower + all extras are present
+  #   • bind-mount ../backend:/app for live code reloading without a rebuild
+  #   • use an anonymous /app/.venv volume to preserve the uv-managed virtualenv
+  #     that was installed during `docker build` (prevents the bind mount from
+  #     shadowing the container's site-packages)
+
+  celery-worker:
+    build: *worker-build
+    # -c 2  : two child processes (scale out via replicas, not concurrency)
+    # -Q    : subscribe to all three queues wired in celery_app.task_routes
+    command: uv run celery -A src.workers.tasks worker -l info -c 2 -Q ocr_processing,batch_processing,watchdog
+    profiles: ["workers"]
+    environment:
+      <<: *backend-env
+      ENABLE_EXPENSE_EVENT_CONSUMER: "true"
+      ENABLE_OUTBOX_PROJECTOR: "true"
+    depends_on: *worker-depends
+    volumes:
+      - ../backend:/app
+      - /app/.venv    # preserve the container's uv virtualenv
+
+  celery-beat:
+    build: *worker-build
+    # PersistentScheduler writes last-run timestamps to a file; the named
+    # volume keeps them across container recreations.
+    command: uv run celery -A src.workers.tasks beat -l info --scheduler=celery.beat.PersistentScheduler --schedule=/app/celerybeat-data/celerybeat-schedule
+    profiles: ["workers"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+      - /app/.venv                              # preserve the container's uv virtualenv
+      - celerybeat_schedule:/app/celerybeat-data  # persist beat schedule across restarts
+
+  flower:
+    build: *worker-build
+    # Flower is installed via the `flower` dev-extra in pyproject.toml.
+    # --port is explicit so the mapping below is self-documenting.
+    command: uv run celery -A src.workers.tasks flower --port=5555
+    profiles: ["workers"]
+    environment:
+      <<: *backend-env
+    ports:
+      - "5555:5555"    # Flower web UI
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+      - /app/.venv    # preserve the container's uv virtualenv
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
 
 volumes:
   postgres_data:
@@ -120,3 +281,4 @@ volumes:
   rabbitmq_data:
   prometheus_data:
   grafana_data:
+  celerybeat_schedule:    # Persists Beat's last-run schedule across restarts

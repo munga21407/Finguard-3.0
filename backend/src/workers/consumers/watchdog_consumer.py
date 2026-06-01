@@ -19,6 +19,7 @@ from langchain_core.messages import HumanMessage
 
 from src.core.config import settings
 from src.core.logging import logger
+from src.core.metrics import AMQP_MESSAGES_CONSUMED
 from src.infrastructure.cache.redis import get_redis
 from src.domains.intelligence.agents.e_watchdog import make_e_watchdog_node
 
@@ -102,12 +103,14 @@ async def _process_message(message: aio_pika.IncomingMessage) -> None:
     if await _is_processed(expense_id):
         logger.info("Watchdog consumer: duplicate message — skipping", expense_id=expense_id)
         await message.ack()
+        AMQP_MESSAGES_CONSUMED.labels(queue=QUEUE, status="skipped").inc()
         return
 
     try:
         await _handle_expense_created(body)
         await _mark_processed(expense_id)
         await message.ack()
+        AMQP_MESSAGES_CONSUMED.labels(queue=QUEUE, status="processed").inc()
     except asyncio.CancelledError:
         # Propagate to let the consumer loop shut down cleanly
         raise
@@ -118,6 +121,7 @@ async def _process_message(message: aio_pika.IncomingMessage) -> None:
             error=str(exc),
         )
         await message.nack(requeue=False)
+        AMQP_MESSAGES_CONSUMED.labels(queue=QUEUE, status="error").inc()
 
 
 async def run_watchdog_consumer() -> None:

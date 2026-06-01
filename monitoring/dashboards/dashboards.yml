@@ -1,0 +1,16 @@
+apiVersion: 1
+
+providers:
+  - name: finguard
+    orgId: 1
+    folder: FinGuard
+    folderUid: finguard
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      # This path is where the monitoring/dashboards/ directory is bind-mounted
+      # inside the Grafana container (see docker-compose.yml volumes).
+      path: /monitoring/dashboards
