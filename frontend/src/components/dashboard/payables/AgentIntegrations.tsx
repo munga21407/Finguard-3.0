@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export function AgentIntegrations() {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 h-full">
@@ -28,9 +30,9 @@ export function AgentIntegrations() {
             <span className="text-[11px] text-lf-tertiary mt-1">Batch #842 in progress…</span>
           </div>
         </div>
-        <button className="mt-4 w-full text-center text-lf-primary text-xs font-semibold tracking-widest uppercase hover:bg-lf-primary-fixed/20 py-2 rounded-lg transition-colors">
+        <Link href="/dashboard/payables/queue" className="mt-4 w-full text-center text-lf-primary text-xs font-semibold tracking-widest uppercase hover:bg-lf-primary-fixed/20 py-2 rounded-lg transition-colors block">
           Manage Queue
-        </button>
+        </Link>
       </div>
 
       {/* Agent E: Anomaly Watchdog */}
@@ -60,9 +62,9 @@ export function AgentIntegrations() {
             </div>
           </div>
         </div>
-        <button className="mt-4 w-full text-center bg-lf-error/10 text-lf-error text-xs font-semibold tracking-widest uppercase hover:bg-lf-error/20 py-2 rounded-lg transition-colors">
+        <Link href="/dashboard/payables/alerts" className="mt-4 w-full text-center bg-lf-error/10 text-lf-error text-xs font-semibold tracking-widest uppercase hover:bg-lf-error/20 py-2 rounded-lg transition-colors block">
           Review Alerts
-        </button>
+        </Link>
       </div>
     </div>
   );
