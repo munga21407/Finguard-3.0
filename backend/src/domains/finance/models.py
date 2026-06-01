@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.infrastructure.database.postgres import Base
+from src.domains.finance.types import VaultType
 
 import enum
 
@@ -90,6 +91,55 @@ class Budget(Base):
     period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class MpesaTransaction(Base):
+    """Raw M-Pesa Daraja STK Push callback payloads."""
+
+    __tablename__ = "mpesa_transactions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    trans_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
+    phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    bill_ref: Mapped[str | None] = mapped_column(String(100))
+    vault: Mapped[VaultType] = mapped_column(
+        Enum(VaultType), nullable=False, default=VaultType.MPESA
+    )
+    is_reconciled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    expenses: Mapped[list["Expense"]] = relationship("Expense", back_populates="mpesa_transaction")
+
+
+class Expense(Base):
+    """An expense record linked to a vault, optionally to a customer and/or invoice."""
+
+    __tablename__ = "expenses"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    expense_ref: Mapped[str | None] = mapped_column(String(50), index=True)
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id"), index=True
+    )
+    category: Mapped[str] = mapped_column(String(100), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
+    vault: Mapped[VaultType] = mapped_column(Enum(VaultType), nullable=False)
+    mpesa_trans_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mpesa_transactions.id"), index=True
+    )
+    invoice_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    mpesa_transaction: Mapped["MpesaTransaction | None"] = relationship(
+        "MpesaTransaction", back_populates="expenses"
     )
 
 

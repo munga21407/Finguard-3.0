@@ -1,8 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import settings
 from src.infrastructure.database.postgres import get_db
 from src.domains.identity.schemas import (
     RefreshRequest,
@@ -12,6 +15,8 @@ from src.domains.identity.schemas import (
     UserResponse,
 )
 from src.domains.identity.service import IdentityService
+
+limiter = Limiter(key_func=get_remote_address, storage_uri=settings.RATE_LIMIT_REDIS_URL)
 
 router = APIRouter()
 
@@ -25,7 +30,8 @@ async def register(data: UserCreate, db: DBSession) -> UserResponse:
 
 
 @router.post("/token", response_model=TokenResponse)
-async def login(data: TokenRequest, db: DBSession) -> TokenResponse:
+@limiter.limit("5/minute")
+async def login(request: Request, data: TokenRequest, db: DBSession) -> TokenResponse:
     return await IdentityService(db).login(data.email, data.password)
 
 

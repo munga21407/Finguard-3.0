@@ -11,7 +11,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from src.infrastructure.message_bus.publisher import publish
+from src.infrastructure.message_bus.rabbitmq_publisher import publish
 
 ALLOWED_EXCHANGES = frozenset({
     "finguard.finance",

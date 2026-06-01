@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 
-import anthropic
+from google.genai import types
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
+from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.models import AgentRun, AgentRunStatus
 from src.domains.intelligence.schemas import AgentRunCreate, ChatRequest, ChatResponse
 
@@ -11,20 +12,36 @@ from src.domains.intelligence.schemas import AgentRunCreate, ChatRequest, ChatRe
 class IntelligenceService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
-        self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
-        response = self._client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=request.max_tokens,
-            system=request.system or "You are a helpful financial assistant for Finguard.",
-            messages=[{"role": m.role, "content": m.content} for m in request.messages],
+        client = get_gemini_client()
+
+        # Map messages to Gemini Content objects (role must be "user" or "model")
+        contents = [
+            types.Content(
+                role=m.role,
+                parts=[types.Part(text=m.content)],
+            )
+            for m in request.messages
+        ]
+        config = (
+            types.GenerateContentConfig(system_instruction=request.system)
+            if request.system
+            else types.GenerateContentConfig(max_output_tokens=request.max_tokens)
         )
+
+        response = await client.aio.models.generate_content(
+            model=settings.GEMINI_MODEL,
+            contents=contents,
+            config=config,
+        )
+
+        usage = response.usage_metadata
         return ChatResponse(
-            content=response.content[0].text,
-            model=response.model,
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
+            content=response.text or "",
+            model=settings.GEMINI_MODEL,
+            input_tokens=usage.prompt_token_count or 0 if usage else 0,
+            output_tokens=usage.candidates_token_count or 0 if usage else 0,
         )
 
     async def run_agent(self, data: AgentRunCreate, triggered_by: str | None = None) -> AgentRun:
@@ -57,5 +74,4 @@ class IntelligenceService:
         return run
 
     async def _dispatch_agent(self, agent_name: str, input_data: dict) -> dict:
-        # TODO: implement individual agent handlers
         raise NotImplementedError(f"Agent '{agent_name}' not implemented")

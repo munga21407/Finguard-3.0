@@ -1,16 +1,15 @@
 """
 Supervisor node — the ReAct loop controller.
 
-Uses Claude to inspect the current conversation state and decide which agent
-node to invoke next, or whether the task is complete (FINISH).
+Uses Gemini structured output to inspect the current conversation state
+and decide which agent node to invoke next, or whether the task is complete.
 """
 from __future__ import annotations
 
-import json
+from pydantic import BaseModel
+from langchain_core.messages import AIMessage, HumanMessage
 
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
+from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.supervisor import SUPERVISOR_HUMAN, SUPERVISOR_SYSTEM
 from src.domains.intelligence.schemas import OrchestratorState
 
@@ -21,7 +20,12 @@ VALID_NEXT = {
 }
 
 
-def make_supervisor_node(llm: ChatAnthropic):
+class _SupervisorDecision(BaseModel):
+    next: str
+    reason: str
+
+
+def make_supervisor_node(llm=None):  # llm kept for signature compatibility
     async def supervisor_node(state: OrchestratorState) -> dict:
         system = SUPERVISOR_SYSTEM.format(mode=state.get("mode", "insights"))
         human = SUPERVISOR_HUMAN.format(
@@ -29,23 +33,18 @@ def make_supervisor_node(llm: ChatAnthropic):
                 f"[{m.__class__.__name__}] {m.content}" for m in state["messages"]
             )
         )
-        response = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=human)])
+        full_prompt = f"{system}\n\n{human}"
 
         try:
-            raw = response.content
-            # Extract JSON even if Claude wraps it in markdown code fences
-            if "```" in raw:
-                raw = raw.split("```")[1].lstrip("json").strip()
-            decision = json.loads(raw)
-            next_node = decision.get("next", "FINISH")
-        except (json.JSONDecodeError, IndexError):
+            decision = await generate_structured_content(full_prompt, _SupervisorDecision)
+            next_node = decision.next if decision.next in VALID_NEXT else "FINISH"
+            reason = decision.reason
+        except Exception:
             next_node = "FINISH"
-
-        if next_node not in VALID_NEXT:
-            next_node = "FINISH"
+            reason = "Routing failed — terminating."
 
         return {
-            "messages": [AIMessage(content=response.content, name="supervisor")],
+            "messages": [AIMessage(content=reason, name="supervisor")],
             "next": next_node,
         }
 

@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     MONGODB_URL: str
     MONGODB_DB: str = "finguard"
     REDIS_URL: str
+    AUTH_REDIS_URL: str = ""          # DB 1 — JWT blacklist + email tokens
+    RATE_LIMIT_REDIS_URL: str = ""    # DB 2 — per-IP rate-limit counters
     RABBITMQ_URL: str
 
     CELERY_BROKER_URL: str = ""
@@ -22,14 +24,43 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    MAX_LOGIN_ATTEMPTS: int = 5
+    LOCKOUT_DURATION_MINUTES: int = 30
+    PASSWORD_MIN_LENGTH: int = 8
 
-    ANTHROPIC_API_KEY: str = ""
+    # Background workers
+    ENABLE_EXPENSE_EVENT_CONSUMER: bool = False
+    ENABLE_OUTBOX_PROJECTOR: bool = False
+    OUTBOX_POLL_INTERVAL: float = 5.0
+    OUTBOX_BATCH_SIZE: int = 50
+    OUTBOX_MAX_RETRIES: int = 5
+    RABBITMQ_CONSUMER_RETRY_SECONDS: int = 5
+    WATCHDOG_CONSUMER_INTERVAL_SECONDS: int = 30
+
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
 
     @field_validator("CELERY_BROKER_URL", mode="before")
     @classmethod
     def default_celery_broker(cls, v: str, info: object) -> str:
         if not v:
             return ""
+        return v
+
+    @field_validator("AUTH_REDIS_URL", mode="before")
+    @classmethod
+    def default_auth_redis(cls, v: str, info: object) -> str:
+        if not v:
+            base: str = (info.data or {}).get("REDIS_URL", "redis://localhost:6379/0")
+            return base.rsplit("/", 1)[0] + "/1"
+        return v
+
+    @field_validator("RATE_LIMIT_REDIS_URL", mode="before")
+    @classmethod
+    def default_rate_limit_redis(cls, v: str, info: object) -> str:
+        if not v:
+            base: str = (info.data or {}).get("REDIS_URL", "redis://localhost:6379/0")
+            return base.rsplit("/", 1)[0] + "/2"
         return v
 
 

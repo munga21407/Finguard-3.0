@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 
 from src.core.logging import logger
 from src.infrastructure.database.postgres import AsyncSessionLocal
-from src.infrastructure.message_bus.publisher import publish
+from src.infrastructure.message_bus.rabbitmq_publisher import publish
 
 
 async def project_once() -> int:

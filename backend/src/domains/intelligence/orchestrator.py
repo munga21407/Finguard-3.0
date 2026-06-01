@@ -13,9 +13,10 @@ The supervisor decides whether to invoke another agent or terminate.
 """
 from __future__ import annotations
 
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, START, StateGraph
 
 from src.domains.intelligence.agents.a_generator import make_a_generator_node
+from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
 from src.domains.intelligence.agents.b_classifier import make_b_classifier_node
 from src.domains.intelligence.agents.c_reconciler import make_c_reconciler_node
 from src.domains.intelligence.agents.d_forecaster import make_d_forecaster_node
@@ -44,22 +45,40 @@ AGENT_NODE_MAP: dict[str, str] = {
 }
 
 
-def build_graph(llm):  # type: ignore[return]
-    """Compile and return the LangGraph StateGraph."""
+def build_invoice_graph():
+    """
+    Minimal two-node graph for the /intent endpoint.
+
+    Topology: START → a_generator → hub_writer → END
+
+    Agent A uses the Gemini client internally; the `llm` arg is not needed.
+    Hub writer upserts the extracted invoice into `intelligence_hub`.
+    """
+    workflow = StateGraph(OrchestratorState)
+    workflow.add_node("a_generator", make_a_generator_node())
+    workflow.add_node("hub_writer", make_hub_writer_node())
+    workflow.add_edge(START, "a_generator")
+    workflow.add_edge("a_generator", "hub_writer")
+    workflow.add_edge("hub_writer", END)
+    return workflow.compile()
+
+
+def build_graph():
+    """Compile and return the full supervisor-based LangGraph StateGraph."""
     workflow = StateGraph(OrchestratorState)
 
-    # Register nodes
-    workflow.add_node("supervisor",    make_supervisor_node(llm))
-    workflow.add_node("a_generator",   make_a_generator_node(llm))
-    workflow.add_node("b_classifier",  make_b_classifier_node(llm))
-    workflow.add_node("c_reconciler",  make_c_reconciler_node(llm))
-    workflow.add_node("d_forecaster",  make_d_forecaster_node(llm))
-    workflow.add_node("e_watchdog",    make_e_watchdog_node(llm))
-    workflow.add_node("f_auditor",     make_f_auditor_node(llm))
-    workflow.add_node("g_reporter",    make_g_reporter_node(llm))
-    workflow.add_node("h_advisor",     make_h_advisor_node(llm))
-    workflow.add_node("i_integrator",  make_i_integrator_node(llm))
-    workflow.add_node("j_summarizer",  make_j_summarizer_node(llm))
+    # Register nodes — all agents use Gemini internally; no llm arg needed
+    workflow.add_node("supervisor",    make_supervisor_node())
+    workflow.add_node("a_generator",   make_a_generator_node())
+    workflow.add_node("b_classifier",  make_b_classifier_node())
+    workflow.add_node("c_reconciler",  make_c_reconciler_node())
+    workflow.add_node("d_forecaster",  make_d_forecaster_node())
+    workflow.add_node("e_watchdog",    make_e_watchdog_node())
+    workflow.add_node("f_auditor",     make_f_auditor_node())
+    workflow.add_node("g_reporter",    make_g_reporter_node())
+    workflow.add_node("h_advisor",     make_h_advisor_node())
+    workflow.add_node("i_integrator",  make_i_integrator_node())
+    workflow.add_node("j_summarizer",  make_j_summarizer_node())
 
     # Supervisor → conditional fan-out based on state["next"]
     workflow.add_conditional_edges(

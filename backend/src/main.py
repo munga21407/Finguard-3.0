@@ -1,9 +1,12 @@
+import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from src.core.config import settings
 from src.core.exceptions import register_exception_handlers
@@ -11,8 +14,8 @@ from src.core.logging import configure_logging
 from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
 from src.infrastructure.database.postgres import close_db, init_db
-from src.infrastructure.message_bus.publisher import close_rabbitmq, init_rabbitmq
-from src.domains.identity.router import router as identity_router
+from src.infrastructure.message_bus.rabbitmq_publisher import close_rabbitmq, init_rabbitmq
+from src.domains.identity.router import limiter, router as identity_router
 from src.domains.crm.router import router as crm_router
 from src.domains.finance.router import router as finance_router
 from src.domains.intelligence.router import router as intelligence_router
@@ -25,7 +28,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_mongo()
     await init_redis()
     await init_rabbitmq()
+
+    background_tasks: list[asyncio.Task] = []
+
+    if settings.ENABLE_EXPENSE_EVENT_CONSUMER:
+        from src.workers.consumers.watchdog_consumer import run_watchdog_consumer
+        background_tasks.append(asyncio.create_task(run_watchdog_consumer()))
+
+    if settings.ENABLE_OUTBOX_PROJECTOR:
+        from src.workers.outbox.projector import run_projector
+        background_tasks.append(
+            asyncio.create_task(run_projector(settings.OUTBOX_POLL_INTERVAL))
+        )
+
     yield
+
+    for task in background_tasks:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     await close_rabbitmq()
     await close_redis()
     await close_mongo()
@@ -39,6 +63,9 @@ app = FastAPI(
     docs_url="/docs" if settings.DEBUG else None,
     redoc_url="/redoc" if settings.DEBUG else None,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 app.add_middleware(
     CORSMiddleware,

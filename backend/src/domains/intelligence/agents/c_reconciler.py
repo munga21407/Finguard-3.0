@@ -17,13 +17,12 @@ Implementation notes (TODO):
 """
 from __future__ import annotations
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage
 
 from src.domains.intelligence.schemas import OrchestratorState
 
 
-def make_c_reconciler_node(llm: ChatAnthropic):
+def make_c_reconciler_node(llm=None):  # llm kept for signature compatibility
     async def c_reconciler_node(state: OrchestratorState) -> dict:
         # TODO: implement — see module docstring
         return {

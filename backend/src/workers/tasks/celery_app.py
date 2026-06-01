@@ -9,6 +9,7 @@ celery_app = Celery(
     include=[
         "src.workers.tasks.ocr",
         "src.workers.tasks.batch",
+        "src.workers.tasks.reporting_tasks",
     ],
 )
 
@@ -21,4 +22,16 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    task_routes={
+        "ocr.*":       {"queue": "ocr_processing"},
+        "batch.*":     {"queue": "batch_processing"},
+        "watchdog.*":  {"queue": "watchdog"},
+        "reporting.*": {"queue": "batch_processing"},
+    },
+    beat_schedule={
+        "consume-watchdog-events": {
+            "task": "watchdog.consume_events",
+            "schedule": 30.0,  # every 30 seconds per SYSTEM_OVERVIEW.md
+        },
+    },
 )

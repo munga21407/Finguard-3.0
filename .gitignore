@@ -73,3 +73,4 @@ infrastructure/nginx/certs/
 *.tmp
 .cache/
 tmp/
+SYSTEM_OVERVIEW.md

@@ -5,6 +5,7 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 from src.domains.finance.models import InvoiceStatus, PaymentMethod, TransactionType
+from src.domains.finance.types import VaultType
 
 
 class LedgerEntryCreate(BaseModel):
@@ -59,6 +60,70 @@ class InvoiceResponse(BaseModel):
     due_date: datetime | None
     paid_at: datetime | None
     notes: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ── Expenses ──────────────────────────────────────────────────────────────────
+
+class ExpenseCreate(BaseModel):
+    expense_ref: str | None = None
+    customer_id: uuid.UUID | None = None
+    category: str
+    amount: Decimal = Field(gt=0)
+    vault: VaultType
+    mpesa_trans_id: uuid.UUID | None = None
+    invoice_id: uuid.UUID | None = None
+
+
+class ExpenseResponse(BaseModel):
+    id: uuid.UUID
+    expense_ref: str | None
+    customer_id: uuid.UUID | None
+    category: str
+    amount: Decimal
+    vault: VaultType
+    mpesa_trans_id: uuid.UUID | None
+    invoice_id: uuid.UUID | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ── M-Pesa ────────────────────────────────────────────────────────────────────
+
+class MpesaCallbackItem(BaseModel):
+    Name: str
+    Value: str | int | float | None = None
+
+
+class MpesaCallbackMetadata(BaseModel):
+    Item: list[MpesaCallbackItem] = []
+
+
+class MpesaStkCallback(BaseModel):
+    MerchantRequestID: str
+    CheckoutRequestID: str
+    ResultCode: int
+    ResultDesc: str
+    CallbackMetadata: MpesaCallbackMetadata | None = None
+
+
+class MpesaCallbackPayload(BaseModel):
+    """Daraja STK Push callback envelope."""
+
+    Body: dict  # accept raw Body; validated fields extracted in service
+
+
+class MpesaTransactionResponse(BaseModel):
+    id: uuid.UUID
+    trans_id: str
+    amount: Decimal
+    phone: str
+    bill_ref: str | None
+    vault: VaultType
+    is_reconciled: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -2,35 +2,44 @@
 Agent A — Invoice Generator / Extractor.
 
 Parses raw document text (OCR output, email body, pasted text) and returns a
-structured ExtractedInvoice. Uses Claude with few-shot prompting.
+structured ExtractedInvoice using Gemini's native response_schema mode —
+no JSON prompt hacking, no fallback parsing.
 """
 from __future__ import annotations
 
-import json
+from langchain_core.messages import AIMessage, HumanMessage
 
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
-from src.domains.intelligence.prompts.a_generator import GENERATOR_FEW_SHOT, GENERATOR_SYSTEM
-from src.domains.intelligence.schemas import ExtractedInvoice, ExtractedLineItem, OrchestratorState
+from src.domains.intelligence.llm_client import generate_structured_content
+from src.domains.intelligence.prompts.a_generator import GENERATOR_SYSTEM
+from src.domains.intelligence.schemas import ExtractedInvoice, OrchestratorState
 
 
-def make_a_generator_node(llm: ChatAnthropic):
+def make_a_generator_node(llm=None):  # llm kept for signature compatibility
     async def a_generator_node(state: OrchestratorState) -> dict:
-        # Pull the raw document text from context or the last human message
+        # Pull raw document text from context or the last human message
         raw_text: str = state["context"].get("document_text", "")
         if not raw_text:
             for msg in reversed(state["messages"]):
                 if isinstance(msg, HumanMessage):
-                    raw_text = msg.content
+                    raw_text = str(msg.content)
                     break
 
-        human_content = f"{GENERATOR_FEW_SHOT}\n\n### Your task\nTEXT:\n{raw_text}\n\nRESPONSE:"
-        response = await llm.ainvoke(
-            [SystemMessage(content=GENERATOR_SYSTEM), HumanMessage(content=human_content)]
+        prompt = (
+            f"{GENERATOR_SYSTEM}\n\n"
+            "Extract the invoice data from the following document text. "
+            "Return null for any field that is not explicitly present.\n\n"
+            f"DOCUMENT TEXT:\n{raw_text}"
         )
 
-        invoice = _parse_invoice(response.content)
+        try:
+            invoice = await generate_structured_content(prompt, ExtractedInvoice)
+        except Exception as exc:
+            error_msg = f"[a_generator] Gemini extraction failed: {exc}"
+            return {
+                "messages": [AIMessage(content=error_msg, name="a_generator")],
+                "context": state["context"],
+            }
+
         state["context"]["extracted_invoice"] = invoice.model_dump()
 
         summary = (
@@ -46,15 +55,3 @@ def make_a_generator_node(llm: ChatAnthropic):
         }
 
     return a_generator_node
-
-
-def _parse_invoice(raw: str) -> ExtractedInvoice:
-    try:
-        text = raw.strip()
-        if "```" in text:
-            text = text.split("```")[1].lstrip("json").strip()
-        data = json.loads(text)
-        items = [ExtractedLineItem(**li) for li in data.pop("line_items", [])]
-        return ExtractedInvoice(**data, line_items=items)
-    except Exception:
-        return ExtractedInvoice(confidence=0.0)

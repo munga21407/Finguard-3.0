@@ -2,21 +2,23 @@
 Intelligence domain router.
 
 Endpoints:
-  POST /api/v1/intelligence/ai-insights   — read-only analysis orchestration
-  POST /api/v1/intelligence/ai-actions    — state-changing action orchestration
+  POST /api/v1/intelligence/ai-insights  — read-only analysis orchestration
+  POST /api/v1/intelligence/ai-actions   — state-changing action orchestration
+  POST /api/v1/intelligence/intent       — focused invoice generation (Agent A + hub writer)
 """
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from langchain_core.messages import HumanMessage
 
-from src.domains.intelligence.dependencies import LLM, get_llm
-from src.domains.intelligence.orchestrator import build_graph
+from src.domains.intelligence.orchestrator import build_graph, build_invoice_graph
 from src.domains.intelligence.schemas import (
     ActionRequest,
     InsightRequest,
+    IntentRequest,
+    IntentResponse,
     OrchestrationResponse,
 )
 
@@ -28,10 +30,9 @@ async def _run_orchestrator(
     context: dict,
     user_id: str | None,
     mode: str,
-    llm,
 ) -> OrchestrationResponse:
     session_id = str(uuid.uuid4())
-    graph = build_graph(llm)
+    graph = build_graph()
 
     initial_state = {
         "messages": [HumanMessage(content=initial_message)],
@@ -44,14 +45,12 @@ async def _run_orchestrator(
 
     final_state = await graph.ainvoke(initial_state)
 
-    # Collect the names of all agents that spoke (exclude supervisor)
     agents_invoked = list({
         m.name
         for m in final_state["messages"]
         if hasattr(m, "name") and m.name and m.name != "supervisor"
     })
 
-    # The last non-supervisor AI message is the final answer
     answer = next(
         (
             m.content
@@ -71,24 +70,51 @@ async def _run_orchestrator(
 
 
 @router.post("/ai-insights", response_model=OrchestrationResponse)
-async def ai_insights(request: InsightRequest, llm: LLM) -> OrchestrationResponse:
+async def ai_insights(request: InsightRequest) -> OrchestrationResponse:
     """Run the multi-agent orchestrator in read-only insights mode."""
     return await _run_orchestrator(
         initial_message=request.query,
         context=request.context,
         user_id=request.user_id,
         mode="insights",
-        llm=llm,
     )
 
 
 @router.post("/ai-actions", response_model=OrchestrationResponse)
-async def ai_actions(request: ActionRequest, llm: LLM) -> OrchestrationResponse:
+async def ai_actions(request: ActionRequest) -> OrchestrationResponse:
     """Run the multi-agent orchestrator in actions mode (may publish events)."""
     return await _run_orchestrator(
         initial_message=request.intent,
         context=request.payload,
         user_id=request.user_id,
         mode="actions",
-        llm=llm,
+    )
+
+
+@router.post("/intent", response_model=IntentResponse)
+async def invoke_intent(request: IntentRequest) -> IntentResponse:
+    """
+    Focused invoice-generation graph: Agent A → Hub Writer → END.
+    Returns the extracted invoice payload and the MongoDB artifact ID.
+    """
+    session_id = str(uuid.uuid4())
+
+    initial_state = {
+        "messages": [HumanMessage(content=request.user_input)],
+        "next": "a_generator",
+        "context": {**request.context, "document_text": request.user_input},
+        "session_id": session_id,
+        "user_id": request.user_id,
+        "mode": "actions",
+    }
+
+    graph = build_invoice_graph()
+    final_state = await graph.ainvoke(initial_state)
+
+    context = final_state.get("context", {})
+    return IntentResponse(
+        session_id=session_id,
+        intent=request.intent,
+        invoice_payload=context.get("extracted_invoice"),
+        hub_artifact_id=context.get("hub_artifact_id"),
     )

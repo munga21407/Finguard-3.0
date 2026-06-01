@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domains.finance.models import Budget, Invoice, LedgerEntry
+from src.domains.finance.models import Budget, Expense, Invoice, LedgerEntry, MpesaTransaction
 
 
 class LedgerRepository:
@@ -57,6 +57,48 @@ class InvoiceRepository:
         await self._session.flush()
         await self._session.refresh(invoice)
         return invoice
+
+
+class ExpenseRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create(self, expense: Expense) -> Expense:
+        self._session.add(expense)
+        await self._session.flush()
+        await self._session.refresh(expense)
+        return expense
+
+    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Expense]:
+        result = await self._session.execute(
+            select(Expense).order_by(Expense.created_at.desc()).limit(limit).offset(offset)
+        )
+        return list(result.scalars().all())
+
+    async def get_by_id(self, expense_id: uuid.UUID) -> Expense | None:
+        return await self._session.get(Expense, expense_id)
+
+
+class MpesaRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_by_trans_id(self, trans_id: str) -> MpesaTransaction | None:
+        result = await self._session.execute(
+            select(MpesaTransaction).where(MpesaTransaction.trans_id == trans_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def create(self, txn: MpesaTransaction) -> MpesaTransaction:
+        self._session.add(txn)
+        await self._session.flush()
+        await self._session.refresh(txn)
+        return txn
+
+    async def save(self, txn: MpesaTransaction) -> MpesaTransaction:
+        await self._session.flush()
+        await self._session.refresh(txn)
+        return txn
 
 
 class BudgetRepository:
