@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jose import jwt
@@ -39,7 +39,7 @@ def _build_vc_claims(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     card = get_card(agent_id)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return {
         # Standard JWT claims
         "iss": card.issuer,
@@ -81,7 +81,7 @@ async def issue_vc(
     doc = {
         "vc_token": token,
         "claims": claims,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
     db = get_mongo_db()

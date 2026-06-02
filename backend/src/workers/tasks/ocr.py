@@ -41,7 +41,7 @@ def process_document_ocr(self, document_id: str, storage_path: str) -> dict:
             "confidence": 0.0,
         }
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
 
 
 @celery_app.task(
@@ -73,7 +73,7 @@ def process_receipt_ocr(self, receipt_id: str, image_bytes_b64: str) -> dict:
             "currency": "KES",
         }
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
 
 
 @celery_app.task(
@@ -102,4 +102,4 @@ def process_invoice_image(self, invoice_id: str, storage_path: str) -> dict:
             "extracted_fields": {},
         }
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc

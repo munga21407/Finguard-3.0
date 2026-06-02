@@ -4,8 +4,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domains.identity.dependencies import CurrentUser
-from src.infrastructure.database.postgres import get_db
 from src.domains.finance.schemas import (
     BudgetCreate,
     BudgetResponse,
@@ -17,9 +15,12 @@ from src.domains.finance.schemas import (
     LedgerEntryCreate,
     LedgerEntryResponse,
     MpesaCallbackPayload,
-    MpesaTransactionResponse,
+    PaymentCreate,
+    PaymentResponse,
 )
 from src.domains.finance.service import FinanceService
+from src.domains.identity.dependencies import CurrentUser
+from src.infrastructure.database.postgres import get_db
 
 router = APIRouter()
 
@@ -111,6 +112,18 @@ async def mpesa_callback(
     """
     await FinanceService(db).process_mpesa_callback(payload)
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+# ── Cash Payments ─────────────────────────────────────────────────────────────
+
+@router.post("/payments/cash", response_model=PaymentResponse, status_code=201)
+async def record_cash_payment(
+    data: PaymentCreate,
+    db: DBSession,
+    current_user: CurrentUser,
+) -> PaymentResponse:
+    payment = await FinanceService(db).record_cash_payment(data, current_user)
+    return PaymentResponse.model_validate(payment)
 
 
 # ── Budgets ───────────────────────────────────────────────────────────────────

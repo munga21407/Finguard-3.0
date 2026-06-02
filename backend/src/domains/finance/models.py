@@ -1,16 +1,15 @@
+import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, JSON, Numeric, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.infrastructure.database.postgres import Base
 from src.domains.finance.types import VaultType
-
-import enum
+from src.infrastructure.database.postgres import Base
 
 
 class TransactionType(str, enum.Enum):
@@ -63,6 +62,8 @@ class Invoice(Base):
     subtotal: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     tax: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
     total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    amount_paid: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), nullable=False)
+    balance_due: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="KES", nullable=False)
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -73,9 +74,11 @@ class Invoice(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
-        onupdate=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+    payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="invoice")
 
 
 class Budget(Base):
@@ -141,6 +144,27 @@ class Expense(Base):
     mpesa_transaction: Mapped["MpesaTransaction | None"] = relationship(
         "MpesaTransaction", back_populates="expenses"
     )
+
+
+class Payment(Base):
+    """Manual cash payment recorded against an invoice."""
+
+    __tablename__ = "payments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id"), nullable=False, index=True
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    vault: Mapped[VaultType] = mapped_column(Enum(VaultType), nullable=False)
+    reference_note: Mapped[str | None] = mapped_column(Text)
+    payment_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="payments")
 
 
 class OutboxEvent(Base):

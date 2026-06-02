@@ -8,7 +8,7 @@ refresh the cached artifact rather than creating duplicates.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.domains.intelligence.schemas import InsightArtifact, OrchestratorState
@@ -74,7 +74,7 @@ def make_hub_writer_node():
             return {}
 
         agent_id, intent, payload = result
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         artifact = InsightArtifact(
             agent_id=agent_id,

@@ -4,9 +4,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.infrastructure.database.postgres import get_db
 from src.domains.crm.schemas import CustomerCreate, CustomerResponse, CustomerUpdate
 from src.domains.crm.service import CRMService
+from src.infrastructure.database.postgres import get_db
 
 router = APIRouter()
 

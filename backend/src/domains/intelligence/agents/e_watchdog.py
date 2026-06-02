@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -213,7 +213,7 @@ async def _fetch_spending_ratios(
     period_days: int = 30,
 ) -> list[float]:
     """Query daily spending vs active budget; return list of ratios."""
-    since = (datetime.now(timezone.utc) - timedelta(days=period_days)).isoformat()
+    since = (datetime.now(UTC) - timedelta(days=period_days)).isoformat()
     executor = make_sql_executor(session)
 
     rows = await executor.ainvoke({"query": f"""

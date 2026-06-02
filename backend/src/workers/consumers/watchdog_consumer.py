@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Agent E RabbitMQ consumer.
 
@@ -9,7 +11,6 @@ TOPIC exchange, routing key `expenses.created`).  For each message:
   3. Calls Agent E's watchdog logic with a fresh OrchestratorState.
   4. ack() on success, nack(requeue=False) on unrecoverable error.
 """
-from __future__ import annotations
 
 import asyncio
 import json
@@ -20,8 +21,8 @@ from langchain_core.messages import HumanMessage
 from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import AMQP_MESSAGES_CONSUMED
-from src.infrastructure.cache.redis import get_redis
 from src.domains.intelligence.agents.e_watchdog import make_e_watchdog_node
+from src.infrastructure.cache.redis import get_redis
 
 EXCHANGE = "finguard.events"
 QUEUE = "finguard.agent_e.events"
@@ -51,7 +52,6 @@ async def _handle_expense_created(body: dict) -> None:
     sme_id = str(payload.get("sme_id", ""))
     amount = float(payload.get("amount", 0.0))
     category = str(payload.get("category", ""))
-    vault = str(payload.get("vault", "CASH"))
 
     # Build a minimal OrchestratorState for Agent E
     state = {

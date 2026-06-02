@@ -8,4 +8,4 @@ def run_batch_reconciliation(self, batch_id: str) -> dict[str, str]:
         # TODO: implement reconciliation logic
         return {"batch_id": batch_id, "status": "completed"}
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc

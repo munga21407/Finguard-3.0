@@ -1,15 +1,14 @@
+import enum
 import uuid
 from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Index, JSON, String, Text, func
+from sqlalchemy import JSON, BigInteger, DateTime, Enum, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.infrastructure.database.postgres import Base
-
-import enum
 
 
 class AgentRunStatus(str, enum.Enum):

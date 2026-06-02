@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 
-class AppException(Exception):
+class AppError(Exception):
     status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR
     detail: str = "Internal server error"
 
@@ -11,32 +11,32 @@ class AppException(Exception):
         super().__init__(self.detail)
 
 
-class NotFoundException(AppException):
+class NotFoundError(AppError):
     status_code = status.HTTP_404_NOT_FOUND
     detail = "Resource not found"
 
 
-class UnauthorizedException(AppException):
+class UnauthorizedError(AppError):
     status_code = status.HTTP_401_UNAUTHORIZED
     detail = "Unauthorized"
 
 
-class ForbiddenException(AppException):
+class ForbiddenError(AppError):
     status_code = status.HTTP_403_FORBIDDEN
     detail = "Forbidden"
 
 
-class ConflictException(AppException):
+class ConflictError(AppError):
     status_code = status.HTTP_409_CONFLICT
     detail = "Conflict"
 
 
-class UnprocessableException(AppException):
+class UnprocessableError(AppError):
     status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
     detail = "Unprocessable entity"
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    @app.exception_handler(AppException)
-    async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
+    @app.exception_handler(AppError)
+    async def app_exception_handler(request: Request, exc: AppError) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})

@@ -6,8 +6,8 @@ and decide which agent node to invoke next, or whether the task is complete.
 """
 from __future__ import annotations
 
+from langchain_core.messages import AIMessage
 from pydantic import BaseModel
-from langchain_core.messages import AIMessage, HumanMessage
 
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.supervisor import SUPERVISOR_HUMAN, SUPERVISOR_SYSTEM

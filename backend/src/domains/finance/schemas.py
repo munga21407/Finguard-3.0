@@ -1,10 +1,11 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from src.domains.finance.models import InvoiceStatus, PaymentMethod, TransactionType
+from src.domains.finance.models import InvoiceStatus, TransactionType
 from src.domains.finance.types import VaultType
 
 
@@ -56,6 +57,8 @@ class InvoiceResponse(BaseModel):
     subtotal: Decimal
     tax: Decimal
     total: Decimal
+    amount_paid: Decimal
+    balance_due: Decimal
     currency: str
     due_date: datetime | None
     paid_at: datetime | None
@@ -147,6 +150,30 @@ class BudgetResponse(BaseModel):
     currency: str
     period_start: datetime
     period_end: datetime
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ── Cash Payments ─────────────────────────────────────────────────────────────
+
+class PaymentCreate(BaseModel):
+    invoice_id: uuid.UUID
+    amount: Decimal = Field(gt=0, description="Must be greater than zero")
+    # Literal enforces CASH-only at parse time — M-Pesa payments arrive via Daraja webhook.
+    vault: Literal[VaultType.CASH] = VaultType.CASH
+    reference_note: str | None = None
+    payment_date: datetime
+
+
+class PaymentResponse(BaseModel):
+    id: uuid.UUID
+    invoice_id: uuid.UUID
+    amount: Decimal
+    vault: VaultType
+    reference_note: str | None
+    payment_date: datetime
+    recorded_by: uuid.UUID
     created_at: datetime
 
     model_config = {"from_attributes": True}

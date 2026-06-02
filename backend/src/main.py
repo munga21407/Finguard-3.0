@@ -1,6 +1,6 @@
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,18 +8,19 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+import src.core.metrics as _metrics  # noqa: F401 — registers all custom collectors
 from src.core.config import settings
 from src.core.exceptions import register_exception_handlers
 from src.core.logging import configure_logging
-import src.core.metrics as _metrics  # noqa: F401 — registers all custom collectors
+from src.domains.crm.router import router as crm_router
+from src.domains.finance.router import router as finance_router
+from src.domains.identity.router import limiter
+from src.domains.identity.router import router as identity_router
+from src.domains.intelligence.router import router as intelligence_router
 from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
 from src.infrastructure.database.postgres import close_db, init_db
 from src.infrastructure.message_bus.rabbitmq_publisher import close_rabbitmq, init_rabbitmq
-from src.domains.identity.router import limiter, router as identity_router
-from src.domains.crm.router import router as crm_router
-from src.domains.finance.router import router as finance_router
-from src.domains.intelligence.router import router as intelligence_router
 
 
 @asynccontextmanager

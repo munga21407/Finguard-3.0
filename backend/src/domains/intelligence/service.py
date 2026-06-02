@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from google.genai import types
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,7 +57,7 @@ class IntelligenceService:
         await self._session.refresh(run)
 
         run.status = AgentRunStatus.RUNNING
-        run.started_at = datetime.now(timezone.utc)
+        run.started_at = datetime.now(UTC)
         await self._session.flush()
 
         try:
@@ -68,7 +68,7 @@ class IntelligenceService:
             run.status = AgentRunStatus.FAILED
             run.error = str(exc)
         finally:
-            run.completed_at = datetime.now(timezone.utc)
+            run.completed_at = datetime.now(UTC)
 
         await self._session.commit()
         return run

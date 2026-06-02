@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domains.finance.models import Budget, Expense, Invoice, LedgerEntry, MpesaTransaction
+from src.domains.finance.models import Budget, Expense, Invoice, LedgerEntry, MpesaTransaction, Payment
 
 
 class LedgerRepository:
@@ -114,5 +114,24 @@ class BudgetRepository:
     async def list_all(self) -> list[Budget]:
         result = await self._session.execute(
             select(Budget).order_by(Budget.period_start.desc())
+        )
+        return list(result.scalars().all())
+
+
+class PaymentRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create(self, payment: Payment) -> Payment:
+        self._session.add(payment)
+        await self._session.flush()
+        await self._session.refresh(payment)
+        return payment
+
+    async def list_by_invoice(self, invoice_id: uuid.UUID) -> list[Payment]:
+        result = await self._session.execute(
+            select(Payment)
+            .where(Payment.invoice_id == invoice_id)
+            .order_by(Payment.payment_date.desc())
         )
         return list(result.scalars().all())

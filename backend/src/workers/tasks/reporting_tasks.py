@@ -208,4 +208,4 @@ def generate_monthly_intelligence_report(self, sme_id: str) -> dict[str, Any]:
     try:
         return asyncio.run(_run_intelligence_report(sme_id))
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc

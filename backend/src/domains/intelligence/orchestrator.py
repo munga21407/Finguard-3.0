@@ -16,7 +16,6 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 
 from src.domains.intelligence.agents.a_generator import make_a_generator_node
-from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
 from src.domains.intelligence.agents.b_classifier import make_b_classifier_node
 from src.domains.intelligence.agents.c_reconciler import make_c_reconciler_node
 from src.domains.intelligence.agents.d_forecaster import make_d_forecaster_node
@@ -24,6 +23,7 @@ from src.domains.intelligence.agents.e_watchdog import make_e_watchdog_node
 from src.domains.intelligence.agents.f_auditor import make_f_auditor_node
 from src.domains.intelligence.agents.g_reporter import make_g_reporter_node
 from src.domains.intelligence.agents.h_advisor import make_h_advisor_node
+from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
 from src.domains.intelligence.agents.i_integrator import make_i_integrator_node
 from src.domains.intelligence.agents.j_summarizer import make_j_summarizer_node
 from src.domains.intelligence.agents.supervisor import make_supervisor_node

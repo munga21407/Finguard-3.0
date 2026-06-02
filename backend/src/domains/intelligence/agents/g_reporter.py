@@ -31,7 +31,6 @@ from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.schemas import AgentGOutput, OrchestratorState
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
-
 # ── Forecasting ───────────────────────────────────────────────────────────────
 
 def _forecast_series(historical: list[float], periods: int = 12) -> list[float]:

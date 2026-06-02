@@ -6,7 +6,6 @@ from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
-from src.infrastructure.database.postgres import get_db
 from src.domains.identity.schemas import (
     RefreshRequest,
     TokenRequest,
@@ -15,6 +14,7 @@ from src.domains.identity.schemas import (
     UserResponse,
 )
 from src.domains.identity.service import IdentityService
+from src.infrastructure.database.postgres import get_db
 
 limiter = Limiter(key_func=get_remote_address, storage_uri=settings.RATE_LIMIT_REDIS_URL)
 
