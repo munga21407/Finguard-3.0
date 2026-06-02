@@ -90,7 +90,12 @@ warn_return_any = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # passlib imports the deprecated `crypt` stdlib module at the module level;
+    # the library is unmaintained and has no fix for Python 3.12+.
+    "ignore::DeprecationWarning:passlib",
+]
 
 [tool.coverage.run]
 source = ["src"]
