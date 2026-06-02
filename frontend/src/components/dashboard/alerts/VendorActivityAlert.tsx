@@ -23,7 +23,7 @@ export function VendorActivityAlert() {
               </span>
             </div>
             <p className="text-sm text-lf-on-surface-variant mt-1">
-              First-time payment detected to an offshore account for <span className="font-semibold text-lf-on-surface">'TechFlow Solutions'</span>.
+              First-time payment detected to an offshore account for <span className="font-semibold text-lf-on-surface">&apos;TechFlow Solutions&apos;</span>.
             </p>
           </div>
         </div>
@@ -58,7 +58,7 @@ export function VendorActivityAlert() {
           </div>
 
           <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200/60 text-sm text-lf-on-surface-variant italic border-l-2 border-yellow-400">
-            <p>"No prior payment history found for this vendor. Destination account flagged as offshore by compliance ruleset. Manual review recommended before approval."</p>
+            <p>&quot;No prior payment history found for this vendor. Destination account flagged as offshore by compliance ruleset. Manual review recommended before approval.&quot;</p>
           </div>
 
           <div className="flex flex-wrap gap-2">

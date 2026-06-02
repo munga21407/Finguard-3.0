@@ -130,8 +130,8 @@ export function DuplicateInvoiceAlert() {
           </div>
         </div>
         <div className="space-y-2 text-sm text-lf-on-surface-variant italic border-l-2 border-lf-primary/30 pl-3 mb-3">
-          <p>"This invoice matches 97% similarity with #INV-0019 processed in September. Vendor, amount, and line items are identical."</p>
-          <p>"Historical pattern analysis shows no recurring monthly billing arrangement. Risk score: <strong className="text-lf-on-surface not-italic">88/100</strong>."</p>
+          <p>&quot;This invoice matches 97% similarity with #INV-0019 processed in September. Vendor, amount, and line items are identical.&quot;</p>
+          <p>&quot;Historical pattern analysis shows no recurring monthly billing arrangement. Risk score: <strong className="text-lf-on-surface not-italic">88/100</strong>.&quot;</p>
         </div>
         <div className="flex items-start gap-2 bg-lf-surface-container-lowest rounded-lg p-3 border border-lf-outline-variant/20 mb-3">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-lf-primary mt-0.5 shrink-0">
