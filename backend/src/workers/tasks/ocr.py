@@ -11,14 +11,14 @@ from typing import Any
 from src.workers.tasks.celery_app import celery_app
 
 
-@celery_app.task(
+@celery_app.task(  # type: ignore[untyped-decorator]
     bind=True,
     name="ocr.process_document",
     queue="ocr_processing",
     max_retries=3,
     default_retry_delay=60,
 )
-def process_document_ocr(self, document_id: str, storage_path: str) -> dict[str, Any]:
+def process_document_ocr(self: Any, document_id: str, storage_path: str) -> dict[str, Any]:
     """
     Extract text from an uploaded document via OCR.
 
@@ -46,14 +46,14 @@ def process_document_ocr(self, document_id: str, storage_path: str) -> dict[str,
         raise self.retry(exc=exc) from exc
 
 
-@celery_app.task(
+@celery_app.task(  # type: ignore[untyped-decorator]
     bind=True,
     name="ocr.process_receipt",
     queue="ocr_processing",
     max_retries=3,
     default_retry_delay=60,
 )
-def process_receipt_ocr(self, receipt_id: str, image_bytes_b64: str) -> dict[str, Any]:
+def process_receipt_ocr(self: Any, receipt_id: str, image_bytes_b64: str) -> dict[str, Any]:
     """
     Extract structured transaction data from a receipt image.
 
@@ -78,14 +78,14 @@ def process_receipt_ocr(self, receipt_id: str, image_bytes_b64: str) -> dict[str
         raise self.retry(exc=exc) from exc
 
 
-@celery_app.task(
+@celery_app.task(  # type: ignore[untyped-decorator]
     bind=True,
     name="ocr.process_invoice_image",
     queue="ocr_processing",
     max_retries=3,
     default_retry_delay=60,
 )
-def process_invoice_image(self, invoice_id: str, storage_path: str) -> dict[str, Any]:
+def process_invoice_image(self: Any, invoice_id: str, storage_path: str) -> dict[str, Any]:
     """
     OCR-extract structured invoice data from a scanned invoice image.
 

@@ -124,7 +124,7 @@ def _calculate_tax_liability(
 
 # ── LangGraph node ─────────────────────────────────────────────────────────────
 
-def make_f_auditor_node(llm=None):  # llm kept for signature compatibility
+def make_f_auditor_node(llm: Any = None) -> Any:  # llm kept for signature compatibility
     async def f_auditor_node(state: OrchestratorState) -> dict[str, Any]:
         ctx: dict[str, Any] = state["context"]
         tax_regime: str = ctx.get("tax_regime", "COMPREHENSIVE")
@@ -211,7 +211,7 @@ Return your analysis as a JSON object with fields:
                     response_schema=_ComplianceAnalysis,
                 ),
             )
-            analysis = _ComplianceAnalysis.model_validate_json(resp.text)
+            analysis = _ComplianceAnalysis.model_validate_json(resp.text or "")
         except Exception as exc:
             logger.warning("Agent F: Gemini compliance analysis failed", error=str(exc))
             aml_flag = max_single_tx >= _AML_REPORTING_THRESHOLD

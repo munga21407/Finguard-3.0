@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,7 +32,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_redis()
     await init_rabbitmq()
 
-    background_tasks: list[asyncio.Task] = []
+    background_tasks: list[asyncio.Task[Any]] = []
 
     if settings.ENABLE_EXPENSE_EVENT_CONSUMER:
         from src.workers.consumers.watchdog_consumer import run_watchdog_consumer

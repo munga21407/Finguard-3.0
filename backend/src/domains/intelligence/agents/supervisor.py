@@ -27,7 +27,7 @@ class _SupervisorDecision(BaseModel):
     reason: str
 
 
-def make_supervisor_node(llm=None):  # llm kept for signature compatibility
+def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature compatibility
     async def supervisor_node(state: OrchestratorState) -> dict[str, Any]:
         system = SUPERVISOR_SYSTEM.format(mode=state.get("mode", "insights"))
         human = SUPERVISOR_HUMAN.format(

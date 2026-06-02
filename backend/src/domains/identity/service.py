@@ -45,7 +45,7 @@ class IdentityService:
         payload = decode_token(refresh_token)
         if payload.get("type") != "refresh":
             raise UnauthorizedError("Invalid token type")
-        user = await self._repo.get_by_id(payload["sub"])  # type: ignore[arg-type]
+        user = await self._repo.get_by_id(payload["sub"])
         if not user or not user.is_active:
             raise UnauthorizedError("User not found or disabled")
         return TokenResponse(

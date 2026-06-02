@@ -57,6 +57,7 @@ dev = [
     "types-passlib",
     "types-python-jose",
     "types-redis",
+    "types-celery",
     # Celery Flower monitoring UI — used by the celery-flower worker container.
     "flower>=2.0.1",
 ]

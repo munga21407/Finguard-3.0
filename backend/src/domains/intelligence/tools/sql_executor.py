@@ -27,7 +27,7 @@ def _validate(query: str) -> None:
         raise ValueError("Query contains forbidden keyword")
 
 
-def make_sql_executor(session: AsyncSession):  # type: ignore[return]
+def make_sql_executor(session: AsyncSession) -> Any:
     @tool
     async def execute_sql(query: str) -> list[dict[str, Any]]:
         """Run a read-only SELECT query against the Finguard PostgreSQL database.

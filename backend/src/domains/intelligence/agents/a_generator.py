@@ -16,7 +16,7 @@ from src.domains.intelligence.prompts.a_generator import GENERATOR_SYSTEM
 from src.domains.intelligence.schemas import ExtractedInvoice, OrchestratorState
 
 
-def make_a_generator_node(llm=None):  # llm kept for signature compatibility
+def make_a_generator_node(llm: Any = None) -> Any:  # llm kept for signature compatibility
     async def a_generator_node(state: OrchestratorState) -> dict[str, Any]:
         # Pull raw document text from context or the last human message
         raw_text: str = state["context"].get("document_text", "")

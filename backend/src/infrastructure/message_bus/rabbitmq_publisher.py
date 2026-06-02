@@ -2,12 +2,13 @@ import json
 from typing import Any
 
 import aio_pika
-from aio_pika import Connection, ExchangeType
+from aio_pika import ExchangeType
+from aio_pika.abc import AbstractRobustConnection
 
 from src.core.config import settings
 from src.core.logging import logger
 
-_connection: Connection | None = None
+_connection: AbstractRobustConnection | None = None
 
 
 async def init_rabbitmq() -> None:

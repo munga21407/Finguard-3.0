@@ -20,7 +20,7 @@ ALLOWED_EXCHANGES = frozenset({
 })
 
 
-def make_event_publisher(mode: str):  # type: ignore[return]
+def make_event_publisher(mode: str) -> Any:
     @tool
     async def publish_event(exchange: str, routing_key: str, payload: dict[str, Any]) -> str:
         """Publish a domain event to RabbitMQ.

@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 import aio_pika
+from aio_pika.abc import AbstractIncomingMessage
 from langchain_core.messages import HumanMessage
 
 from src.core.config import settings
@@ -41,7 +43,7 @@ async def _mark_processed(expense_id: str) -> None:
     await redis.setex(f"{IDEMPOTENCY_PREFIX}{expense_id}", IDEMPOTENCY_TTL, "1")
 
 
-async def _handle_expense_created(body: dict) -> None:
+async def _handle_expense_created(body: dict[str, Any]) -> None:
     """
     Unpack an `expenses.created` payload, build a minimal OrchestratorState,
     and invoke Agent E's watchdog node.
@@ -70,7 +72,7 @@ async def _handle_expense_created(body: dict) -> None:
     }
 
     node = make_e_watchdog_node()
-    result = await node(state)  # type: ignore[arg-type]
+    result = await node(state)
     analysis = result.get("context", {}).get("budget_watchdog_result", {})
     logger.info(
         "Watchdog analysis complete",
@@ -81,7 +83,7 @@ async def _handle_expense_created(body: dict) -> None:
     )
 
 
-async def _process_message(message: aio_pika.IncomingMessage) -> None:
+async def _process_message(message: AbstractIncomingMessage) -> None:
     try:
         body = json.loads(message.body)
     except json.JSONDecodeError:

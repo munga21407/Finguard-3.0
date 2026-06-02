@@ -24,7 +24,7 @@ from typing import Any
 import numpy as np
 from langchain_core.messages import AIMessage
 from rapidfuzz import fuzz
-from sklearn.ensemble import IsolationForest
+from sklearn.ensemble import IsolationForest  # type: ignore[import-untyped]
 
 from src.core.config import settings
 from src.core.logging import logger
@@ -272,7 +272,7 @@ async def _fetch_recent_invoices(session: Any, limit: int = 30) -> list[dict[str
 # LangGraph node
 # ---------------------------------------------------------------------------
 
-def make_e_watchdog_node(llm=None):  # llm kept for signature compatibility
+def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature compatibility
     async def e_watchdog_node(state: OrchestratorState) -> dict[str, Any]:
         account_id: str = state["context"].get("account_id", "")
         period_days: int = state["context"].get("watchdog_period_days", 30)

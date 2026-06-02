@@ -23,20 +23,20 @@ async def close_redis() -> None:
             await pool.disconnect()
 
 
-def get_redis() -> Redis:  # type: ignore[type-arg]
+def get_redis() -> Redis:
     if _pool is None:
         raise RuntimeError("Redis pool not initialised")
     return Redis(connection_pool=_pool)
 
 
-def get_auth_redis() -> Redis:  # type: ignore[type-arg]
+def get_auth_redis() -> Redis:
     """DB 1 — JWT blacklist and email verification tokens."""
     if _auth_pool is None:
         raise RuntimeError("Auth Redis pool not initialised")
     return Redis(connection_pool=_auth_pool)
 
 
-def get_rate_limit_redis() -> Redis:  # type: ignore[type-arg]
+def get_rate_limit_redis() -> Redis:
     """DB 2 — per-IP rate-limit counters for slowapi."""
     if _rate_limit_pool is None:
         raise RuntimeError("Rate-limit Redis pool not initialised")

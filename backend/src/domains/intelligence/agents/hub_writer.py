@@ -66,7 +66,7 @@ def _extract_payload_and_intent(context: dict[str, Any]) -> tuple[str, str, dict
     return None
 
 
-def make_hub_writer_node():
+def make_hub_writer_node() -> Any:
     async def hub_writer_node(state: OrchestratorState) -> dict[str, Any]:
         result = _extract_payload_and_intent(state["context"])
         if result is None:

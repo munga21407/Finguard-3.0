@@ -41,4 +41,4 @@ async def generate_structured_content[T: BaseModel](prompt: str, response_schema
             response_schema=response_schema,
         ),
     )
-    return response_schema.model_validate_json(response.text)
+    return response_schema.model_validate_json(response.text or "")

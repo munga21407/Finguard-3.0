@@ -18,6 +18,8 @@ machine-generated (Gemini API floats only), so there is no injection risk.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import text
 
 from src.core.logging import logger
@@ -44,7 +46,8 @@ async def get_relevant_tax_rules(query: str, limit: int = 3) -> list[str]:
             model=EMBEDDING_MODEL,
             contents=query,
         )
-        values: list[float] = embed_resp.embeddings[0].values
+        raw_embeddings: Any = embed_resp.embeddings
+        values: list[float] = list(raw_embeddings[0].values)
     except Exception as exc:
         logger.warning("Tax RAG: embedding call failed", error=str(exc))
         return []

@@ -13,6 +13,8 @@ The supervisor decides whether to invoke another agent or terminate.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from langgraph.graph import END, START, StateGraph
 
 from src.domains.intelligence.agents.a_generator import make_a_generator_node
@@ -45,7 +47,7 @@ AGENT_NODE_MAP: dict[str, str] = {
 }
 
 
-def build_invoice_graph():
+def build_invoice_graph() -> Any:
     """
     Minimal two-node graph for the /intent endpoint.
 
@@ -63,7 +65,7 @@ def build_invoice_graph():
     return workflow.compile()
 
 
-def build_graph():
+def build_graph() -> Any:
     """Compile and return the full supervisor-based LangGraph StateGraph."""
     workflow = StateGraph(OrchestratorState)
 
@@ -84,7 +86,7 @@ def build_graph():
     workflow.add_conditional_edges(
         "supervisor",
         lambda state: state.get("next", "FINISH"),
-        AGENT_NODE_MAP,
+        AGENT_NODE_MAP,  # type: ignore[arg-type]
     )
 
     # Every agent unconditionally returns to supervisor

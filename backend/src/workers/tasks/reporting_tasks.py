@@ -178,14 +178,14 @@ async def _run_intelligence_report(sme_id: str) -> dict[str, Any]:
 
 # ── Celery task ───────────────────────────────────────────────────────────────
 
-@celery_app.task(
+@celery_app.task(  # type: ignore[untyped-decorator]
     name="reporting.generate_monthly_intelligence_report",
     bind=True,
     max_retries=3,
     default_retry_delay=60,
     queue="batch_processing",
 )
-def generate_monthly_intelligence_report(self, sme_id: str) -> dict[str, Any]:
+def generate_monthly_intelligence_report(self: Any, sme_id: str) -> dict[str, Any]:
     """
     Generate a monthly AI intelligence report for the given SME.
 

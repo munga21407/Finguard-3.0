@@ -55,7 +55,7 @@ def _forecast_series(historical: list[float], periods: int = 12) -> list[float]:
         return [max(0.0, round(mean + slope * (i + 1), 2)) for i in range(periods)]
 
     try:
-        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+        from statsmodels.tsa.holtwinters import ExponentialSmoothing  # type: ignore[import-untyped]
 
         model = ExponentialSmoothing(
             arr,
@@ -183,7 +183,7 @@ async def _fetch_monthly_cashflows() -> dict[str, Any]:
 
 # ── LangGraph node ─────────────────────────────────────────────────────────────
 
-def make_g_reporter_node(llm=None):  # llm kept for signature compatibility
+def make_g_reporter_node(llm: Any = None) -> Any:  # llm kept for signature compatibility
     async def g_reporter_node(state: OrchestratorState) -> dict[str, Any]:
         ctx: dict[str, Any] = state["context"]
         mode: str = state.get("mode", "insights")
