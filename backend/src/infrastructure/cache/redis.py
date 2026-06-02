@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from redis.asyncio import ConnectionPool, Redis
 from redis.asyncio.connection import Connection
 
