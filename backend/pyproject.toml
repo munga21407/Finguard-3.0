@@ -32,7 +32,7 @@ dependencies = [
     "langchain-core>=0.3.0",
     "numpy>=2.0.0",
     # Validation & settings
-    "pydantic>=2.8.0",
+    "pydantic[email]>=2.8.0",
     "pydantic-settings>=2.4.0",
     # Observability
     "prometheus-fastapi-instrumentator>=7.0.0",
