@@ -81,6 +81,12 @@ plugins = ["pydantic.mypy"]
 explicit_package_bases = true
 namespace_packages = true
 
+# Allow untyped calls during transition
+allow_untyped_calls = true
+allow_untyped_defs = false
+allow_incomplete_defs = false
+warn_return_any = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error"]
