@@ -1,13 +1,14 @@
 from redis.asyncio import ConnectionPool, Redis
+from redis.asyncio.connection import Connection
 
 from src.core.config import settings
 
 # DB 0 — Celery broker / general cache
-_pool: ConnectionPool | None = None
+_pool: ConnectionPool[Connection] | None = None
 # DB 1 — JWT blacklist + email verification tokens
-_auth_pool: ConnectionPool | None = None
+_auth_pool: ConnectionPool[Connection] | None = None
 # DB 2 — per-IP rate-limit counters (slowapi)
-_rate_limit_pool: ConnectionPool | None = None
+_rate_limit_pool: ConnectionPool[Connection] | None = None
 
 
 async def init_redis() -> None:
@@ -23,20 +24,20 @@ async def close_redis() -> None:
             await pool.disconnect()
 
 
-def get_redis() -> Redis:
+def get_redis() -> Redis[bytes]:
     if _pool is None:
         raise RuntimeError("Redis pool not initialised")
     return Redis(connection_pool=_pool)
 
 
-def get_auth_redis() -> Redis:
+def get_auth_redis() -> Redis[bytes]:
     """DB 1 — JWT blacklist and email verification tokens."""
     if _auth_pool is None:
         raise RuntimeError("Auth Redis pool not initialised")
     return Redis(connection_pool=_auth_pool)
 
 
-def get_rate_limit_redis() -> Redis:
+def get_rate_limit_redis() -> Redis[bytes]:
     """DB 2 — per-IP rate-limit counters for slowapi."""
     if _rate_limit_pool is None:
         raise RuntimeError("Rate-limit Redis pool not initialised")
