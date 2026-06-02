@@ -9,6 +9,7 @@ Endpoints:
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter
 from langchain_core.messages import HumanMessage
@@ -27,7 +28,7 @@ router = APIRouter()
 
 async def _run_orchestrator(
     initial_message: str,
-    context: dict,
+    context: dict[str, Any],
     user_id: str | None,
     mode: str,
 ) -> OrchestrationResponse:

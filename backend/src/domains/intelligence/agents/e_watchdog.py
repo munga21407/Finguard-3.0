@@ -273,7 +273,7 @@ async def _fetch_recent_invoices(session: Any, limit: int = 30) -> list[dict[str
 # ---------------------------------------------------------------------------
 
 def make_e_watchdog_node(llm=None):  # llm kept for signature compatibility
-    async def e_watchdog_node(state: OrchestratorState) -> dict:
+    async def e_watchdog_node(state: OrchestratorState) -> dict[str, Any]:
         account_id: str = state["context"].get("account_id", "")
         period_days: int = state["context"].get("watchdog_period_days", 30)
         mode: str = state.get("mode", "insights")

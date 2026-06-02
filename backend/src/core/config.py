@@ -1,4 +1,4 @@
-from pydantic import field_validator
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
 
     @field_validator("AUTH_REDIS_URL", mode="before")
     @classmethod
-    def default_auth_redis(cls, v: str, info: object) -> str:
+    def default_auth_redis(cls, v: str, info: ValidationInfo) -> str:
         if not v:
             base: str = (info.data or {}).get("REDIS_URL", "redis://localhost:6379/0")
             return base.rsplit("/", 1)[0] + "/1"
@@ -57,11 +57,11 @@ class Settings(BaseSettings):
 
     @field_validator("RATE_LIMIT_REDIS_URL", mode="before")
     @classmethod
-    def default_rate_limit_redis(cls, v: str, info: object) -> str:
+    def default_rate_limit_redis(cls, v: str, info: ValidationInfo) -> str:
         if not v:
             base: str = (info.data or {}).get("REDIS_URL", "redis://localhost:6379/0")
             return base.rsplit("/", 1)[0] + "/2"
         return v
 
 
-settings = Settings()  # type: ignore[call-arg]
+settings = Settings()

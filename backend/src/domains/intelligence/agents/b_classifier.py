@@ -16,13 +16,15 @@ Implementation notes (TODO):
 """
 from __future__ import annotations
 
+from typing import Any
+
 from langchain_core.messages import AIMessage
 
 from src.domains.intelligence.schemas import OrchestratorState
 
 
 def make_b_classifier_node(llm=None):  # llm kept for signature compatibility
-    async def b_classifier_node(state: OrchestratorState) -> dict:
+    async def b_classifier_node(state: OrchestratorState) -> dict[str, Any]:
         # TODO: implement — see module docstring
         return {
             "messages": [

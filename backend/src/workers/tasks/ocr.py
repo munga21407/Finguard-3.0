@@ -6,6 +6,8 @@ so it can retry itself with exponential back-off on transient failures.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from src.workers.tasks.celery_app import celery_app
 
 
@@ -16,7 +18,7 @@ from src.workers.tasks.celery_app import celery_app
     max_retries=3,
     default_retry_delay=60,
 )
-def process_document_ocr(self, document_id: str, storage_path: str) -> dict:
+def process_document_ocr(self, document_id: str, storage_path: str) -> dict[str, Any]:
     """
     Extract text from an uploaded document via OCR.
 
@@ -51,7 +53,7 @@ def process_document_ocr(self, document_id: str, storage_path: str) -> dict:
     max_retries=3,
     default_retry_delay=60,
 )
-def process_receipt_ocr(self, receipt_id: str, image_bytes_b64: str) -> dict:
+def process_receipt_ocr(self, receipt_id: str, image_bytes_b64: str) -> dict[str, Any]:
     """
     Extract structured transaction data from a receipt image.
 
@@ -83,7 +85,7 @@ def process_receipt_ocr(self, receipt_id: str, image_bytes_b64: str) -> dict:
     max_retries=3,
     default_retry_delay=60,
 )
-def process_invoice_image(self, invoice_id: str, storage_path: str) -> dict:
+def process_invoice_image(self, invoice_id: str, storage_path: str) -> dict[str, Any]:
     """
     OCR-extract structured invoice data from a scanned invoice image.
 

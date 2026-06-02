@@ -184,7 +184,7 @@ async def _fetch_monthly_cashflows() -> dict[str, Any]:
 # ── LangGraph node ─────────────────────────────────────────────────────────────
 
 def make_g_reporter_node(llm=None):  # llm kept for signature compatibility
-    async def g_reporter_node(state: OrchestratorState) -> dict:
+    async def g_reporter_node(state: OrchestratorState) -> dict[str, Any]:
         ctx: dict[str, Any] = state["context"]
         mode: str = state.get("mode", "insights")
 

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Any
 
 from google.genai import types
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,5 +74,5 @@ class IntelligenceService:
         await self._session.commit()
         return run
 
-    async def _dispatch_agent(self, agent_name: str, input_data: dict) -> dict:
+    async def _dispatch_agent(self, agent_name: str, input_data: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError(f"Agent '{agent_name}' not implemented")

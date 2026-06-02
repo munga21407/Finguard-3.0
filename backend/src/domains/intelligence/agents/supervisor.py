@@ -6,6 +6,8 @@ and decide which agent node to invoke next, or whether the task is complete.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
@@ -26,7 +28,7 @@ class _SupervisorDecision(BaseModel):
 
 
 def make_supervisor_node(llm=None):  # llm kept for signature compatibility
-    async def supervisor_node(state: OrchestratorState) -> dict:
+    async def supervisor_node(state: OrchestratorState) -> dict[str, Any]:
         system = SUPERVISOR_SYSTEM.format(mode=state.get("mode", "insights"))
         human = SUPERVISOR_HUMAN.format(
             messages="\n".join(

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -116,7 +116,7 @@ class MpesaStkCallback(BaseModel):
 class MpesaCallbackPayload(BaseModel):
     """Daraja STK Push callback envelope."""
 
-    Body: dict  # accept raw Body; validated fields extracted in service
+    Body: dict[str, Any]  # accept raw Body; validated fields extracted in service
 
 
 class MpesaTransactionResponse(BaseModel):

@@ -1,5 +1,5 @@
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,7 +105,7 @@ async def list_expenses(
 @router.post("/mpesa/callback", status_code=200)
 async def mpesa_callback(
     payload: MpesaCallbackPayload, db: DBSession
-) -> dict:
+) -> dict[str, Any]:
     """
     Daraja STK Push callback endpoint — no auth required (called by Safaricom).
     Returns a 200 immediately to satisfy Daraja's ACK requirement.

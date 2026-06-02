@@ -7,6 +7,8 @@ no JSON prompt hacking, no fallback parsing.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.domains.intelligence.llm_client import generate_structured_content
@@ -15,7 +17,7 @@ from src.domains.intelligence.schemas import ExtractedInvoice, OrchestratorState
 
 
 def make_a_generator_node(llm=None):  # llm kept for signature compatibility
-    async def a_generator_node(state: OrchestratorState) -> dict:
+    async def a_generator_node(state: OrchestratorState) -> dict[str, Any]:
         # Pull raw document text from context or the last human message
         raw_text: str = state["context"].get("document_text", "")
         if not raw_text:

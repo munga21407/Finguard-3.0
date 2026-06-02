@@ -125,7 +125,7 @@ def _calculate_tax_liability(
 # ── LangGraph node ─────────────────────────────────────────────────────────────
 
 def make_f_auditor_node(llm=None):  # llm kept for signature compatibility
-    async def f_auditor_node(state: OrchestratorState) -> dict:
+    async def f_auditor_node(state: OrchestratorState) -> dict[str, Any]:
         ctx: dict[str, Any] = state["context"]
         tax_regime: str = ctx.get("tax_regime", "COMPREHENSIVE")
         period_days: int = int(ctx.get("audit_period_days", 365))
