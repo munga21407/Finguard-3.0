@@ -32,7 +32,7 @@ class ConflictError(AppError):
 
 
 class UnprocessableError(AppError):
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
     detail = "Unprocessable entity"
 
 
