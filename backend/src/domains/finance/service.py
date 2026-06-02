@@ -59,7 +59,9 @@ class FinanceService:
         if await self._invoice_repo.get_by_number(data.invoice_number):
             raise ConflictError(f"Invoice {data.invoice_number} already exists")
         total = data.subtotal + data.tax
-        invoice = Invoice(**data.model_dump(), total=total, amount_paid=Decimal("0"), balance_due=total)
+        invoice = Invoice(
+            **data.model_dump(), total=total, amount_paid=Decimal("0"), balance_due=total
+        )
         invoice = await self._invoice_repo.create(invoice)
         self._session.add(
             OutboxEvent(
@@ -122,7 +124,9 @@ class FinanceService:
 
     # ── M-Pesa ────────────────────────────────────────────────────────────────
 
-    async def process_mpesa_callback(self, payload: MpesaCallbackPayload) -> MpesaTransactionResponse | None:
+    async def process_mpesa_callback(
+        self, payload: MpesaCallbackPayload
+    ) -> MpesaTransactionResponse | None:
         """
         Parse a Daraja STK Push callback, persist the transaction, and emit
         an `mpesa.reconciled` event for downstream agents.

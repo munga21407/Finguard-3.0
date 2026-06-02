@@ -25,7 +25,9 @@ def make_b_classifier_node(llm=None):  # llm kept for signature compatibility
     async def b_classifier_node(state: OrchestratorState) -> dict:
         # TODO: implement — see module docstring
         return {
-            "messages": [AIMessage(content="[b_classifier] Not yet implemented.", name="b_classifier")],
+            "messages": [
+                AIMessage(content="[b_classifier] Not yet implemented.", name="b_classifier")
+            ],
             "context": state["context"],
         }
 

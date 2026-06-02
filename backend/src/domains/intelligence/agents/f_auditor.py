@@ -57,8 +57,10 @@ async def _fetch_ledger_totals(period_days: int = 365) -> dict[str, float]:
     """
     sql = text(f"""
         SELECT
-            COALESCE(SUM(CASE WHEN transaction_type = 'credit' THEN amount ELSE 0 END), 0) AS revenue,
-            COALESCE(SUM(CASE WHEN transaction_type = 'debit'  THEN amount ELSE 0 END), 0) AS opex,
+            COALESCE(SUM(CASE WHEN transaction_type = 'credit'
+                             THEN amount ELSE 0 END), 0) AS revenue,
+            COALESCE(SUM(CASE WHEN transaction_type = 'debit'
+                             THEN amount ELSE 0 END), 0) AS opex,
             COUNT(*) AS tx_count,
             MAX(amount) AS max_single_tx
         FROM ledger_entries
@@ -100,10 +102,7 @@ def _calculate_tax_liability(
     regime_upper = tax_regime.upper()
 
     if regime_upper == "VAT":
-        if annual_revenue >= _VAT_THRESHOLD_ANNUAL_KES:
-            vat_liability = revenue * _VAT_RATE
-        else:
-            vat_liability = 0.0
+        vat_liability = revenue * _VAT_RATE if annual_revenue >= _VAT_THRESHOLD_ANNUAL_KES else 0.0
         etr = (vat_liability / max(revenue, 1.0)) * 100.0
         return "VAT", round(vat_liability, 2), round(etr, 4)
 

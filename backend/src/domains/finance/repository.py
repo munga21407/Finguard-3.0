@@ -3,7 +3,14 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domains.finance.models import Budget, Expense, Invoice, LedgerEntry, MpesaTransaction, Payment
+from src.domains.finance.models import (
+    Budget,
+    Expense,
+    Invoice,
+    LedgerEntry,
+    MpesaTransaction,
+    Payment,
+)
 
 
 class LedgerRepository:

@@ -43,7 +43,7 @@ async def post_ledger_entry(
 async def list_invoices(
     db: DBSession,
     _: CurrentUser,
-    customer_id: uuid.UUID | None = Query(default=None),
+    customer_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> list[InvoiceResponse]:
     invoices = await FinanceService(db).list_invoices(customer_id=customer_id)
     return [InvoiceResponse.model_validate(inv) for inv in invoices]

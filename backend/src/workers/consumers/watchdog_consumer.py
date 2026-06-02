@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Agent E RabbitMQ consumer.
 
@@ -11,6 +9,7 @@ TOPIC exchange, routing key `expenses.created`).  For each message:
   3. Calls Agent E's watchdog logic with a fresh OrchestratorState.
   4. ack() on success, nack(requeue=False) on unrecoverable error.
 """
+from __future__ import annotations
 
 import asyncio
 import json
@@ -51,7 +50,6 @@ async def _handle_expense_created(body: dict) -> None:
     expense_id = str(payload.get("expense_id", "unknown"))
     sme_id = str(payload.get("sme_id", ""))
     amount = float(payload.get("amount", 0.0))
-    category = str(payload.get("category", ""))
 
     # Build a minimal OrchestratorState for Agent E
     state = {

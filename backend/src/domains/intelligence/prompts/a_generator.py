@@ -50,7 +50,9 @@ RESPONSE:
   "subtotal": 5000.0,
   "tax": 800.0,
   "total": 5800.0,
-  "line_items": [{"description": "Office Stationery", "quantity": 10, "unit_price": 500.0, "total": 5000.0}],
+  "line_items": [
+    {"description": "Office Stationery", "quantity": 10, "unit_price": 500.0, "total": 5000.0}
+  ],
   "confidence": 0.99
 }
 """

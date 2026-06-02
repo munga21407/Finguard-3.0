@@ -44,8 +44,10 @@ async def _fetch_ledger_snapshot(sme_id: str) -> dict[str, Any]:
     """Aggregate 12-month totals for the audit context."""
     sql = text("""
         SELECT
-            COALESCE(SUM(CASE WHEN transaction_type = 'credit' THEN amount ELSE 0 END), 0) AS revenue,
-            COALESCE(SUM(CASE WHEN transaction_type = 'debit'  THEN amount ELSE 0 END), 0) AS opex,
+            COALESCE(SUM(CASE WHEN transaction_type = 'credit'
+                             THEN amount ELSE 0 END), 0) AS revenue,
+            COALESCE(SUM(CASE WHEN transaction_type = 'debit'
+                             THEN amount ELSE 0 END), 0) AS opex,
             COUNT(*)  AS tx_count,
             MAX(amount) AS max_single_tx
         FROM ledger_entries
@@ -72,8 +74,10 @@ async def _fetch_monthly_cashflows(sme_id: str) -> dict[str, Any]:
     sql = text("""
         SELECT
             TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
-            COALESCE(SUM(CASE WHEN transaction_type = 'credit' THEN amount ELSE 0 END), 0) AS revenue,
-            COALESCE(SUM(CASE WHEN transaction_type = 'debit'  THEN amount ELSE 0 END), 0) AS opex
+            COALESCE(SUM(CASE WHEN transaction_type = 'credit'
+                             THEN amount ELSE 0 END), 0) AS revenue,
+            COALESCE(SUM(CASE WHEN transaction_type = 'debit'
+                             THEN amount ELSE 0 END), 0) AS opex
         FROM ledger_entries
         WHERE created_at >= NOW() - INTERVAL '12 months'
         GROUP BY DATE_TRUNC('month', created_at)

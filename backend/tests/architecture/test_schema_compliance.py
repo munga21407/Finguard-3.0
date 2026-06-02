@@ -103,11 +103,14 @@ def test_vault_type_is_enum_subclass() -> None:
                     base_ids.append(base.id)
                 elif isinstance(base, ast.Attribute):
                     base_ids.append(base.attr)
-            assert "Enum" in base_ids, (
+            assert {"Enum", "StrEnum"} & set(base_ids), (
                 f"VaultType in {_TYPES_PY.relative_to(_BACKEND_ROOT)} does not "
-                "subclass Enum. It must inherit from enum.Enum (or str + enum.Enum) "
-                "for SQLAlchemy column compatibility."
+                "subclass Enum. It must inherit from enum.Enum, str + enum.Enum, "
+                "or enum.StrEnum for SQLAlchemy column compatibility."
             )
             return
 
-    raise AssertionError("VaultType class not found in types.py — test_vault_type_defined_in_types_module should have caught this first.")
+    raise AssertionError(
+        "VaultType class not found in types.py — "
+        "test_vault_type_defined_in_types_module should have caught this first."
+    )

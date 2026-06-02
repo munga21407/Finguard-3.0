@@ -92,27 +92,29 @@ def _forward_algorithm(observations: list[float]) -> np.ndarray:
     Uses log-space accumulation to avoid float underflow on long sequences.
     """
     n = len(STATE_LABELS)
-    T = len(observations)
+    seq_len = len(observations)
 
     # Alpha in log-space: log P(O_1..t, S_t=s)
-    log_alpha = np.full((T, n), -np.inf)
+    log_alpha = np.full((seq_len, n), -np.inf)
 
     # Initialisation
     for s in range(n):
         m, sd = EMISSION_PARAMS[s]
-        log_alpha[0, s] = math.log(INITIAL_PI[s] + 1e-300) + _gaussian_log_prob(observations[0], m, sd)
+        log_alpha[0, s] = (
+            math.log(INITIAL_PI[s] + 1e-300) + _gaussian_log_prob(observations[0], m, sd)
+        )
 
     log_trans = np.log(TRANSITION + 1e-300)
 
     # Recursion
-    for t in range(1, T):
+    for t in range(1, seq_len):
         for s in range(n):
             m, sd = EMISSION_PARAMS[s]
             emit = _gaussian_log_prob(observations[t], m, sd)
             log_alpha[t, s] = np.logaddexp.reduce(log_alpha[t - 1] + log_trans[:, s]) + emit
 
     # Normalise final slice to a probability distribution
-    final_log = log_alpha[T - 1]
+    final_log = log_alpha[seq_len - 1]
     # Subtract log-sum-exp for numerical stability
     log_z = np.logaddexp.reduce(final_log)
     probs = np.exp(final_log - log_z)
@@ -122,19 +124,19 @@ def _forward_algorithm(observations: list[float]) -> np.ndarray:
 def _viterbi(observations: list[float]) -> list[int]:
     """Viterbi algorithm — returns the most-likely hidden state sequence."""
     n = len(STATE_LABELS)
-    T = len(observations)
+    seq_len = len(observations)
 
     log_trans = np.log(TRANSITION + 1e-300)
     log_pi = np.log(INITIAL_PI + 1e-300)
 
-    dp = np.full((T, n), -np.inf)
-    backptr = np.zeros((T, n), dtype=int)
+    dp = np.full((seq_len, n), -np.inf)
+    backptr = np.zeros((seq_len, n), dtype=int)
 
     for s in range(n):
         m, sd = EMISSION_PARAMS[s]
         dp[0, s] = log_pi[s] + _gaussian_log_prob(observations[0], m, sd)
 
-    for t in range(1, T):
+    for t in range(1, seq_len):
         for s in range(n):
             m, sd = EMISSION_PARAMS[s]
             emit = _gaussian_log_prob(observations[t], m, sd)
@@ -142,8 +144,8 @@ def _viterbi(observations: list[float]) -> list[int]:
             backptr[t, s] = int(np.argmax(candidates))
             dp[t, s] = candidates[backptr[t, s]] + emit
 
-    path = [int(np.argmax(dp[T - 1]))]
-    for t in range(T - 1, 0, -1):
+    path = [int(np.argmax(dp[seq_len - 1]))]
+    for t in range(seq_len - 1, 0, -1):
         path.insert(0, backptr[t, path[0]])
     return path
 
@@ -155,7 +157,7 @@ def _weighted_anomaly_score(states: list[int]) -> float:
     weights = [math.exp(0.1 * i) for i in range(len(states))]
     total_w = sum(weights)
     # Normalise: max state index is 2, so divide by 2 to bound to [0, 1]
-    score = sum(w * s for w, s in zip(weights, states)) / (total_w * 2)
+    score = sum(w * s for w, s in zip(weights, states, strict=False)) / (total_w * 2)
     return round(score, 4)
 
 
@@ -171,11 +173,11 @@ def _isolation_score(amounts: list[float]) -> float:
     """
     if len(amounts) < ISOLATION_MIN_SAMPLES:
         return 0.0
-    X = np.array(amounts, dtype=float).reshape(-1, 1)
+    x = np.array(amounts, dtype=float).reshape(-1, 1)
     clf = IsolationForest(contamination=0.1, random_state=42, n_estimators=100)
-    clf.fit(X)
+    clf.fit(x)
     # decision_function: negative = anomalous, positive = normal
-    raw = float(clf.decision_function(X[-1:].reshape(1, -1))[0])
+    raw = float(clf.decision_function(x[-1:].reshape(1, -1))[0])
     # Map to [0, 1]: clamp and flip sign
     return round(float(max(0.0, min(1.0, -raw))), 4)
 
@@ -293,7 +295,7 @@ def make_e_watchdog_node(llm=None):  # llm kept for signature compatibility
 
         # Publish HMM results to Prometheus (observed after each watchdog run).
         AGENT_E_ANOMALY_SCORE.set(anomaly_score)
-        for label, prob in zip(STATE_LABELS, state_probs.tolist()):
+        for label, prob in zip(STATE_LABELS, state_probs.tolist(), strict=False):
             AGENT_E_STATE_PROBABILITY.labels(state=label).set(prob)
 
         # ── IsolationForest ──────────────────────────────────────────────────

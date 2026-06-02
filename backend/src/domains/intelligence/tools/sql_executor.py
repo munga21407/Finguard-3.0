@@ -40,6 +40,6 @@ def make_sql_executor(session: AsyncSession):  # type: ignore[return]
         result = await session.execute(text(query))
         keys = list(result.keys())
         rows = result.fetchmany(1000)
-        return [dict(zip(keys, row)) for row in rows]
+        return [dict(zip(keys, row, strict=False)) for row in rows]
 
     return execute_sql

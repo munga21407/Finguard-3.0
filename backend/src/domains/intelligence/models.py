@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.infrastructure.database.postgres import Base
 
 
-class AgentRunStatus(str, enum.Enum):
+class AgentRunStatus(enum.StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"

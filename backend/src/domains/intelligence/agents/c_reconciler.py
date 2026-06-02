@@ -26,7 +26,9 @@ def make_c_reconciler_node(llm=None):  # llm kept for signature compatibility
     async def c_reconciler_node(state: OrchestratorState) -> dict:
         # TODO: implement — see module docstring
         return {
-            "messages": [AIMessage(content="[c_reconciler] Not yet implemented.", name="c_reconciler")],
+            "messages": [
+                AIMessage(content="[c_reconciler] Not yet implemented.", name="c_reconciler")
+            ],
             "context": state["context"],
         }
 

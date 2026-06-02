@@ -29,7 +29,9 @@ def make_i_integrator_node(llm=None):  # llm kept for signature compatibility
     async def i_integrator_node(state: OrchestratorState) -> dict:
         # TODO: implement — see module docstring
         return {
-            "messages": [AIMessage(content="[i_integrator] Not yet implemented.", name="i_integrator")],
+            "messages": [
+                AIMessage(content="[i_integrator] Not yet implemented.", name="i_integrator")
+            ],
             "context": state["context"],
         }
 

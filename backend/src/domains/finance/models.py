@@ -12,12 +12,12 @@ from src.domains.finance.types import VaultType
 from src.infrastructure.database.postgres import Base
 
 
-class TransactionType(str, enum.Enum):
+class TransactionType(enum.StrEnum):
     DEBIT = "debit"
     CREDIT = "credit"
 
 
-class InvoiceStatus(str, enum.Enum):
+class InvoiceStatus(enum.StrEnum):
     DRAFT = "draft"
     SENT = "sent"
     PAID = "paid"
@@ -25,7 +25,7 @@ class InvoiceStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
-class PaymentMethod(str, enum.Enum):
+class PaymentMethod(enum.StrEnum):
     BANK_TRANSFER = "bank_transfer"
     CARD = "card"
     MPESA = "mpesa"
@@ -62,7 +62,9 @@ class Invoice(Base):
     subtotal: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     tax: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
     total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
-    amount_paid: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), nullable=False)
+    amount_paid: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), default=Decimal("0"), nullable=False
+    )
     balance_due: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="KES", nullable=False)
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

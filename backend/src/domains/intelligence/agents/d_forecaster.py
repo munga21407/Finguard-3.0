@@ -26,7 +26,9 @@ def make_d_forecaster_node(llm=None):  # llm kept for signature compatibility
     async def d_forecaster_node(state: OrchestratorState) -> dict:
         # TODO: implement — see module docstring
         return {
-            "messages": [AIMessage(content="[d_forecaster] Not yet implemented.", name="d_forecaster")],
+            "messages": [
+                AIMessage(content="[d_forecaster] Not yet implemented.", name="d_forecaster")
+            ],
             "context": state["context"],
         }
 

@@ -22,7 +22,8 @@ specialist financial agents to satisfy the user's request.
 2. Once the task is complete and a final answer can be given, respond with FINISH.
 3. Never call the same agent twice in a row for identical sub-tasks.
 4. Prefer agents whose output feeds naturally into the next agent.
-5. You MUST respond with a JSON object: {"next": "<agent_name_or_FINISH>", "reason": "<one sentence>"}
+5. You MUST respond with a JSON object:
+   {"next": "<agent_name_or_FINISH>", "reason": "<one sentence>"}
 
 ## Mode
 The current mode is **{mode}**.

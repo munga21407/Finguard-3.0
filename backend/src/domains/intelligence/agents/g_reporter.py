@@ -136,7 +136,7 @@ def _compute_bankability_score(
     if fc_revenue and fc_opex:
         quarters = min(len(fc_revenue), len(fc_opex))
         solvent = sum(
-            1 for r, o in zip(fc_revenue[:quarters], fc_opex[:quarters]) if r >= o
+            1 for r, o in zip(fc_revenue[:quarters], fc_opex[:quarters], strict=False) if r >= o
         )
         runway_score = int((solvent / max(quarters, 1)) * 20)
     else:
@@ -159,8 +159,10 @@ async def _fetch_monthly_cashflows() -> dict[str, Any]:
     sql = text("""
         SELECT
             TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
-            COALESCE(SUM(CASE WHEN transaction_type = 'credit' THEN amount ELSE 0 END), 0) AS revenue,
-            COALESCE(SUM(CASE WHEN transaction_type = 'debit'  THEN amount ELSE 0 END), 0) AS opex
+            COALESCE(SUM(CASE WHEN transaction_type = 'credit'
+                             THEN amount ELSE 0 END), 0) AS revenue,
+            COALESCE(SUM(CASE WHEN transaction_type = 'debit'
+                             THEN amount ELSE 0 END), 0) AS opex
         FROM ledger_entries
         WHERE created_at >= NOW() - INTERVAL '12 months'
         GROUP BY DATE_TRUNC('month', created_at)

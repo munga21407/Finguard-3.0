@@ -28,7 +28,9 @@ def make_j_summarizer_node(llm=None):  # llm kept for signature compatibility
     async def j_summarizer_node(state: OrchestratorState) -> dict:
         # TODO: implement — see module docstring
         return {
-            "messages": [AIMessage(content="[j_summarizer] Not yet implemented.", name="j_summarizer")],
+            "messages": [
+                AIMessage(content="[j_summarizer] Not yet implemented.", name="j_summarizer")
+            ],
             "context": state["context"],
         }
 

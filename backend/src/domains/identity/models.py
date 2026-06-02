@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.infrastructure.database.postgres import Base
 
 
-class UserRole(str, enum.Enum):
+class UserRole(enum.StrEnum):
     OWNER = "owner"
     ADMIN = "admin"
     MANAGER = "manager"

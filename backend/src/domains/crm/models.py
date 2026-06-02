@@ -9,14 +9,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.infrastructure.database.postgres import Base
 
 
-class CustomerStatus(str, enum.Enum):
+class CustomerStatus(enum.StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"
     PROSPECT = "prospect"
     CHURNED = "churned"
 
 
-class CustomerType(str, enum.Enum):
+class CustomerType(enum.StrEnum):
     INDIVIDUAL = "individual"
     BUSINESS = "business"
 

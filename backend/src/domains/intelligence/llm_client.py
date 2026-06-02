@@ -7,15 +7,11 @@ Pydantic-compliant structured outputs — no JSON prompt hacking.
 """
 from __future__ import annotations
 
-from typing import TypeVar
-
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
 from src.core.config import settings
-
-T = TypeVar("T", bound=BaseModel)
 
 _client: genai.Client | None = None
 
@@ -28,7 +24,7 @@ def get_gemini_client() -> genai.Client:
     return _client
 
 
-async def generate_structured_content(prompt: str, response_schema: type[T]) -> T:
+async def generate_structured_content[T: BaseModel](prompt: str, response_schema: type[T]) -> T:
     """
     Call Gemini with native structured-output mode.
 
