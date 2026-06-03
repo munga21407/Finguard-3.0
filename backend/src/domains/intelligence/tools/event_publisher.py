@@ -14,6 +14,7 @@ from langchain_core.tools import tool
 from src.infrastructure.message_bus.rabbitmq_publisher import publish
 
 ALLOWED_EXCHANGES = frozenset({
+    "finguard.events",         # primary domain event bus (finance.transactions.classified, etc.)
     "finguard.finance",
     "finguard.intelligence",
     "finguard.system",

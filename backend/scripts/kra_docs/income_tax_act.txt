@@ -1,0 +1,139 @@
+KENYA REVENUE AUTHORITY — INCOME TAX ACT (CAP 470)
+Consolidated KRA Guidance for Corporate Income Tax and SME Taxation | Updated 2024
+
+SECTION 1: CORPORATE INCOME TAX (CIT) RATE
+--------------------------------------------
+The standard rate of Corporate Income Tax (CIT) applicable to resident companies
+in Kenya is 30 percent (30%) on net taxable income.
+
+Net taxable income is calculated as:
+  Gross Revenue − Allowable Business Deductions = Net Profit
+  Net Profit × 30% = Corporate Income Tax Due
+
+For non-resident companies, the applicable rate is 37.5% on taxable income derived
+from or accruing in Kenya.
+
+Companies listed on the Nairobi Securities Exchange (NSE) enjoy a reduced rate of
+25% for the first 5 years following listing, provided at least 25% of shares are
+offered to the public.
+
+SECTION 2: SMALL BUSINESS TURNOVER TAX (TOT)
+----------------------------------------------
+Small businesses with gross annual turnover between KES 1,000,000 and KES 50,000,000
+may opt to be taxed under the Turnover Tax (TOT) regime instead of the standard
+Corporate Income Tax regime.
+
+Turnover Tax rate: 3% of gross monthly turnover.
+TOT filing and payment deadline: 20th day of the following month.
+
+Businesses with turnover below KES 1,000,000 are not required to pay income tax but
+must file a nil return.
+
+Businesses with turnover above KES 50,000,000 must use the standard CIT regime at 30%.
+
+SECTION 3: ALLOWABLE DEDUCTIONS
+---------------------------------
+The following expenditures are deductible against gross income when computing taxable
+profit for CIT purposes:
+
+3.1 Revenue Expenditure
+  - Salaries, wages, and benefits paid to employees (PAYE compliant)
+  - Rent and premises costs for business use
+  - Utility bills (electricity, water, internet, telephone) for business use
+  - Professional services fees (legal, audit, consultancy)
+  - Marketing and advertising expenses
+  - Office supplies and consumables
+  - Bank charges and financial service fees
+
+3.2 Capital Allowances
+  - Wear and tear allowance on plant and machinery: 12.5% per annum (reducing balance)
+  - Industrial building allowance: 10% of cost per annum
+  - Computer and digital equipment: 30% per annum (reducing balance)
+  - Motor vehicles: 25% per annum (reducing balance)
+
+3.3 Non-Deductible Expenses
+  - Personal expenditure of owners or directors
+  - Income tax payments (CIT, instalment tax)
+  - Fines and penalties paid to government authorities
+  - Entertainment expenses exceeding 1% of gross income
+  - Depreciation (replaced by KRA capital allowances)
+
+SECTION 4: INSTALMENT TAX PAYMENTS
+-------------------------------------
+Companies with an estimated annual tax liability exceeding KES 40,000 must pay
+instalment tax in four equal instalments:
+
+  1st Instalment: 25% — by 20th of the 4th month of the accounting year
+  2nd Instalment: 25% — by 20th of the 6th month
+  3rd Instalment: 25% — by 20th of the 9th month
+  4th Instalment: 25% — by 20th of the 12th month
+
+Penalty for underpayment of instalment tax: 20% of the difference between the
+instalment paid and the actual tax due.
+
+SECTION 5: ANNUAL TAX RETURN FILING
+--------------------------------------
+Companies must file their annual income tax return (IT2C form) within 6 months after
+the end of their accounting year. For companies with December year-end, the deadline
+is 30 June of the following year.
+
+Late filing penalty: 5% of tax due per month, capped at 25% of total tax due.
+
+SECTION 6: PAY AS YOU EARN (PAYE)
+-----------------------------------
+Employers are required to deduct PAYE from employee salaries and remit to KRA by the
+9th day of the following month.
+
+PAYE Tax Bands (2024):
+  KES 0 – 24,000/month: 10%
+  KES 24,001 – 32,333/month: 25%
+  KES 32,334 and above: 30%
+
+Personal Relief: KES 2,400 per month (KES 28,800 per annum)
+Insurance Relief: 15% of premiums paid, max KES 5,000 per month
+
+SECTION 7: WITHHOLDING TAX
+----------------------------
+Withholding Tax (WHT) is deducted at source by the payer on specific payments:
+
+  - Dividends to resident shareholders: 5%
+  - Dividends to non-resident shareholders: 15%
+  - Interest paid to residents: 15%
+  - Management and professional fees to residents: 5%
+  - Royalties to residents: 5%
+  - Royalties to non-residents: 20%
+  - Construction contracts (to residents): 3%
+  - Rental income (gross rent): 7.5% (resident landlords)
+
+WHT must be remitted to KRA by the 20th of the month following the deduction.
+
+SECTION 8: TRANSFER PRICING RULES
+------------------------------------
+Companies entering into transactions with related parties (defined as holding 25%+
+equity interest) must ensure pricing conforms to the arm's length principle.
+
+Documentation required:
+  - Transfer Pricing Policy document
+  - Comparability analysis
+  - Selection and application of the most appropriate method
+
+Penalty for non-compliance: KES 1,000,000 plus 2% of the value of cross-border
+transactions without contemporaneous documentation.
+
+SECTION 9: ANTI-AVOIDANCE PROVISIONS
+---------------------------------------
+KRA has broad powers to disregard transactions that lack commercial substance and
+are entered into primarily to reduce tax liability. The Commissioner may:
+  - Recharacterize transactions to reflect their economic substance
+  - Assess tax based on the reconstructed transaction
+  - Apply the general anti-avoidance rule (GAAR)
+
+SECTION 10: RECORD KEEPING
+----------------------------
+All companies must retain financial records for a minimum of 5 years, including:
+  - Audited financial statements
+  - Supporting schedules (trial balance, depreciation, debtors/creditors)
+  - Payroll records and PAYE remittance receipts
+  - Bank statements and reconciliations
+  - Board minutes approving financial transactions
+  - Contracts and agreements with related parties

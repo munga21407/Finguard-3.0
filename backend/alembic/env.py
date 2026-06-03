@@ -11,6 +11,7 @@ from src.infrastructure.database.postgres import Base  # noqa: F401 — register
 import src.domains.identity.models  # noqa: F401
 import src.domains.crm.models  # noqa: F401
 import src.domains.finance.models  # noqa: F401
+import src.domains.intelligence.models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
@@ -28,13 +29,14 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=True,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(connection=connection, target_metadata=target_metadata, include_schemas=True)
     with context.begin_transaction():
         context.run_migrations()
 

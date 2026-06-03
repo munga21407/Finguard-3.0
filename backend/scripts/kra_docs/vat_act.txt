@@ -1,0 +1,98 @@
+KENYA REVENUE AUTHORITY — VALUE ADDED TAX ACT (CAP 476)
+Consolidated KRA Guidance for SME Compliance | Updated 2024
+
+SECTION 1: VAT REGISTRATION THRESHOLD
+---------------------------------------
+An enterprise whose cumulative taxable supplies exceed KES 5,000,000 in any twelve-month
+period is required to register for Value Added Tax (VAT) with the Kenya Revenue Authority.
+Registration must be completed within 30 days of exceeding the threshold. Voluntary
+registration is permitted for businesses with annual turnover below the threshold.
+
+Penalty for failure to register: KES 10,000 or 5% of the tax due, whichever is higher.
+
+SECTION 2: STANDARD VAT RATE
+------------------------------
+The standard rate of Value Added Tax applicable to taxable supplies of goods and services
+made in Kenya is 16 percent (16%). This rate applies to all supplies not specifically
+classified as zero-rated or exempt under the Third Schedule of the VAT Act.
+
+From 1 January 2024, digital marketplace supplies are subject to the standard 16% VAT rate.
+
+SECTION 3: ZERO-RATED SUPPLIES
+--------------------------------
+The following supplies are zero-rated (0% VAT, but VAT registration is still required):
+- Exports of goods and services to consumers outside Kenya
+- Supply of maize flour, cassava flour, wheat or meslin flour packaged in retail form
+- Supply of milk and cream, unprocessed, raw or unconcentrated
+- Supply of bread (excluding pastries, cakes, and biscuits)
+- Inputs for the manufacture of medicaments
+- Inputs for the manufacture of agricultural equipment
+- Services supplied to non-resident persons for use outside Kenya
+- Transportation of goods by air or sea to a place outside Kenya
+
+SECTION 4: EXEMPT SUPPLIES
+----------------------------
+The following supplies are exempt from VAT (no VAT charged and no input VAT recovery):
+- Financial services (banking, insurance, lending)
+- Educational services provided by licensed institutions
+- Medical and veterinary services
+- Supply of residential premises for occupation as a private dwelling
+- Postal services under the Postal Corporation of Kenya Act
+- Unprocessed agricultural produce (primary sector)
+- Public transportation (buses licensed for 25+ passengers)
+
+SECTION 5: VAT FILING AND PAYMENT DEADLINES
+---------------------------------------------
+VAT returns must be filed and payment made by the 20th day of the month following the
+taxable period. The taxable period is one calendar month.
+
+Late filing penalty: KES 10,000 or 5% of tax payable, whichever is greater.
+Late payment penalty: 5% of the unpaid tax plus 1% per month interest.
+
+SECTION 6: INPUT VAT RECOVERY
+-------------------------------
+A VAT-registered person is entitled to deduct input VAT paid on goods and services
+acquired for the purpose of making taxable supplies. Input VAT on exempt supplies is
+not recoverable. Partial exemption rules apply where a person makes both taxable and
+exempt supplies; the recoverable proportion is calculated using the standard method:
+
+  Recoverable % = (Taxable Supplies / Total Supplies) × 100
+
+SECTION 7: ELECTRONIC TAX INVOICE MANAGEMENT SYSTEM (eTIMS)
+-------------------------------------------------------------
+With effect from 1 January 2024, all VAT-registered traders must issue tax invoices
+through the KRA Electronic Tax Invoice Management System (eTIMS). Non-compliance
+renders the input VAT claim invalid for the purchaser.
+
+KRA Compliance Requirement: All invoices must carry a KRA-assigned invoice number
+and a QR code linking to the eTIMS portal verification.
+
+SECTION 8: WITHHOLDING VAT
+----------------------------
+The following categories of purchasers are required to withhold VAT at source:
+- Government ministries, departments, and agencies
+- Public bodies and parastatals
+- Listed companies and their subsidiaries
+
+Withholding VAT rate: 2% of the taxable value of the supply.
+The withheld amount must be remitted to KRA by the 20th of the following month.
+
+SECTION 9: PENALTIES FOR VAT EVASION
+--------------------------------------
+Tax evasion relating to VAT carries the following penalties under the Tax Procedures Act:
+- Civil penalty: 100% of the evaded tax
+- Criminal prosecution: imprisonment for up to 3 years and/or a fine
+- Interest: 1% per month on underpaid tax, compounded monthly
+- Failure to maintain VAT records: KES 500,000 penalty
+
+SECTION 10: RECORD KEEPING REQUIREMENTS
+-----------------------------------------
+VAT-registered persons must maintain the following records for a minimum of 5 years:
+- All sales and purchase invoices (original)
+- VAT account (monthly summary of output and input VAT)
+- Cash receipts and payment records
+- Import and export documentation
+- Stock records and inventory sheets
+- Bank statements reconciled to VAT returns
+
+All records must be available for inspection by KRA officers at any time.

@@ -16,23 +16,23 @@ from src.infrastructure.database.mongodb import get_mongo_db
 
 COLLECTION = "intelligence_hub"
 
-# Per-agent TTL in hours (from SYSTEM_OVERVIEW.md)
+# Per-agent TTL mappings (Sprint 3-5 confirmed values)
 _AGENT_TTL_HOURS: dict[str, int] = {
     "A": 1,    # Invoice Generator
-    "B": 1,    # Receipt Scanner
-    "C": 0,    # Reconciliation — 15 min → stored as float below
-    "D": 1,    # Financial Analyst
-    "E": 0,    # Budget Watchdog — 30 min
+    "B": 1,    # Transaction Classifier
+    "C": 0,    # Reconciler — 10 min (see _AGENT_TTL_MINUTES)
+    "D": 1,    # Cash-Flow Forecaster
+    "E": 0,    # Budget Watchdog — 30 min (see _AGENT_TTL_MINUTES)
     "F": 24,   # Tax Auditor
     "G": 24,   # Credit Strategist
-    "H": 0,    # Fraud Sentinel — 5 min
-    "I": 1,    # Dunning Profiler
-    "J": 1,    # Stockout Oracle
+    "H": 1,    # Financial Advisor — 1 hour
+    "I": 1,    # External Integrator
+    "J": 0,    # Executive Summarizer — 30 min (see _AGENT_TTL_MINUTES)
 }
 _AGENT_TTL_MINUTES: dict[str, int] = {
-    "C": 15,
-    "E": 30,
-    "H": 5,
+    "C": 10,   # Reconciler
+    "E": 30,   # Budget Watchdog
+    "J": 30,   # Executive Summarizer
 }
 
 
@@ -48,21 +48,61 @@ def _extract_payload_and_intent(context: dict[str, Any]) -> tuple[str, str, dict
     Inspect the context dict and return (agent_id, intent, payload).
     Returns None if no recognisable agent output is found.
 
-    Priority order ensures the most recently written agent result is picked up
-    when multiple agents have run within the same state.  The Celery reporting
-    task clears earlier keys before invoking each subsequent hub write so each
-    call lands on the correct agent slot.
+    Priority order reflects downstream dependency: most-recently-written
+    agent keys are checked first so the correct artifact is written when
+    hub_writer is called immediately after a specific agent.
     """
+    # J — Executive Summarizer (final step, always last)
+    if "executive_summary" in context:
+        summary = context["executive_summary"]
+        payload: dict[str, Any] = (
+            {"summary": summary} if isinstance(summary, str) else summary
+        )
+        return ("J", "EXECUTIVE_SUMMARY", payload)
+
+    # H — Financial Advisor
+    if "advice" in context:
+        return ("H", "ADVISORY_REQUEST", context["advice"])
+
+    # G — Credit Strategist (include PDF/Excel exports when present)
     if "credit_strategy_result" in context:
-        return ("G", "REPORT_GENERATION", context["credit_strategy_result"])
+        g_payload = dict(context["credit_strategy_result"])
+        if "credit_report_pdf_b64" in context:
+            g_payload["pdf_export_b64"] = context["credit_report_pdf_b64"]
+        if "credit_forecast_xlsx_b64" in context:
+            g_payload["xlsx_export_b64"] = context["credit_forecast_xlsx_b64"]
+        return ("G", "REPORT_GENERATION", g_payload)
+
+    # F — Tax Auditor
     if "audit_result" in context:
         return ("F", "AUDIT_REQUEST", context["audit_result"])
-    if "extracted_invoice" in context:
-        return ("A", "GENERATE_INVOICE", context["extracted_invoice"])
+
+    # D — Cash-Flow Forecaster
+    if "forecast" in context:
+        fc = context["forecast"]
+        return ("D", "CASH_FLOW_FORECAST", fc if isinstance(fc, dict) else {"data": fc})
+
+    # E — Budget Watchdog
     if "watchdog_analysis" in context:
         return ("E", "BUDGET_WATCHDOG", context["watchdog_analysis"])
+
+    # C — Reconciler
+    if "reconciliation_report" in context:
+        rr = context["reconciliation_report"]
+        return (
+            "C",
+            "RECONCILIATION",
+            rr if isinstance(rr, dict) else {"report": str(rr)},
+        )
+
+    # A — Invoice Generator
+    if "extracted_invoice" in context:
+        return ("A", "GENERATE_INVOICE", context["extracted_invoice"])
+
+    # B — Transaction Classifier
     if "classified_transactions" in context:
-        return ("B", "SCAN_RECEIPT", context["classified_transactions"])
+        return ("B", "CLASSIFY_TRANSACTIONS", context["classified_transactions"])
+
     return None
 
 

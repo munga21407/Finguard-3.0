@@ -19,6 +19,23 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
 )
 
+# Read-only engine for the finguard_readonly PostgreSQL role.
+# Falls back to the main engine when DATABASE_READONLY_URL is not configured.
+_readonly_url = settings.DATABASE_READONLY_URL or settings.DATABASE_URL
+_readonly_engine = create_async_engine(
+    _readonly_url,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+)
+
+ReadOnlyAsyncSessionLocal = async_sessionmaker(
+    bind=_readonly_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autoflush=False,
+)
+
 
 class Base(DeclarativeBase):
     pass
@@ -31,6 +48,7 @@ async def init_db() -> None:
 
 async def close_db() -> None:
     await engine.dispose()
+    await _readonly_engine.dispose()
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

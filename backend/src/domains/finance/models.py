@@ -21,6 +21,7 @@ class InvoiceStatus(enum.StrEnum):
     DRAFT = "draft"
     SENT = "sent"
     PAID = "paid"
+    PARTIALLY_PAID = "partially_paid"
     OVERDUE = "overdue"
     CANCELLED = "cancelled"
 
@@ -42,6 +43,7 @@ class LedgerEntry(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="KES", nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     reference: Mapped[str | None] = mapped_column(String(255), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -167,6 +169,28 @@ class Payment(Base):
     )
 
     invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="payments")
+
+
+class BankStatementLine(Base):
+    """
+    Raw bank statement line used by Agent C (Reconciler) for ledger matching.
+
+    Two-pass reconciliation checks this table for exact (amount + date ±2 days +
+    reference substring) and fuzzy (Gemini) matches against `ledger_entries`.
+    """
+
+    __tablename__ = "bank_statement_lines"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    amount: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
+    date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    reference_text: Mapped[str | None] = mapped_column(Text)
+    is_reconciled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class OutboxEvent(Base):

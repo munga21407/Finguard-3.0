@@ -31,7 +31,15 @@ celery_app.conf.update(
     beat_schedule={
         "consume-watchdog-events": {
             "task": "watchdog.consume_events",
-            "schedule": 30.0,  # every 30 seconds per SYSTEM_OVERVIEW.md
+            "schedule": 30.0,   # every 30 seconds per SYSTEM_OVERVIEW.md
+        },
+        "classify-unclassified-ledger-entries": {
+            "task": "batch.classify_unclassified_ledger_entries",
+            "schedule": 300.0,  # every 5 minutes
+        },
+        "run-batch-reconciliation": {
+            "task": "batch.run_batch_reconciliation",
+            "schedule": 900.0,  # every 15 minutes
         },
     },
 )

@@ -1,10 +1,15 @@
+from __future__ import annotations
+
+import uuid as _uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from google.genai import types
+from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
+from src.core.logging import logger
 from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.models import AgentRun, AgentRunStatus
 from src.domains.intelligence.schemas import AgentRunCreate, ChatRequest, ChatResponse
@@ -75,4 +80,57 @@ class IntelligenceService:
         return run
 
     async def _dispatch_agent(self, agent_name: str, input_data: dict[str, Any]) -> dict[str, Any]:
-        raise NotImplementedError(f"Agent '{agent_name}' not implemented")
+        """
+        Invoke the full LangGraph orchestrator, routing the supervisor to the
+        requested agent first via the 'next' state key.
+
+        The surrounding `run_agent` already handles AgentRun status writes and
+        the session commit, so this method only needs to return the final output.
+        """
+        from src.domains.intelligence.orchestrator import build_graph
+
+        session_id = str(_uuid.uuid4())
+        query = input_data.get("query", input_data.get("intent", agent_name))
+
+        initial_state = {
+            "messages": [HumanMessage(content=str(query))],
+            "error_messages": [],
+            "next": agent_name,
+            "context": input_data,
+            "session_id": session_id,
+            "user_id": input_data.get("user_id"),
+            "mode": input_data.get("mode", "insights"),
+        }
+
+        try:
+            graph = build_graph()
+            final_state = await graph.ainvoke(initial_state)
+        except Exception as exc:
+            logger.error(
+                "LangGraph invocation failed",
+                agent_name=agent_name,
+                session_id=session_id,
+                error=str(exc),
+            )
+            raise
+
+        agents_invoked: list[str] = list({
+            m.name
+            for m in final_state["messages"]
+            if hasattr(m, "name") and m.name
+        })
+
+        logger.info(
+            "LangGraph dispatch completed",
+            agent_name=agent_name,
+            session_id=session_id,
+            agents_invoked=agents_invoked,
+            error_count=len(final_state.get("error_messages", [])),
+        )
+
+        return {
+            "session_id": session_id,
+            "context": final_state.get("context", {}),
+            "agents_invoked": agents_invoked,
+            "error_messages": final_state.get("error_messages", []),
+        }

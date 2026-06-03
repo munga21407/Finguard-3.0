@@ -76,7 +76,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    should_respect_env_var=False,
+    should_instrument_requests_inprogress=True,
+    excluded_handlers=["/health", "/metrics"],
+    inprogress_labels=True,
+).instrument(app).expose(
+    app,
+    endpoint="/metrics",
+    include_in_schema=False,  # hide from OpenAPI docs
+    tags=["observability"],
+)
 register_exception_handlers(app)
 
 app.include_router(identity_router, prefix="/api/v1/identity", tags=["identity"])

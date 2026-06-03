@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
 
     DATABASE_URL: str
+    DATABASE_READONLY_URL: str = ""   # finguard_readonly role — used by Text-to-SQL
     MONGODB_URL: str
     MONGODB_DB: str = "finguard"
     REDIS_URL: str
@@ -29,8 +30,8 @@ class Settings(BaseSettings):
     PASSWORD_MIN_LENGTH: int = 8
 
     # Background workers
-    ENABLE_EXPENSE_EVENT_CONSUMER: bool = False
-    ENABLE_OUTBOX_PROJECTOR: bool = False
+    ENABLE_EXPENSE_EVENT_CONSUMER: bool = True
+    ENABLE_OUTBOX_PROJECTOR: bool = True
     OUTBOX_POLL_INTERVAL: float = 5.0
     OUTBOX_BATCH_SIZE: int = 50
     OUTBOX_MAX_RETRIES: int = 5
@@ -39,6 +40,14 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
+
+    # External financial API credentials (Agent I — External Integrator)
+    MPESA_CONSUMER_KEY: str = ""
+    MPESA_CONSUMER_SECRET: str = ""
+    MPESA_SHORTCODE: str = ""          # Business short code for STK Push
+    CBK_FX_API_KEY: str = ""           # Central Bank of Kenya FX rates API
+    METROPOL_API_KEY: str = ""         # Metropol credit bureau API
+    KRA_ECITIZEN_API_KEY: str = ""     # KRA e-Citizen VAT/tax status API
 
     @field_validator("CELERY_BROKER_URL", mode="before")
     @classmethod

@@ -14,7 +14,20 @@ Naming convention: finguard_<subsystem>_<unit>_<suffix>
 D3 Milestone spec-required names are also defined below under their own
 section so dashboard queries that reference those exact names work out of
 the box alongside the existing finguard_* series.
+
+Sprint 6 additions:
+  • time_llm_call(agent, model) — async context manager that times an LLM
+    call and records the result in both AGENT_LLM_LATENCY and AGENT_LLM_PROCESSING.
+    Usage:
+        async with time_llm_call("e_watchdog", settings.GEMINI_MODEL):
+            resp = await client.aio.models.generate_content(...)
 """
+from __future__ import annotations
+
+import time
+from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
+
 from prometheus_client import Counter, Gauge, Histogram
 
 # ── Agent E — HMM + LLM ───────────────────────────────────────────────────────
@@ -94,3 +107,23 @@ AMQP_MESSAGES_CONSUMED = Counter(
     "Total RabbitMQ messages consumed by the aio-pika consumer processes",
     labelnames=["queue", "status"],
 )
+
+# ── Helper: LLM call timer ─────────────────────────────────────────────────────
+
+
+@asynccontextmanager
+async def time_llm_call(agent: str, model: str) -> AsyncGenerator[None, None]:
+    """
+    Async context manager that records LLM wall-clock time in both histograms.
+
+    Usage:
+        async with time_llm_call("e_watchdog", settings.GEMINI_MODEL):
+            resp = await gemini_client.aio.models.generate_content(...)
+    """
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        elapsed = time.monotonic() - t0
+        AGENT_LLM_LATENCY.labels(agent=agent, model=model).observe(elapsed)
+        AGENT_LLM_PROCESSING.labels(agent_id=agent, model=model).observe(elapsed)

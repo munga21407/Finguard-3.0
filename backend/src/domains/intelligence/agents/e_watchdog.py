@@ -305,28 +305,46 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
         is_dup, dup_score = _detect_duplicate(candidate_invoice, recent_invoices)
 
         # ── Verifiable Credential ─────────────────────────────────────────
+        # Issue a VC for EVERY invocation in "actions" mode — not only when
+        # anomalies are detected.  This creates a complete, tamper-evident
+        # audit trail in MongoDB trust_log for every expense event processed
+        # by the watchdog consumer, satisfying SOC-2 CC6 / CC7 requirements.
         vc_id: str | None = None
-        if (anomaly_detected or is_dup) and mode == "actions":
+        if mode == "actions":
             try:
                 vc_id = await issue_vc(
                     agent_id="E",
-                    operation="budget_watchdog",
+                    operation="budget_watchdog_audit",
                     operation_summary=(
+                        f"Expense event processed | "
                         f"Budget state: {current_state} | "
-                        f"anomaly score: {anomaly_score} | "
-                        f"isolation score: {iso_score} | "
-                        f"duplicate: {is_dup}"
+                        f"anomaly_detected: {anomaly_detected} | "
+                        f"anomaly_score: {anomaly_score:.4f} | "
+                        f"isolation_score: {iso_score:.4f} | "
+                        f"duplicate_detected: {is_dup} | "
+                        f"period_days: {period_days}"
                     ),
                     payload={
                         "account_id": account_id,
                         "current_state": current_state,
+                        "state_probabilities": state_probs.tolist(),
+                        "anomaly_detected": anomaly_detected,
                         "anomaly_score": anomaly_score,
                         "isolation_score": iso_score,
                         "is_duplicate": is_dup,
+                        "duplicate_match_score": dup_score,
+                        "period_days": period_days,
+                        "observations_count": len(ratios),
                     },
                 )
+                logger.info(
+                    "Agent E: VC issued",
+                    vc_id=vc_id,
+                    current_state=current_state,
+                    anomaly_detected=anomaly_detected,
+                )
             except Exception as exc:
-                logger.warning("VC issuance failed", error=str(exc))
+                logger.warning("Agent E: VC issuance failed", error=str(exc))
 
         # ── RabbitMQ event ────────────────────────────────────────────────
         event_published = False
