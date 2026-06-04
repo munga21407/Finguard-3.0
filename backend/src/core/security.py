@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -21,6 +22,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 def create_access_token(subject: str | int, extra: dict[str, Any] | None = None) -> str:
     payload: dict[str, Any] = {
         "sub": str(subject),
+        "jti": str(uuid.uuid4()),   # unique ID — required for Redis blacklist revocation
         "exp": datetime.now(UTC) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
         "type": "access",
     }

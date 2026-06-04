@@ -174,7 +174,7 @@ def _isolation_score(amounts: list[float]) -> float:
     if len(amounts) < ISOLATION_MIN_SAMPLES:
         return 0.0
     x = np.array(amounts, dtype=float).reshape(-1, 1)
-    clf = IsolationForest(contamination=0.1, random_state=42, n_estimators=100)
+    clf = IsolationForest(contamination="auto", random_state=42, n_estimators=100)
     clf.fit(x)
     # decision_function: negative = anomalous, positive = normal
     raw = float(clf.decision_function(x[-1:].reshape(1, -1))[0])

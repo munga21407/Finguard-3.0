@@ -301,80 +301,82 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
     FOR UPDATE SKIP LOCKED to prevent concurrent duplicate processing,
     runs Pass 1 then Pass 2, persists all confirmed matches, and returns
     a ReconciliationReport with match statistics.
+
+    Atomicity guarantee
+    -------------------
+    The entire function — both data fetches and all invoice/transaction writes —
+    runs inside a single `session.begin()` transaction.  If any `_apply_match`
+    call raises (e.g. a constraint violation on a specific invoice), the context
+    manager issues an automatic ROLLBACK, undoing every write in the batch so
+    the database is never left in a partial state.  FOR UPDATE SKIP LOCKED
+    locks are also released on rollback, allowing the next poll cycle to retry.
+
+    Callers (`make_c_reconciler_node` and the Celery batch task) must NOT call
+    `session.commit()` after this function returns — `session.begin()` owns it.
     """
     run_at = datetime.now(UTC).isoformat()
 
-    # ── Fetch data with row-level locks ───────────────────────────────────────
-    txn_sql = text("""
-        SELECT id::text, trans_id, amount::float, phone, bill_ref, created_at
-        FROM mpesa_transactions
-        WHERE is_reconciled = FALSE
-        ORDER BY created_at ASC
-        LIMIT :lim
-        FOR UPDATE SKIP LOCKED
-    """)
-    txn_result = await session.execute(txn_sql, {"lim": _TXN_BATCH})
-    transactions = [
-        dict(zip(txn_result.keys(), row, strict=False))
-        for row in txn_result.fetchall()
-    ]
+    async with session.begin():
+        # ── Fetch data with row-level locks ──────────────────────────────────
+        txn_sql = text("""
+            SELECT id::text, trans_id, amount::float, phone, bill_ref, created_at
+            FROM mpesa_transactions
+            WHERE is_reconciled = FALSE
+            ORDER BY created_at ASC
+            LIMIT :lim
+            FOR UPDATE SKIP LOCKED
+        """)
+        txn_result = await session.execute(txn_sql, {"lim": _TXN_BATCH})
+        transactions = [
+            dict(zip(txn_result.keys(), row, strict=False))
+            for row in txn_result.fetchall()
+        ]
 
-    if not transactions:
-        return ReconciliationReport(
-            total_transactions=0,
-            matched_exact=0,
-            matched_fuzzy=0,
-            unmatched=0,
-            matches=[],
-            run_at=run_at,
-        )
+        inv_sql = text("""
+            SELECT id::text, invoice_number, status::text, total::float,
+                   amount_paid::float, balance_due::float, due_date, customer_id::text
+            FROM invoices
+            WHERE status IN ('sent', 'overdue')
+              AND balance_due > 0
+            ORDER BY due_date ASC NULLS LAST
+            LIMIT :lim
+            FOR UPDATE SKIP LOCKED
+        """)
+        inv_result = await session.execute(inv_sql, {"lim": _INV_LIMIT})
+        invoices = [
+            dict(zip(inv_result.keys(), row, strict=False))
+            for row in inv_result.fetchall()
+        ]
 
-    inv_sql = text("""
-        SELECT id::text, invoice_number, status::text, total::float,
-               amount_paid::float, balance_due::float, due_date, customer_id::text
-        FROM invoices
-        WHERE status IN ('sent', 'overdue')
-          AND balance_due > 0
-        ORDER BY due_date ASC NULLS LAST
-        LIMIT :lim
-        FOR UPDATE SKIP LOCKED
-    """)
-    inv_result = await session.execute(inv_sql, {"lim": _INV_LIMIT})
-    invoices = [
-        dict(zip(inv_result.keys(), row, strict=False))
-        for row in inv_result.fetchall()
-    ]
+        # ── Pass 1 — deterministic ────────────────────────────────────────────
+        if transactions and invoices:
+            exact_matches, matched_txn_ids, matched_inv_ids = _pass1_exact(
+                transactions, invoices
+            )
 
-    if not invoices:
-        return ReconciliationReport(
-            total_transactions=len(transactions),
-            matched_exact=0,
-            matched_fuzzy=0,
-            unmatched=len(transactions),
-            matches=[],
-            run_at=run_at,
-        )
+            # ── Pass 2 — rapidfuzz + Gemini ───────────────────────────────────
+            # _pass2_semantic catches Gemini errors internally and returns []
+            # on failure, so a Gemini outage never aborts the whole transaction.
+            semantic_matches = await _pass2_semantic(
+                transactions, invoices, matched_txn_ids, matched_inv_ids
+            )
+            for m in semantic_matches:
+                matched_txn_ids.add(m.transaction_id)
+                matched_inv_ids.add(m.invoice_id)
 
-    # ── Pass 1 — deterministic ────────────────────────────────────────────────
-    exact_matches, matched_txn_ids, matched_inv_ids = _pass1_exact(
-        transactions, invoices
-    )
+            all_matches = exact_matches + semantic_matches
 
-    # ── Pass 2 — rapidfuzz + Gemini ───────────────────────────────────────────
-    semantic_matches = await _pass2_semantic(
-        transactions, invoices, matched_txn_ids, matched_inv_ids
-    )
-    for m in semantic_matches:
-        matched_txn_ids.add(m.transaction_id)
-        matched_inv_ids.add(m.invoice_id)
+            # ── Persist — all writes or none ──────────────────────────────────
+            # If _apply_match raises on any single match, session.begin() rolls
+            # back the entire batch automatically; no partial state is committed.
+            for match in all_matches:
+                await _apply_match(session, match)
+        else:
+            exact_matches = []
+            matched_txn_ids: set[str] = set()
+            all_matches = []
 
-    all_matches = exact_matches + semantic_matches
-
-    # ── Persist ───────────────────────────────────────────────────────────────
-    for match in all_matches:
-        await _apply_match(session, match)
-    if all_matches:
-        await session.commit()
+        # session.begin() commits here on clean exit.
 
     fuzzy_count = sum(1 for m in all_matches if m.match_type != "exact")
     report = ReconciliationReport(

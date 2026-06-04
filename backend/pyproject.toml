@@ -43,6 +43,8 @@ dependencies = [
     "httpx>=0.27.0",
     "python-dotenv>=1.0.0",
     "tenacity>=8.5.0",
+    # SQL AST validation (Text-to-SQL guardrail)
+    "sqlglot>=25.0.0",
     # Report generation (Agent G exports)
     "reportlab>=4.2.0",
     "pandas>=2.2.0",

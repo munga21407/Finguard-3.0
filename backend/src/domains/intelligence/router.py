@@ -6,15 +6,17 @@ Endpoints:
   POST /api/v1/intelligence/ai-actions         — state-changing action orchestration
   POST /api/v1/intelligence/intent             — focused invoice generation (Agent A + hub writer)
   POST /api/v1/intelligence/conversation       — dual-path: cached read OR force-refresh dispatch
+  GET  /api/v1/intelligence/conversation/{session_id}/status — poll background task status
 """
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from langchain_core.messages import HumanMessage
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
@@ -29,10 +31,13 @@ from src.domains.intelligence.schemas import (
     OrchestrationResponse,
     OrchestratorState,
 )
+from src.infrastructure.cache.redis import get_redis
 from src.infrastructure.database.mongodb import get_mongo_db
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
+
+_TASK_STATUS_TTL = 3600  # seconds — 1 hour
 
 
 # ---------------------------------------------------------------------------
@@ -97,9 +102,11 @@ class ConversationOrchestrator:
         cached insight without touching the LangGraph runtime.
 
     Path 2 — On-Demand Refresh:
-        Builds a fresh OrchestratorState, attaches an audit-trail string, and
-        hands the graph invocation off to FastAPI BackgroundTasks so the HTTP
-        response returns immediately with a session_id the client can poll.
+        Writes ``task_status:{session_id} = "pending"`` to Redis, then hands
+        the graph invocation off to FastAPI BackgroundTasks so the HTTP
+        response returns immediately.  The background task updates the Redis
+        key to ``"completed:{artifact_id}"`` or ``"failed:{reason}"``
+        so the client can poll ``GET /conversation/{session_id}/status``.
     """
 
     def __init__(self, db: AsyncIOMotorDatabase) -> None:  # type: ignore[type-arg]
@@ -152,7 +159,7 @@ class ConversationOrchestrator:
 
     # ── Path 2 ──────────────────────────────────────────────────────────────
 
-    def refresh(
+    async def refresh(
         self,
         intent: str,
         user_id: str | None,
@@ -163,8 +170,9 @@ class ConversationOrchestrator:
         """
         Dispatch a LangGraph run as a background task and return the session_id.
 
-        The caller can use the session_id to poll ``agent_runs`` for completion
-        status once the background task finishes.
+        Writes ``task_status:{session_id} = "pending"`` to Redis before
+        dispatching so the status endpoint immediately returns a known state.
+        The background task updates this key to ``"completed"`` or ``"failed"``.
         """
         session_id = str(uuid.uuid4())
         audit_trail = (
@@ -188,6 +196,15 @@ class ConversationOrchestrator:
             "mode": mode,
         }
 
+        # Write initial status before handing off — the client can poll
+        # immediately after receiving the session_id.
+        redis_client = get_redis()
+        await redis_client.setex(
+            f"task_status:{session_id}",
+            _TASK_STATUS_TTL,
+            json.dumps({"status": "pending"}),
+        )
+
         background_tasks.add_task(_graph_background_task, state)
 
         logger.info(
@@ -200,21 +217,43 @@ class ConversationOrchestrator:
 
 
 async def _graph_background_task(state: OrchestratorState) -> None:
-    """Fire-and-forget wrapper executed by FastAPI BackgroundTasks."""
+    """
+    Fire-and-forget wrapper executed by FastAPI BackgroundTasks.
+
+    Updates ``task_status:{session_id}`` in Redis to ``"completed"`` (with the
+    artifact_id from the graph context) or ``"failed"`` so the frontend can
+    detect completion by polling ``GET /conversation/{session_id}/status``.
+    """
     session_id: str = state["session_id"]
+    redis_client = get_redis()
     try:
         graph = build_graph()
         final_state = await graph.ainvoke(state)
+        artifact_id: str | None = final_state.get("context", {}).get("hub_artifact_id")
+        status_payload = {"status": "completed", "artifact_id": artifact_id}
+        await redis_client.setex(
+            f"task_status:{session_id}",
+            _TASK_STATUS_TTL,
+            json.dumps(status_payload),
+        )
         logger.info(
             "conversation: background graph completed",
             session_id=session_id,
+            artifact_id=artifact_id,
             error_count=len(final_state.get("error_messages", [])),
         )
     except Exception as exc:
+        error_msg = str(exc)[:500]  # cap Redis value size
+        status_payload = {"status": "failed", "detail": error_msg}
+        await redis_client.setex(
+            f"task_status:{session_id}",
+            _TASK_STATUS_TTL,
+            json.dumps(status_payload),
+        )
         logger.error(
             "conversation: background graph failed",
             session_id=session_id,
-            error=str(exc),
+            error=error_msg,
         )
 
 
@@ -235,6 +274,13 @@ class ConversationResponse(BaseModel):
     session_id: str | None = None
     refreshing: bool
     artifact: dict[str, Any] | None = None
+
+
+class TaskStatusResponse(BaseModel):
+    session_id: str
+    status: str                     # "pending" | "completed" | "failed"
+    artifact_id: str | None = None
+    detail: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -306,22 +352,21 @@ async def conversation(
 
     **Path 1 — Decoupled Read** (``force_refresh=false``):
         Verifies the supplied ``vc_token`` and returns the latest non-expired
-        InsightArtifact from MongoDB if one exists.  Returns ``refreshing=true``
-        with a new ``session_id`` when no fresh artifact is cached (transparent
-        fallback to Path 2).
+        InsightArtifact from MongoDB if one exists.  Falls through to Path 2
+        on cache miss.
 
     **Path 2 — On-Demand Refresh** (``force_refresh=true``):
-        Builds an OrchestratorState with the supplied ``intent`` and an
-        auto-generated audit-trail string, then dispatches the full LangGraph
-        worker via FastAPI BackgroundTasks.  Returns immediately with the
-        ``session_id`` for the caller to poll.
+        Writes ``task_status:{session_id} = pending`` to Redis, dispatches the
+        full LangGraph worker via FastAPI BackgroundTasks, and returns the
+        ``session_id`` immediately for the caller to poll
+        ``GET /conversation/{session_id}/status``.
     """
     db: AsyncIOMotorDatabase = get_mongo_db()  # type: ignore[type-arg]
     orchestrator = ConversationOrchestrator(db)
 
     # ── Path 2 (explicit refresh) ──────────────────────────────────────────
     if request.force_refresh:
-        session_id = orchestrator.refresh(
+        session_id = await orchestrator.refresh(
             intent=request.intent,
             user_id=request.user_id,
             background_tasks=background_tasks,
@@ -344,7 +389,7 @@ async def conversation(
             )
 
     # Cache miss — transparently fall through to Path 2
-    session_id = orchestrator.refresh(
+    session_id = await orchestrator.refresh(
         intent=request.intent,
         user_id=request.user_id,
         background_tasks=background_tasks,
@@ -352,3 +397,44 @@ async def conversation(
         mode=request.mode,
     )
     return ConversationResponse(session_id=session_id, refreshing=True, artifact=None)
+
+
+# ---------------------------------------------------------------------------
+# Background task status polling
+# ---------------------------------------------------------------------------
+
+@router.get("/conversation/{session_id}/status", response_model=TaskStatusResponse)
+async def conversation_status(session_id: str) -> TaskStatusResponse:
+    """
+    Return the current execution status of a background graph run.
+
+    Status values:
+      - ``"pending"``   — task is queued / in-flight
+      - ``"completed"`` — graph finished; ``artifact_id`` is populated when
+                          the hub writer persisted an artifact
+      - ``"failed"``    — graph raised an unhandled exception; ``detail``
+                          contains a truncated error message
+
+    Returns 404 if the session_id is unknown or the 1-hour TTL has expired.
+    """
+    redis_client = get_redis()
+    raw: str | None = await redis_client.get(f"task_status:{session_id}")  # type: ignore[assignment]
+
+    if raw is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found or status has expired.",
+        )
+
+    try:
+        payload: dict[str, Any] = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        # Treat malformed payload as pending to avoid crashing the poller
+        payload = {"status": "pending"}
+
+    return TaskStatusResponse(
+        session_id=session_id,
+        status=payload.get("status", "pending"),
+        artifact_id=payload.get("artifact_id"),
+        detail=payload.get("detail"),
+    )

@@ -18,6 +18,7 @@ from src.core.exceptions import UnauthorizedError
 from src.core.security import decode_token
 from src.domains.identity.models import User
 from src.domains.identity.repository import UserRepository
+from src.infrastructure.cache.redis import get_auth_redis
 from src.infrastructure.database.postgres import get_db
 
 _bearer = HTTPBearer(auto_error=False)
@@ -33,6 +34,15 @@ async def get_current_user(
     raw_id: str | None = payload.get("sub")
     if not raw_id:
         raise UnauthorizedError("Invalid token payload")
+
+    # Reject tokens whose JTI has been added to the Redis blacklist (e.g. on logout).
+    # Tokens issued before the jti claim was introduced have no jti and bypass this
+    # check — they expire naturally via their exp claim.
+    jti: str | None = payload.get("jti")
+    if jti is not None:
+        if await get_auth_redis().exists(f"blacklist:{jti}"):
+            raise UnauthorizedError("Token has been revoked")
+
     user = await UserRepository(db).get_by_id(uuid.UUID(raw_id))
     if not user or not user.is_active:
         raise UnauthorizedError("User not found or inactive")

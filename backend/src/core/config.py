@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
 
+    # Observability — Bearer token protecting the /metrics endpoint.
+    # Leave empty to disable auth (development only; never empty in production).
+    METRICS_AUTH_SECRET: str = ""
+
     # External financial API credentials (Agent I — External Integrator)
     MPESA_CONSUMER_KEY: str = ""
     MPESA_CONSUMER_SECRET: str = ""

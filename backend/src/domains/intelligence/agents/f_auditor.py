@@ -259,7 +259,21 @@ Return a JSON object with exactly these fields:
                 ),
             )
 
-        # ── 5. Assemble output ────────────────────────────────────────────
+        # ── 5. Deterministic AML flag injection ───────────────────────────
+        # Gemini may or may not include the AML flag in its free-text output.
+        # We enforce it here unconditionally so the compliance_flags list always
+        # reflects the machine-verified threshold check — never silently absent.
+        if max_single_tx >= _AML_REPORTING_THRESHOLD:
+            _AML_FLAG = "AML_REPORTING_REQUIRED"
+            if not any(_AML_FLAG in flag for flag in analysis.compliance_flags):
+                analysis.compliance_flags.append(_AML_FLAG)
+                logger.info(
+                    "Agent F: AML_REPORTING_REQUIRED flag injected",
+                    max_single_tx=max_single_tx,
+                    threshold=_AML_REPORTING_THRESHOLD,
+                )
+
+        # ── 6. Assemble output ────────────────────────────────────────────
         output = AgentFOutput(
             tax_type=tax_type,
             tax_liability=tax_liability,

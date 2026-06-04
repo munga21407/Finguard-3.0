@@ -1,10 +1,14 @@
 import asyncio
+import hmac
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -22,6 +26,32 @@ from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
 from src.infrastructure.database.postgres import close_db, init_db
 from src.infrastructure.message_bus.rabbitmq_publisher import close_rabbitmq, init_rabbitmq
+
+
+_metrics_bearer = HTTPBearer(auto_error=False)
+
+
+async def verify_metrics_token(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(_metrics_bearer)
+    ],
+) -> None:
+    """
+    Guard /metrics with a static Bearer token.
+    When METRICS_AUTH_SECRET is empty the check is skipped (development only —
+    never leave this unset in a production environment).
+    """
+    if not settings.METRICS_AUTH_SECRET:
+        return
+    token_ok = credentials is not None and hmac.compare_digest(
+        credentials.credentials, settings.METRICS_AUTH_SECRET
+    )
+    if not token_ok:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid metrics credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 @asynccontextmanager
@@ -83,12 +113,10 @@ Instrumentator(
     should_instrument_requests_inprogress=True,
     excluded_handlers=["/health", "/metrics"],
     inprogress_labels=True,
-).instrument(app).expose(
-    app,
-    endpoint="/metrics",
-    include_in_schema=False,  # hide from OpenAPI docs
-    tags=["observability"],
-)
+).instrument(app)
+# .expose() is intentionally omitted — the /metrics route is defined manually
+# below so we can attach the verify_metrics_token authentication dependency.
+
 register_exception_handlers(app)
 
 app.include_router(identity_router, prefix="/api/v1/identity", tags=["identity"])
@@ -100,3 +128,11 @@ app.include_router(intelligence_router, prefix="/api/v1/intelligence", tags=["in
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics(
+    _: Annotated[None, Depends(verify_metrics_token)],
+) -> Response:
+    """Prometheus scrape endpoint — requires Bearer token when METRICS_AUTH_SECRET is set."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

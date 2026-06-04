@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import ConflictError, NotFoundError, UnprocessableError
@@ -100,6 +100,26 @@ class FinanceService:
     async def create_expense(self, data: ExpenseCreate) -> Expense:
         expense = Expense(**data.model_dump())
         expense = await self._expense_repo.create(expense)
+
+        # Increment the spent counter on every budget whose category and active
+        # period match this expense.  Executed inside the same transaction as the
+        # expense INSERT so Agent E's watchdog always reads a consistent burn rate.
+        # If no budget row matches the UPDATE is a safe no-op (0 rows affected).
+        await self._session.execute(
+            text("""
+                UPDATE budgets
+                SET spent = spent + :amount
+                WHERE category   = :category
+                  AND period_start <= :now
+                  AND period_end   >= :now
+            """),
+            {
+                "amount":   expense.amount,
+                "category": expense.category,
+                "now":      datetime.now(UTC),
+            },
+        )
+
         await self._session.commit()
         await publish(
             "finguard.events",

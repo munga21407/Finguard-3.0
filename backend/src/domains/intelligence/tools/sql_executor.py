@@ -17,19 +17,38 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import sqlglot
 import structlog
 from langchain_core.tools import tool
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlglot import exp
+from sqlglot.errors import ParseError
 
 from src.core.config import settings
 from src.infrastructure.database.postgres import ReadOnlyAsyncSessionLocal
 
 logger = structlog.get_logger(__name__)
 
+# First-pass: fast regex pre-filter catches obvious keyword injection before
+# paying the cost of a full parse.  The AST check below is the authoritative
+# gate — this just short-circuits clearly invalid inputs early.
 _FORBIDDEN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|REPLACE|MERGE|EXEC|EXECUTE|CALL)\b",
     re.IGNORECASE,
+)
+
+# Every AST node type that represents a non-read-only operation.
+# exp.Command catches unknown DDL statements that sqlglot cannot fully model.
+_FORBIDDEN_NODE_TYPES = (
+    exp.Drop,
+    exp.Delete,
+    exp.Update,
+    exp.Insert,
+    exp.Alter,
+    exp.Create,
+    exp.TruncateTable,
+    exp.Command,
 )
 
 # ---------------------------------------------------------------------------
@@ -123,12 +142,76 @@ def get_masked_schema(agent_id: str) -> str:
     return "\n\n".join(fragments)
 
 
+def _ast_validate(query: str) -> None:
+    """
+    Deterministic SQL AST validation via sqlglot.
+
+    Two-stage defence:
+      1. Parse the full input with ``sqlglot.parse()`` and reject multi-statement
+         inputs (e.g. ``SELECT 1; DROP TABLE users``).
+      2. Parse with ``sqlglot.parse_one()`` and walk the AST to confirm the root
+         is a ``Select`` and that no DML/DDL node exists anywhere in the tree —
+         preventing subquery-injection bypasses that fool simple regex checks.
+
+    Raises:
+        ValueError — on parse failure, multi-statement input, non-SELECT root,
+            or any forbidden node found in the AST.  The message is forwarded
+            directly to the LangGraph node so Explainer/Auditor agents can retry.
+    """
+    # ── Stage 1: multi-statement injection guard ─────────────────────────
+    try:
+        all_stmts = sqlglot.parse(query, dialect="postgres")
+    except ParseError as exc:
+        raise ValueError(
+            f"SQL parse error — LLM-generated query has invalid syntax: {exc}"
+        ) from exc
+
+    non_empty = [s for s in all_stmts if s is not None]
+    if len(non_empty) > 1:
+        raise ValueError(
+            f"Only a single SELECT statement is permitted; "
+            f"got {len(non_empty)} statement(s) — possible injection attempt"
+        )
+
+    # ── Stage 2: AST root + forbidden-node walk ──────────────────────────
+    try:
+        tree = sqlglot.parse_one(query, dialect="postgres")
+    except ParseError as exc:
+        raise ValueError(
+            f"SQL parse error — LLM-generated query has invalid syntax: {exc}"
+        ) from exc
+
+    if tree is None:
+        raise ValueError("SQL parse returned an empty AST")
+
+    if not isinstance(tree, exp.Select):
+        raise ValueError(
+            f"Only SELECT statements are permitted; "
+            f"got {type(tree).__name__} — possible injection attempt"
+        )
+
+    forbidden_node = next(tree.find_all(*_FORBIDDEN_NODE_TYPES), None)
+    if forbidden_node is not None:
+        raise ValueError(
+            f"Forbidden SQL operation '{type(forbidden_node).__name__}' "
+            f"detected in query AST — query rejected"
+        )
+
+
 def _validate(query: str) -> None:
+    """
+    Two-layer read-only guard:
+      1. Regex pre-filter — fast rejection of obvious forbidden keywords.
+      2. sqlglot AST validation — deterministic, bypass-proof structural check.
+    """
     stripped = query.strip()
     if not stripped.upper().startswith("SELECT"):
         raise ValueError("Only SELECT queries are permitted")
     if _FORBIDDEN.search(stripped):
         raise ValueError("Query contains forbidden keyword")
+    # AST check is the authoritative gate — runs even when the regex passes,
+    # catching obfuscation techniques that survive keyword scanning.
+    _ast_validate(stripped)
 
 
 def make_sql_executor(session: AsyncSession) -> Any:
