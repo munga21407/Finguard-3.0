@@ -1,11 +1,14 @@
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
+from src.core.security import decode_token
 from src.domains.identity.schemas import (
     RefreshRequest,
     TokenRequest,
@@ -14,9 +17,11 @@ from src.domains.identity.schemas import (
     UserResponse,
 )
 from src.domains.identity.service import IdentityService
+from src.infrastructure.cache.redis import get_auth_redis
 from src.infrastructure.database.postgres import get_db
 
 limiter = Limiter(key_func=get_remote_address, storage_uri=settings.RATE_LIMIT_REDIS_URL)
+_bearer = HTTPBearer(auto_error=False)
 
 router = APIRouter()
 
@@ -38,3 +43,31 @@ async def login(request: Request, data: TokenRequest, db: DBSession) -> TokenRes
 @router.post("/token/refresh", response_model=TokenResponse)
 async def refresh(data: RefreshRequest, db: DBSession) -> TokenResponse:
     return await IdentityService(db).refresh(data.refresh_token)
+
+
+@router.post("/logout", status_code=204)
+async def logout(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> None:
+    """
+    Blacklist the access token's JTI in Redis (DB 1) so get_current_user
+    immediately rejects it on subsequent requests.  Returns 204 regardless —
+    missing or already-expired tokens are silently ignored so the client can
+    always proceed to clear its local session.
+    """
+    if credentials is None:
+        return
+    try:
+        payload = decode_token(credentials.credentials)
+    except Exception:
+        return
+
+    jti: str | None = payload.get("jti")
+    if jti is None:
+        return
+
+    exp: int | None = payload.get("exp")
+    now_ts = int(datetime.now(UTC).timestamp())
+    ttl = max(1, exp - now_ts) if exp else 900  # fallback: 15 min
+
+    await get_auth_redis().setex(f"blacklist:{jti}", ttl, "1")

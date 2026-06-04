@@ -3,8 +3,8 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useAuth } from "@/lib/hooks/useAuth";
 
 const schema = z.object({
   email: z.string().email(),
@@ -14,7 +14,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export function LoginForm() {
-  const router = useRouter();
+  const { login } = useAuth();
   const {
     register,
     handleSubmit,
@@ -23,18 +23,16 @@ export function LoginForm() {
   } = useForm<FormValues>({ resolver: zodResolver(schema) });
 
   const onSubmit = async (values: FormValues) => {
-    const res = await fetch("/api/v1/identity/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(values),
-    });
-    if (!res.ok) {
-      setError("root", { message: "Invalid email or password" });
-      return;
+    try {
+      await login(values.email, values.password);
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail ??
+        (err as Error)?.message ??
+        "Invalid email or password";
+      setError("root", { message });
     }
-    const { access_token } = await res.json();
-    localStorage.setItem("access_token", access_token);
-    router.push("/dashboard/overview");
   };
 
   return (

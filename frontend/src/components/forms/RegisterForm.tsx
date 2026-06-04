@@ -3,8 +3,8 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useAuth } from "@/lib/hooks/useAuth";
 
 const schema = z.object({
   full_name: z.string().min(1),
@@ -15,7 +15,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export function RegisterForm() {
-  const router = useRouter();
+  const { register: registerUser } = useAuth();
   const {
     register,
     handleSubmit,
@@ -24,17 +24,16 @@ export function RegisterForm() {
   } = useForm<FormValues>({ resolver: zodResolver(schema) });
 
   const onSubmit = async (values: FormValues) => {
-    const res = await fetch("/api/v1/identity/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(values),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      setError("root", { message: body.detail ?? "Registration failed" });
-      return;
+    try {
+      await registerUser(values.email, values.password, values.full_name);
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail ??
+        (err as Error)?.message ??
+        "Registration failed";
+      setError("root", { message });
     }
-    router.push("/login");
   };
 
   return (

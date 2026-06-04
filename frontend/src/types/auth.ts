@@ -1,6 +1,11 @@
 // ─── Auth Types ───────────────────────────────────────────────────────────────
 
-export type UserRole = "OWNER" | "ADMIN" | "MANAGER" | "ACCOUNTANT" | "VIEWER";
+// UserRole is derived from the generated wire-format type (lowercase) so that
+// adding a role on the backend propagates automatically after `npm run sync-types`.
+// Uppercase<T> is a TypeScript built-in — no manual maintenance needed here.
+import type { ApiUserRole } from "@/types/api";
+
+export type UserRole = Uppercase<ApiUserRole>;
 
 export interface User {
   id: string;
