@@ -12,6 +12,7 @@ class CustomerCreate(BaseModel):
     phone: str | None = None
     customer_type: CustomerType = CustomerType.INDIVIDUAL
     notes: str | None = None
+    preferred_locale: str | None = None
 
 
 class CustomerUpdate(BaseModel):
@@ -19,6 +20,7 @@ class CustomerUpdate(BaseModel):
     phone: str | None = None
     status: CustomerStatus | None = None
     notes: str | None = None
+    preferred_locale: str | None = None
 
 
 class CustomerResponse(BaseModel):
@@ -29,6 +31,7 @@ class CustomerResponse(BaseModel):
     customer_type: CustomerType
     status: CustomerStatus
     notes: str | None
+    preferred_locale: str | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

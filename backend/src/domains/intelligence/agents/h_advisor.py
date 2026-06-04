@@ -69,7 +69,7 @@ async def _fetch_crm_profile(customer_id: str | None) -> dict[str, Any]:
     if not customer_id:
         return {}
     sql = text("""
-        SELECT id::text, name, email, phone, status, customer_type::text
+        SELECT id::text, name, email, phone, status, customer_type::text, preferred_locale
         FROM customers
         WHERE id::text = :cid
         LIMIT 1
@@ -79,7 +79,7 @@ async def _fetch_crm_profile(customer_id: str | None) -> dict[str, Any]:
             result = await session.execute(sql, {"cid": customer_id})
             row = result.fetchone()
         if row:
-            keys = ("id", "name", "email", "phone", "status", "customer_type")
+            keys = ("id", "name", "email", "phone", "status", "customer_type", "preferred_locale")
             return dict(zip(keys, row, strict=False))
     except Exception as exc:
         logger.warning("Agent H: CRM profile fetch failed", error=str(exc))

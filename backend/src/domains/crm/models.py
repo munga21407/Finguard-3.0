@@ -35,6 +35,7 @@ class Customer(Base):
         Enum(CustomerStatus), default=CustomerStatus.PROSPECT, nullable=False
     )
     notes: Mapped[str | None] = mapped_column(Text)
+    preferred_locale: Mapped[str | None] = mapped_column(String(50), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

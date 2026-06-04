@@ -17,11 +17,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import structlog
 from langchain_core.tools import tool
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import settings
 from src.infrastructure.database.postgres import ReadOnlyAsyncSessionLocal
+
+logger = structlog.get_logger(__name__)
 
 _FORBIDDEN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|REPLACE|MERGE|EXEC|EXECUTE|CALL)\b",
@@ -154,6 +158,17 @@ async def execute_readonly_sql(query: str) -> list[dict[str, Any]]:
     is not yet configured (falls back gracefully to the main engine).
     """
     _validate(query)
+
+    if not settings.DATABASE_READONLY_URL:
+        logger.warning(
+            "sql_executor: DATABASE_READONLY_URL is not configured — "
+            "LLM-generated SQL is executing against the fully-privileged main "
+            "database engine. This violates the read-only role security boundary. "
+            "Run infrastructure/db_security.sql and set DATABASE_READONLY_URL "
+            "to enforce defence-in-depth for Agent D CoVe queries.",
+            query_preview=query[:120],
+        )
+
     async with ReadOnlyAsyncSessionLocal() as session:
         result = await session.execute(text(query))
         keys = list(result.keys())

@@ -108,6 +108,25 @@ docker compose exec backend python scripts/create_admin.py
 docker compose exec backend python scripts/seed_data.py
 ```
 
+### 4. Create the read-only database role (required for Agent D / Text-to-SQL)
+
+Agent D generates SQL via an LLM. Those queries must run under a restricted
+`finguard_readonly` PostgreSQL role so an injected or malformed query can never
+mutate data. Without this step the system falls back to the privileged main
+connection and logs a security warning on every CoVe query.
+
+```bash
+# Creates the finguard_readonly role and grants SELECT-only on all tables
+docker compose exec postgres psql -U finguard -d finguard -f infrastructure/db_security.sql
+```
+
+Then set the matching URL in your `.env`:
+
+```env
+# Replace <password> with the value you assigned in db_security.sql
+DATABASE_READONLY_URL=postgresql+asyncpg://finguard_readonly:<password>@localhost:5432/finguard
+```
+
 ### 4. Access services
 
 | Service | URL | Default Credentials |

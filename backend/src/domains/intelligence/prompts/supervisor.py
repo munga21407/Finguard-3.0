@@ -35,7 +35,7 @@ AVAILABLE AGENTS (fixed)
 | d_forecaster  | Produce short-term cash-flow forecasts              |
 | e_watchdog    | Detect budget anomalies via HMM; trigger VC hook    |
 | f_auditor     | Run compliance and audit checks on financial data   |
-| g_reporter    | Generate structured PDF/Excel financial reports     |
+| g_reporter    | Compute bankability score, risk tier, and 12-month credit forecast |
 | h_advisor     | Give personalised financial advice                  |
 | i_integrator  | Fetch data from external APIs (M-Pesa, FX, etc.)   |
 | j_summarizer  | Produce concise executive summaries                 |

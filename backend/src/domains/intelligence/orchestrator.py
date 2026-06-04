@@ -4,12 +4,15 @@ Main LangGraph StateGraph — Supervisor / ReAct loop.
 Topology:
   [START] → supervisor ──┐
      ↑                   │ conditional edge (state["next"])
-     └── any agent ◄─────┘
+     └── hub_writer ◄────┘ ← any agent routes here first
+          ↑
+       any agent
      ↓ when next == "FINISH"
    [END]
 
-Every agent node unconditionally returns to the supervisor after executing.
-The supervisor decides whether to invoke another agent or terminate.
+Every agent node routes unconditionally through hub_writer (MongoDB upsert)
+before returning control to the supervisor.  The supervisor decides whether
+to invoke another agent or terminate.
 """
 from __future__ import annotations
 
@@ -81,6 +84,7 @@ def build_graph() -> Any:
     workflow.add_node("h_advisor",     make_h_advisor_node())
     workflow.add_node("i_integrator",  make_i_integrator_node())
     workflow.add_node("j_summarizer",  make_j_summarizer_node())
+    workflow.add_node("hub_writer",    make_hub_writer_node())
 
     # Supervisor → conditional fan-out based on state["next"]
     workflow.add_conditional_edges(
@@ -89,10 +93,15 @@ def build_graph() -> Any:
         AGENT_NODE_MAP,  # type: ignore[arg-type]
     )
 
-    # Every agent unconditionally returns to supervisor
+    # Every agent persists its output to intelligence_hub before handing
+    # control back to the supervisor.
     for agent_name in AGENT_NODE_MAP:
         if agent_name != "FINISH":
-            workflow.add_edge(agent_name, "supervisor")
+            workflow.add_edge(agent_name, "hub_writer")
+
+    # hub_writer always returns to supervisor; supervisor then decides
+    # whether to route to another agent or emit FINISH → END.
+    workflow.add_edge("hub_writer", "supervisor")
 
     workflow.set_entry_point("supervisor")
     return workflow.compile()
