@@ -1,17 +1,22 @@
 """
-Supervisor node — the ReAct loop controller (Sprint 6: hardened).
+Supervisor node — the ReAct loop controller.
 
 Uses Gemini structured output to inspect the current conversation state
 and decide which agent node to invoke next, or whether the task is complete.
 
-Sprint 6 hardening:
-  - MAX_HOPS circuit breaker: if the hop counter reaches the limit the
-    supervisor routes immediately to FINISH, preventing infinite loops.
-  - Structured exception handling: every failure path logs the error with
-    full context and routes to FINISH rather than crashing the backend.
-  - Pydantic validation of the Gemini response before route assignment.
-  - Hop counter is stored in context["_supervisor_hop_count"] so it persists
-    across supervisor invocations within a single session.
+Loop-escape strategy
+--------------------
+Infinite-loop prevention is delegated entirely to LangGraph's native
+recursion limit (``{"recursion_limit": 25}`` passed to ``graph.ainvoke``
+in ``orchestrator.run_graph``).  The previous manual hop-counter stored in
+``context["_supervisor_hop_count"]`` has been removed — that approach was
+fragile because any context overwrite could reset the counter.
+
+Failure handling
+----------------
+Every failure path logs the error with full context and routes to FINISH
+rather than crashing the backend.  Pydantic ``ValidationError`` on the
+Gemini response is caught explicitly and also routes to FINISH.
 """
 from __future__ import annotations
 
@@ -31,10 +36,6 @@ VALID_NEXT = frozenset({
     "i_integrator", "j_summarizer", "FINISH",
 })
 
-MAX_HOPS = 25  # hard ceiling; prevents runaway loops even on adversarial inputs
-
-_HOP_KEY = "_supervisor_hop_count"
-
 
 class _SupervisorDecision(BaseModel):
     next: str
@@ -45,23 +46,29 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
     async def supervisor_node(state: OrchestratorState) -> dict[str, Any]:
         context = dict(state.get("context", {}))
 
-        # ── Hop-count circuit breaker ─────────────────────────────────────────
-        hop_count: int = int(context.get(_HOP_KEY, 0)) + 1
-        context[_HOP_KEY] = hop_count
-
-        if hop_count > MAX_HOPS:
-            logger.warning(
-                "Supervisor: MAX_HOPS exceeded — forcing FINISH",
-                hop_count=hop_count,
-                max_hops=MAX_HOPS,
+        # ── requested_agent short-circuit (initial routing only) ──────────────
+        # Honours context["requested_agent"] set by the HTTP router or a test
+        # fixture to bypass the Gemini routing call when the first target is
+        # already known.  Detects "initial call" by the absence of any prior
+        # agent AIMessages — this is resilient to context overwrites unlike the
+        # removed manual hop counter.
+        is_initial_call = not any(
+            hasattr(m, "name") and m.name not in (None, "supervisor")
+            for m in state["messages"]
+        )
+        requested_agent = context.get("requested_agent")
+        if is_initial_call and requested_agent and requested_agent in VALID_NEXT:
+            logger.info(
+                "Supervisor: honouring requested_agent",
+                requested_agent=requested_agent,
                 session_id=state.get("session_id"),
             )
             return {
                 "messages": [AIMessage(
-                    content=f"Max agent hops ({MAX_HOPS}) exceeded — terminating session.",
+                    content=f"Routing to requested agent: {requested_agent}",
                     name="supervisor",
                 )],
-                "next": "FINISH",
+                "next": requested_agent,
                 "context": context,
             }
 
@@ -86,7 +93,6 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
                 logger.warning(
                     "Supervisor: LLM returned unknown route — defaulting to FINISH",
                     llm_next=decision.next,
-                    hop_count=hop_count,
                     session_id=state.get("session_id"),
                 )
                 next_node = "FINISH"
@@ -99,7 +105,6 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
             logger.error(
                 "Supervisor: Pydantic validation failed on LLM response — routing to FINISH",
                 error=str(exc),
-                hop_count=hop_count,
                 session_id=state.get("session_id"),
             )
             reason = "Supervisor decision failed schema validation — terminating."
@@ -109,7 +114,6 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
                 "Supervisor: Unexpected error during routing — routing to FINISH",
                 error=str(exc),
                 error_type=type(exc).__name__,
-                hop_count=hop_count,
                 session_id=state.get("session_id"),
             )
             reason = f"Routing error ({type(exc).__name__}) — terminating."

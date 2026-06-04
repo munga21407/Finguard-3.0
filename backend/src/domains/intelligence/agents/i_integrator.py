@@ -96,7 +96,7 @@ async def _fetch_mpesa_data(caller: Any) -> dict[str, Any]:
     return _mock_mpesa()
 
 
-async def _fetch_cbk_fx(caller: Any) -> dict[str, float]:
+async def _fetch_cbk_fx(caller: Any) -> dict[str, Any]:
     """Fetch live FX rates from the Central Bank of Kenya API."""
     if not settings.CBK_FX_API_KEY:
         return _mock_fx_rates()
@@ -114,7 +114,7 @@ async def _fetch_cbk_fx(caller: Any) -> dict[str, float]:
             "USD_KES": float(rates.get("USD", 129.50)),
             "EUR_KES": float(rates.get("EUR", 140.20)),
             "GBP_KES": float(rates.get("GBP", 164.80)),
-            "source": "cbk_live",  # type: ignore[assignment]
+            "source": "cbk_live",
         }
 
     logger.warning(
@@ -187,6 +187,7 @@ async def _fetch_kra_status(caller: Any, pin_number: str) -> dict[str, Any]:
 def _mock_mpesa() -> dict[str, Any]:
     return {
         "source": "mpesa_mock",
+        "data_source": "mock_sandbox",
         "balance_kes": 125_000.00,
         "recent_transactions": [
             {"type": "credit", "amount": 45_000.00, "ref": "NLJ7RT61SV"},
@@ -195,12 +196,13 @@ def _mock_mpesa() -> dict[str, Any]:
     }
 
 
-def _mock_fx_rates() -> dict[str, float]:
+def _mock_fx_rates() -> dict[str, Any]:  # widened return type to carry the flag
     return {
         "USD_KES": 129.50,
         "EUR_KES": 140.20,
         "GBP_KES": 164.80,
-        "source": "fx_mock",  # type: ignore[assignment]
+        "source": "fx_mock",
+        "data_source": "mock_sandbox",
     }
 
 
@@ -210,6 +212,7 @@ def _mock_credit_score() -> dict[str, Any]:
         "grade": "B",
         "delinquencies": 1,
         "source": "metropol_mock",
+        "data_source": "mock_sandbox",
     }
 
 
@@ -220,6 +223,7 @@ def _mock_kra_status() -> dict[str, Any]:
         "last_return_filed": "2026-03-31",
         "compliance_status": "COMPLIANT",
         "source": "kra_mock",
+        "data_source": "mock_sandbox",
     }
 
 
@@ -294,24 +298,34 @@ def make_i_integrator_node(llm: Any = None) -> Any:  # llm kept for signature co
             logger.error("i_integrator: KRA fetch failed", error=str(exc))
             kra_data = _mock_kra_status()
 
+        # Detect whether any source fell back to mock data.  A single top-level
+        # flag lets downstream agents (e.g. Agent H) add a "Based on simulated
+        # data" disclaimer without inspecting every nested source dict.
+        any_mock = any(
+            d.get("data_source") == "mock_sandbox"
+            for d in (fx_rates, mpesa_data, credit_data, kra_data)
+        )
+
         external_data: dict[str, Any] = {
             "fx_rates": fx_rates,
             "mpesa": mpesa_data,
             "credit_bureau": credit_data,
             "kra_status": kra_data,
+            "data_source": "mock_sandbox" if any_mock else "live",
         }
 
         updated_ctx = dict(ctx)
         updated_ctx["external_data"] = external_data
 
+        source_label = "simulated (mock sandbox)" if any_mock else "live"
         summary = (
-            f"[i_integrator] External data collected — "
+            f"[i_integrator] External data collected ({source_label}) — "
             f"FX: 1 USD = {fx_rates.get('USD_KES', 'N/A')} KES | "
             f"Credit score: {credit_data.get('score', 'N/A')} ({credit_data.get('grade', '?')}) | "
             f"KRA status: {kra_data.get('compliance_status', 'UNKNOWN')} | "
             f"M-Pesa balance: KES {mpesa_data.get('balance_kes', 0):,.2f}"
         )
-        logger.info(summary)
+        logger.info(summary, any_mock=any_mock)
 
         return {
             "messages": [AIMessage(content=summary, name="i_integrator")],

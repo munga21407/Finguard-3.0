@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import operator
 import uuid
 from datetime import datetime
@@ -7,7 +8,7 @@ from typing import Annotated, Any, Literal
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import TypedDict
 
 from src.domains.intelligence.models import AgentRunStatus
@@ -61,16 +62,34 @@ class InsightArtifact(BaseModel):
 # HTTP request / response models
 # ---------------------------------------------------------------------------
 
+_MAX_INPUT_CHARS = 2000
+_MAX_CONTEXT_BYTES = 102_400  # 100 KB
+
+
 class InsightRequest(BaseModel):
-    query: str
-    context: dict[str, Any] = {}
+    query: str = Field(..., max_length=_MAX_INPUT_CHARS)
+    context: dict[str, Any] = Field(default_factory=dict)
     user_id: str | None = None
+
+    @field_validator("context")
+    @classmethod
+    def _context_size(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(v, default=str)) > _MAX_CONTEXT_BYTES:
+            raise ValueError("context payload must not exceed 100 KB")
+        return v
 
 
 class ActionRequest(BaseModel):
-    intent: str
-    payload: dict[str, Any] = {}
+    intent: str = Field(..., max_length=_MAX_INPUT_CHARS)
+    payload: dict[str, Any] = Field(default_factory=dict)
     user_id: str | None = None
+
+    @field_validator("payload")
+    @classmethod
+    def _payload_size(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(v, default=str)) > _MAX_CONTEXT_BYTES:
+            raise ValueError("payload must not exceed 100 KB")
+        return v
 
 
 class AgentMessage(BaseModel):
@@ -105,28 +124,35 @@ class ExtractedInvoice(BaseModel):
     issue_date: str | None
     due_date: str | None
     currency: str = "KES"
-    subtotal: float | None
-    tax: float | None
-    total: float | None
+    subtotal: float | None = Field(default=None, ge=0.0)
+    tax: float | None = Field(default=None, ge=0.0)
+    total: float | None = Field(default=None, ge=0.0)
     line_items: list[ExtractedLineItem] = []
-    confidence: float = 0.0
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class WatchdogAnalysis(BaseModel):
     account_id: str
-    period_days: int
+    period_days: int = Field(..., gt=0)
     hidden_states: list[int]
     state_labels: list[str]
     current_state: str
-    state_probabilities: list[float]   # Forward-algorithm P(S_T | O_1..T)
+    state_probabilities: list[float]
     anomaly_detected: bool
-    anomaly_score: float               # Weighted HMM score
-    isolation_score: float             # IsolationForest outlier score
-    is_duplicate: bool                 # rapidfuzz duplicate detection
-    duplicate_match_score: float       # rapidfuzz similarity 0-1
-    vc_id: str | None                  # MongoDB trust_log document ID
+    anomaly_score: float = Field(..., ge=0.0, le=1.0)
+    isolation_score: float = Field(..., ge=0.0, le=1.0)
+    is_duplicate: bool
+    duplicate_match_score: float = Field(..., ge=0.0, le=1.0)
+    vc_id: str | None
     event_published: bool
     summary: str
+
+    @field_validator("state_probabilities")
+    @classmethod
+    def _probabilities_bounded(cls, v: list[float]) -> list[float]:
+        if any(p < -1e-6 or p > 1.0 + 1e-6 for p in v):
+            raise ValueError("Each state probability must be in [0.0, 1.0]")
+        return v
 
 
 # ---------------------------------------------------------------------------
@@ -155,33 +181,58 @@ class ChatResponse(BaseModel):
     output_tokens: int
 
 
+_MAX_SME_TAX_LIABILITY_KES = 1_000_000_000.0   # 1B KES — hallucination guard
+
+
 class AgentFOutput(BaseModel):
     """Structured output produced by Agent F — Tax Auditor."""
-    tax_type: str                  # e.g. "VAT", "CORPORATE_TAX", "PAYE"
-    tax_liability: float           # KES amount owed for the audit period
-    effective_tax_rate: float      # Effective rate as a percentage 0-100
-    compliance_flags: list[str]    # Specific compliance issues identified
-    kra_references: list[str]      # KRA document sections cited
-    audit_summary: str             # Human-readable findings narrative
+    tax_type: str
+    tax_liability: float = Field(..., ge=0.0)
+    effective_tax_rate: float = Field(..., ge=0.0, le=100.0)
+    compliance_flags: list[str]
+    kra_references: list[str]
+    audit_summary: str
+
+    @field_validator("tax_liability")
+    @classmethod
+    def _tax_liability_sme_bounds(cls, v: float) -> float:
+        if v > _MAX_SME_TAX_LIABILITY_KES:
+            raise ValueError(
+                f"tax_liability {v:,.0f} KES exceeds the SME context ceiling of "
+                f"{_MAX_SME_TAX_LIABILITY_KES:,.0f} KES — likely an LLM hallucination"
+            )
+        return v
+
+    @field_validator("effective_tax_rate")
+    @classmethod
+    def _tax_rate_bounds(cls, v: float) -> float:
+        # Kenya's statutory maximum is 30 % CIT; flag anomalies above 35 %
+        # (allow some headroom for blended rates and penalties).
+        if v > 35.0:
+            raise ValueError(
+                f"effective_tax_rate {v:.2f}% exceeds 35% — "
+                "verify that this is not a hallucinated value"
+            )
+        return v
 
 
 class AgentGOutput(BaseModel):
     """Structured output produced by Agent G — Credit Strategist."""
-    bankability_score: int         # 0-100; higher = more creditworthy
-    risk_tier: str                 # "LOW" | "MEDIUM" | "HIGH"
-    strategic_narrative: str       # Executive narrative with recommendations
+    bankability_score: int = Field(..., ge=0, le=100)
+    risk_tier: Literal["LOW", "MEDIUM", "HIGH"]   # rejects any other string
+    strategic_narrative: str
 
 
 class ReceiptExtraction(BaseModel):
     """Structured output from Gemini vision OCR of a receipt image."""
 
     merchant_name: str | None = None
-    date: str | None = None              # ISO-8601 or free-form date string
-    total_amount: float | None = None
+    date: str | None = None
+    total_amount: float | None = Field(default=None, ge=0.0)
     currency: str = "KES"
-    kra_pin: str | None = None           # Kenya Revenue Authority PIN
-    line_items: list[str] = []           # Raw line item descriptions
-    confidence: float = 0.0
+    kra_pin: str | None = None
+    line_items: list[str] = []
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class TransactionClassification(BaseModel):
@@ -189,7 +240,7 @@ class TransactionClassification(BaseModel):
 
     entry_id: str
     category: str
-    confidence: float = 0.0
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class BatchClassificationResult(BaseModel):
@@ -207,7 +258,7 @@ class ReconciliationCandidate(BaseModel):
 
     transaction_id: str
     invoice_id: str
-    match_score: float       # 0.0–1.0; Gemini-assigned semantic confidence
+    match_score: float = Field(..., ge=0.0, le=1.0)
     match_reason: str
 
 
@@ -223,8 +274,8 @@ class ReconciliationMatch(BaseModel):
     transaction_id: str
     invoice_id: str
     match_type: str          # "exact" | "fuzzy" | "semantic"
-    match_score: float
-    amount: float            # M-Pesa payment amount in KES
+    match_score: float = Field(..., ge=0.0, le=1.0)
+    amount: float = Field(..., ge=0.0)
     new_invoice_status: str  # "paid" | "partially_paid"
 
 
@@ -255,11 +306,11 @@ class ForecastDataPoint(BaseModel):
 class RegimeAnalysis(BaseModel):
     """Gemini Semantic Regime Detector output."""
 
-    regime: str                  # Boom | Normal | Stress | Liquidity Crunch | Recovery
-    confidence: float            # 0.0–1.0
+    regime: Literal["Boom", "Normal", "Stress", "Liquidity Crunch", "Recovery"]
+    confidence: float = Field(..., ge=0.0, le=1.0)
     risk_factors: list[str]
     advisory_warnings: list[str]
-    narrative: str               # 2-3 sentence human-readable assessment
+    narrative: str
 
 
 class CashFlowForecast(BaseModel):
@@ -294,11 +345,18 @@ class AgentRunCreate(BaseModel):
 # ---------------------------------------------------------------------------
 
 class IntentRequest(BaseModel):
-    user_input: str
-    intent: str = "GENERATE_INVOICE"
-    context: dict[str, Any] = {}
+    user_input: str = Field(..., max_length=_MAX_INPUT_CHARS)
+    intent: str = Field(default="GENERATE_INVOICE", max_length=128)
+    context: dict[str, Any] = Field(default_factory=dict)
     correlation_id: str | None = None
     user_id: str | None = None
+
+    @field_validator("context")
+    @classmethod
+    def _context_size(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(v, default=str)) > _MAX_CONTEXT_BYTES:
+            raise ValueError("context payload must not exceed 100 KB")
+        return v
 
 
 class IntentResponse(BaseModel):

@@ -30,11 +30,10 @@ class IntelligenceService:
             )
             for m in request.messages
         ]
-        config = (
-            types.GenerateContentConfig(system_instruction=request.system)
-            if request.system
-            else types.GenerateContentConfig(max_output_tokens=request.max_tokens)
-        )
+        config_kwargs: dict[str, Any] = {"max_output_tokens": request.max_tokens}
+        if request.system:
+            config_kwargs["system_instruction"] = request.system
+        config = types.GenerateContentConfig(**config_kwargs)
 
         response = await client.aio.models.generate_content(
             model=settings.GEMINI_MODEL,
@@ -95,8 +94,8 @@ class IntelligenceService:
         initial_state = {
             "messages": [HumanMessage(content=str(query))],
             "error_messages": [],
-            "next": agent_name,
-            "context": input_data,
+            "next": "supervisor",
+            "context": {**input_data, "requested_agent": agent_name},
             "session_id": session_id,
             "user_id": input_data.get("user_id"),
             "mode": input_data.get("mode", "insights"),

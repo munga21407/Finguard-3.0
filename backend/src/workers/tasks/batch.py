@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -33,15 +34,32 @@ from sqlalchemy import text
 
 from src.core.config import settings
 from src.core.logging import logger
+from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
 from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.prompts.b_classifier import CLASSIFIER_SYSTEM, TRANSACTION_TAXONOMY
 from src.domains.intelligence.schemas import BatchClassificationResult, TransactionClassification
+from src.infrastructure.database.mongodb import init_mongo
 from src.infrastructure.database.postgres import AsyncSessionLocal
 from src.workers.tasks.celery_app import celery_app
 
 _BATCH_SIZE = 50
 _EVENT_EXCHANGE = "finguard.events"
 _EVENT_ROUTING_KEY = "finance.transactions.classified"
+
+
+async def _write_to_hub(context: dict[str, Any]) -> str | None:
+    """Persist an agent output to intelligence_hub; return the artifact_id."""
+    hub_node = make_hub_writer_node()
+    state: dict[str, Any] = {
+        "messages": [],
+        "next": "FINISH",
+        "context": context,
+        "session_id": str(uuid.uuid4()),
+        "user_id": None,
+        "mode": "actions",
+    }
+    result = await hub_node(state)
+    return (result or {}).get("context", {}).get("hub_artifact_id")
 
 
 # ── Gemini classification (own copy — avoids circular import with b_classifier) ──
@@ -148,7 +166,9 @@ async def _run_batch_classification() -> dict[str, Any]:
       2. Classify via Gemini.
       3. Persist categories to ledger_entries.
       4. Publish domain event.
+      5. Write artifact to intelligence_hub.
     """
+    await init_mongo()
     async with AsyncSessionLocal() as session:
         # Step 1 — fetch with row-level lock to prevent concurrent duplicate work
         fetch_sql = text(f"""
@@ -199,14 +219,21 @@ async def _run_batch_classification() -> dict[str, Any]:
     classified_ids = [clf.entry_id for clf in classifications]
     await _publish_classified_event(len(classified_ids), classified_ids)
 
+    # Step 5 — persist to intelligence_hub so both activation paths are visible
+    artifact_id = await _write_to_hub({
+        "classified_transactions": [c.model_dump() for c in classifications],
+    })
+
     logger.info(
         "Batch classification completed",
         classified=len(classified_ids),
+        artifact_id=artifact_id,
     )
     return {
         "status": "ok",
         "classified": len(classified_ids),
         "entry_ids": classified_ids,
+        "hub_artifact_id": artifact_id,
     }
 
 
@@ -301,10 +328,13 @@ async def _run_batch_reconciliation_async() -> dict[str, Any]:
     Full reconciliation pipeline executed inside asyncio.run():
       1. Delegate to Agent C's run_reconciliation() for one batch of 100 txns.
       2. Log results and publish the domain event.
+      3. Write artifact to intelligence_hub.
 
     Agent C handles its own session lifecycle and row locking internally;
     this wrapper is responsible only for the event publish and result summary.
     """
+    await init_mongo()
+
     # Lazy import avoids loading agent dependencies at module import time
     from src.domains.intelligence.agents.c_reconciler import run_reconciliation  # noqa: PLC0415
 
@@ -322,12 +352,18 @@ async def _run_batch_reconciliation_async() -> dict[str, Any]:
         run_at=report.run_at,
     )
 
+    # Persist to intelligence_hub so batch path is visible alongside HTTP path
+    artifact_id = await _write_to_hub({
+        "reconciliation_report": report.model_dump(),
+    })
+
     logger.info(
         "Batch reconciliation completed",
         total=report.total_transactions,
         exact=report.matched_exact,
         fuzzy=report.matched_fuzzy,
         unmatched=report.unmatched,
+        artifact_id=artifact_id,
     )
     return {
         "status": "ok",
@@ -336,7 +372,74 @@ async def _run_batch_reconciliation_async() -> dict[str, Any]:
         "matched_fuzzy": report.matched_fuzzy,
         "unmatched": report.unmatched,
         "run_at": report.run_at,
+        "hub_artifact_id": artifact_id,
     }
+
+
+# ── Data-retention pipeline ───────────────────────────────────────────────────
+
+async def _run_data_retention_async() -> dict[str, Any]:
+    """
+    Delete ledger_entries older than 7 years in bounded batches.
+
+    Uses a subquery-based DELETE with LIMIT so the operation never holds a
+    full-table lock in production.  One Celery invocation removes up to
+    ``_RETENTION_BATCH_SIZE`` rows; the beat schedule runs weekly so backlog
+    drains incrementally without impacting OLTP throughput.
+
+    Returns:
+        {"status": "ok" | "no_work", "deleted_rows": int}
+    """
+    _RETENTION_BATCH_SIZE = 10_000
+
+    sql = text(f"""
+        DELETE FROM ledger_entries
+        WHERE id IN (
+            SELECT id
+            FROM   ledger_entries
+            WHERE  created_at < NOW() - INTERVAL '7 years'
+            LIMIT  {_RETENTION_BATCH_SIZE}
+        )
+    """)
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(sql)
+        await session.commit()
+        deleted: int = result.rowcount
+
+    if deleted == 0:
+        logger.info("Data retention: no rows eligible for deletion")
+        return {"status": "no_work", "deleted_rows": 0}
+
+    logger.info(
+        "Data retention: ledger_entries purge complete",
+        deleted_rows=deleted,
+        batch_limit=_RETENTION_BATCH_SIZE,
+        retention_policy="7 years",
+    )
+    return {"status": "ok", "deleted_rows": deleted}
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name="batch.enforce_data_retention",
+    queue="batch_processing",
+    max_retries=2,
+    default_retry_delay=300,
+)
+def enforce_data_retention() -> dict[str, Any]:
+    """
+    Scheduled GDPR / DPA data retention sweep.
+
+    Removes ``ledger_entries`` rows older than 7 years in batches of up to
+    10 000 rows per invocation to avoid long table-level locks.  Celery beat
+    fires this task weekly; run it manually to drain an accumulated backlog:
+
+        celery -A src.workers.tasks.celery_app call batch.enforce_data_retention
+
+    Returns:
+        {"status": "ok" | "no_work", "deleted_rows": int}
+    """
+    return asyncio.run(_run_data_retention_async())
 
 
 # ── Celery task ────────────────────────────────────────────────────────────────

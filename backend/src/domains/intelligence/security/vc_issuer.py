@@ -106,7 +106,10 @@ async def issue_vc(
         "vc_token": token,
         "claims": claims,
         "vc_type": "audit",
-        "created_at": datetime.now(UTC).isoformat(),
+        # Must be a native datetime (BSON Date), not an ISO string.
+        # MongoDB TTL indexes only fire on BSON Date fields; string values
+        # are silently ignored by the TTL background thread.
+        "created_at": datetime.now(UTC),
     }
 
     db = get_mongo_db()
@@ -178,7 +181,8 @@ async def issue_task_scoped_vc(
         "vc_type": "task_scoped",
         "transaction_id": transaction_id,
         "expires_at": exp.isoformat(),
-        "created_at": now.isoformat(),
+        # Native datetime so the TTL index (90-day retention) applies correctly.
+        "created_at": now,
     }
     db = get_mongo_db()
     result = await db[COLLECTION].insert_one(doc)
@@ -194,6 +198,34 @@ async def issue_task_scoped_vc(
         expires_at=exp.isoformat(),
     )
     return token
+
+
+async def ensure_trust_log_ttl_index() -> None:
+    """
+    Create (or confirm) a 90-day TTL index on ``trust_log.created_at``.
+
+    Safe to call on every application startup — MongoDB is idempotent for
+    ``create_index`` calls when the index definition is unchanged.
+
+    The index instructs MongoDB's TTL background thread to automatically
+    delete documents where ``created_at`` is older than 7 776 000 seconds
+    (90 days), preventing unbounded audit-log storage growth.
+
+    IMPORTANT: ``created_at`` must be stored as a native BSON Date (Python
+    ``datetime``), not an ISO string.  Both ``issue_vc`` and
+    ``issue_task_scoped_vc`` have been updated to enforce this.
+    """
+    db = get_mongo_db()
+    await db[COLLECTION].create_index(
+        "created_at",
+        expireAfterSeconds=7_776_000,   # 90 days
+        name="trust_log_ttl_90d",
+    )
+    logger.info(
+        "trust_log TTL index confirmed",
+        collection=COLLECTION,
+        expire_after_seconds=7_776_000,
+    )
 
 
 def validate_task_vc(

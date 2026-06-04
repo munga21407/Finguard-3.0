@@ -23,6 +23,7 @@ from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import AMQP_MESSAGES_CONSUMED
 from src.domains.intelligence.agents.e_watchdog import make_e_watchdog_node
+from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
 from src.infrastructure.cache.redis import get_redis
 
 EXCHANGE = "finguard.events"
@@ -63,6 +64,7 @@ async def _handle_expense_created(body: dict[str, Any]) -> None:
     # Build a minimal OrchestratorState for Agent E
     state = {
         "messages": [HumanMessage(content=f"Expense created: {expense_id}")],
+        "error_messages": [],
         "next": "e_watchdog",
         "context": {
             "account_id": sme_id,
@@ -80,6 +82,16 @@ async def _handle_expense_created(body: dict[str, Any]) -> None:
 
     node = make_e_watchdog_node()
     result = await node(state)
+
+    # Merge the updated context back into state and persist to intelligence_hub
+    updated_state = {
+        **state,
+        "context": result.get("context", state["context"]),
+        "messages": state["messages"] + result.get("messages", []),
+    }
+    hub_node = make_hub_writer_node()
+    await hub_node(updated_state)
+
     analysis = result.get("context", {}).get("budget_watchdog_result", {})
     logger.info(
         "Watchdog analysis complete",

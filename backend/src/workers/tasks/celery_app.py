@@ -1,4 +1,5 @@
 from celery import Celery  # type: ignore[import-untyped]
+from celery.schedules import crontab  # type: ignore[import-untyped]
 
 from src.core.config import settings
 
@@ -10,6 +11,7 @@ celery_app = Celery(
         "src.workers.tasks.ocr",
         "src.workers.tasks.batch",
         "src.workers.tasks.reporting_tasks",
+        "src.workers.tasks.dlq_tasks",
     ],
 )
 
@@ -29,10 +31,6 @@ celery_app.conf.update(
         "reporting.*": {"queue": "batch_processing"},
     },
     beat_schedule={
-        "consume-watchdog-events": {
-            "task": "watchdog.consume_events",
-            "schedule": 30.0,   # every 30 seconds per SYSTEM_OVERVIEW.md
-        },
         "classify-unclassified-ledger-entries": {
             "task": "batch.classify_unclassified_ledger_entries",
             "schedule": 300.0,  # every 5 minutes
@@ -40,6 +38,22 @@ celery_app.conf.update(
         "run-batch-reconciliation": {
             "task": "batch.run_batch_reconciliation",
             "schedule": 900.0,  # every 15 minutes
+        },
+        "dispatch-monthly-reports": {
+            "task": "reporting.dispatch_monthly_reports",
+            "schedule": crontab(hour=0, minute=0, day_of_month="1"),
+        },
+        "drain-watchdog-dlq": {
+            "task": "dlq.drain_watchdog_dlq",
+            "schedule": 900.0,   # every 15 minutes — matches the batch reconciliation cadence
+            "kwargs": {"batch_size": 100},
+        },
+        "enforce-data-retention": {
+            "task": "batch.enforce_data_retention",
+            # Weekly on Sunday at 02:00 UTC — low-traffic window.
+            # 7-year retention window means only historical rows are touched;
+            # no impact on current operational data.
+            "schedule": crontab(hour=2, minute=0, day_of_week="sunday"),
         },
     },
 )

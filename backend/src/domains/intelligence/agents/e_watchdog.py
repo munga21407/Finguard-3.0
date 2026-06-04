@@ -26,6 +26,8 @@ from langchain_core.messages import AIMessage
 from rapidfuzz import fuzz
 from sklearn.ensemble import IsolationForest  # type: ignore[import-untyped]
 
+from sqlalchemy import text
+
 from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import (
@@ -216,27 +218,34 @@ async def _fetch_spending_ratios(
 ) -> list[float]:
     """Query daily spending vs active budget; return list of ratios."""
     since = (datetime.now(UTC) - timedelta(days=period_days)).isoformat()
-    executor = make_sql_executor(session)
 
-    rows = await executor.ainvoke({"query": f"""
-        SELECT
-            DATE_TRUNC('day', le.created_at) AS day,
-            SUM(le.amount)                   AS spent
-        FROM ledger_entries le
-        WHERE le.account_id = '{account_id}'
-          AND le.transaction_type = 'debit'
-          AND le.created_at >= '{since}'
-        GROUP BY 1
-        ORDER BY 1
-    """})
+    spending_result = await session.execute(
+        text("""
+            SELECT
+                DATE_TRUNC('day', le.created_at) AS day,
+                SUM(le.amount)                   AS spent
+            FROM ledger_entries le
+            WHERE le.account_id = :account_id
+              AND le.transaction_type = 'debit'
+              AND le.created_at >= :since
+            GROUP BY 1
+            ORDER BY 1
+        """),
+        {"account_id": account_id, "since": since},
+    )
+    rows = spending_result.mappings().all()
 
-    budget_rows = await executor.ainvoke({"query": f"""
-        SELECT amount / {period_days}.0 AS daily_budget
-        FROM budgets
-        WHERE period_start <= NOW() AND period_end >= NOW()
-        LIMIT 1
-    """})
-    daily_budget = float(budget_rows[0]["daily_budget"]) if budget_rows else 1.0
+    budget_result = await session.execute(
+        text("""
+            SELECT amount / :period_days AS daily_budget
+            FROM budgets
+            WHERE period_start <= NOW() AND period_end >= NOW()
+            LIMIT 1
+        """),
+        {"period_days": float(period_days)},
+    )
+    budget_row = budget_result.mappings().first()
+    daily_budget = float(budget_row["daily_budget"]) if budget_row else 1.0
 
     ratios = [float(r["spent"]) / max(daily_budget, 1e-9) for r in rows]
     return ratios if ratios else [0.5]

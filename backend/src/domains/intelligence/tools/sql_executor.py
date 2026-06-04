@@ -214,6 +214,45 @@ def _validate(query: str) -> None:
     _ast_validate(stripped)
 
 
+_MAX_ROWS = 100
+
+
+def _enforce_limit(query: str) -> str:
+    """
+    Parse a validated SELECT and clamp its LIMIT to at most _MAX_ROWS.
+
+    Called after _validate(), so the AST is guaranteed to be a single clean
+    SELECT with no forbidden nodes.  Any existing LIMIT higher than _MAX_ROWS
+    is overwritten; if no LIMIT clause exists one is injected.
+
+    Raises ValueError if the AST cannot be parsed (should never happen after
+    _validate() passes, but guards against edge-case sqlglot dialect quirks).
+    """
+    try:
+        tree = sqlglot.parse_one(query, dialect="postgres")
+    except ParseError as exc:
+        raise ValueError(
+            f"SQL parse error during limit enforcement: {exc}"
+        ) from exc
+
+    if tree is None or not isinstance(tree, exp.Select):
+        raise ValueError("Internal: non-SELECT reached _enforce_limit")
+
+    limit_node = tree.args.get("limit")
+    if limit_node is not None:
+        lit = limit_node.find(exp.Literal)
+        try:
+            current = int(lit.this) if lit else _MAX_ROWS + 1
+        except (ValueError, TypeError):
+            current = _MAX_ROWS + 1
+        if current > _MAX_ROWS:
+            tree = tree.limit(_MAX_ROWS)
+    else:
+        tree = tree.limit(_MAX_ROWS)
+
+    return tree.sql(dialect="postgres")
+
+
 def make_sql_executor(session: AsyncSession) -> Any:
     @tool
     async def execute_sql(query: str) -> list[dict[str, Any]]:
@@ -221,12 +260,13 @@ def make_sql_executor(session: AsyncSession) -> Any:
 
         Args:
             query: A plain SQL SELECT statement. No parameters — embed literal
-                   values directly. Maximum 1000 rows returned.
+                   values directly. Maximum 100 rows returned.
         """
         _validate(query)
-        result = await session.execute(text(query))
+        safe_query = _enforce_limit(query)
+        result = await session.execute(text(safe_query))
         keys = list(result.keys())
-        rows = result.fetchmany(1000)
+        rows = result.fetchall()
         return [dict(zip(keys, row, strict=False)) for row in rows]
 
     return execute_sql
@@ -241,6 +281,7 @@ async def execute_readonly_sql(query: str) -> list[dict[str, Any]]:
     is not yet configured (falls back gracefully to the main engine).
     """
     _validate(query)
+    safe_query = _enforce_limit(query)
 
     if not settings.DATABASE_READONLY_URL:
         logger.warning(
@@ -253,7 +294,7 @@ async def execute_readonly_sql(query: str) -> list[dict[str, Any]]:
         )
 
     async with ReadOnlyAsyncSessionLocal() as session:
-        result = await session.execute(text(query))
+        result = await session.execute(text(safe_query))
         keys = list(result.keys())
-        rows = result.fetchmany(1000)
+        rows = result.fetchall()
         return [dict(zip(keys, row, strict=False)) for row in rows]

@@ -108,6 +108,24 @@ AMQP_MESSAGES_CONSUMED = Counter(
     labelnames=["queue", "status"],
 )
 
+# ── Hub writer ────────────────────────────────────────────────────────────────
+
+# Incremented each time the MongoDB intelligence_hub upsert fails.
+# Alert rule: rate(finguard_hub_write_errors_total[5m]) > 0
+HUB_WRITE_ERRORS = Counter(
+    "finguard_hub_write_errors_total",
+    "Total MongoDB upsert failures in hub_writer_node — artifacts not persisted",
+)
+
+# ── LLM circuit-breaker observability ────────────────────────────────────────
+
+# Incremented each time a Gemini call exceeds the 30-second hard timeout.
+# Alert rule: rate(finguard_gemini_timeouts_total[5m]) > 0.1
+GEMINI_TIMEOUT_COUNTER = Counter(
+    "finguard_gemini_timeouts_total",
+    "Total Gemini API calls that exceeded the 30-second hard timeout and tripped the circuit breaker",
+)
+
 # ── Helper: LLM call timer ─────────────────────────────────────────────────────
 
 

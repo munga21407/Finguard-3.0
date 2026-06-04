@@ -36,6 +36,13 @@ MAX_L2_DISTANCE = 1.5     # L2 > 1.5 ≈ not semantically relevant
 
 _EMBED_CACHE_TTL = 3600   # 1 hour
 
+# Returned when the knowledge base is empty or all candidates exceed the
+# distance threshold.  Gives Agent F a safe baseline so it never hallucinates
+# KRA section references on a fresh deployment.
+_EMPTY_KB_FALLBACK = (
+    "No specific KRA context found. Apply standard 16% VAT and 30% CIT."
+)
+
 
 def _embed_cache_key(query: str) -> str:
     """SHA-256 of the lower-cased, stripped query — stable across equivalent requests."""
@@ -175,6 +182,11 @@ async def get_relevant_tax_rules(query: str, limit: int = 3) -> list[str]:
             break
 
     if not excerpts:
-        logger.info("Tax RAG: no relevant excerpts found within distance threshold")
+        logger.warning(
+            "Tax RAG: knowledge base returned 0 usable results — "
+            "returning deterministic fallback to prevent Agent F hallucinations",
+            query_preview=query[:120],
+        )
+        return [_EMPTY_KB_FALLBACK]
 
     return excerpts

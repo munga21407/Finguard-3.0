@@ -25,6 +25,7 @@ from src.domains.intelligence.router import router as intelligence_router
 from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
 from src.infrastructure.database.postgres import close_db, init_db
+from src.domains.intelligence.security.vc_issuer import ensure_trust_log_ttl_index
 from src.infrastructure.message_bus.rabbitmq_publisher import close_rabbitmq, init_rabbitmq
 
 
@@ -59,6 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     await init_db()
     await init_mongo()
+    await ensure_trust_log_ttl_index()
     await init_redis()
     await init_rabbitmq()
 

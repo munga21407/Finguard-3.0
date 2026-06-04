@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.errors import GraphRecursionError  # noqa: F401 — re-exported for callers
 from langgraph.graph import END, START, StateGraph
 
 from src.domains.intelligence.agents.a_generator import make_a_generator_node
@@ -66,6 +67,24 @@ def build_invoice_graph() -> Any:
     workflow.add_edge("a_generator", "hub_writer")
     workflow.add_edge("hub_writer", END)
     return workflow.compile()
+
+
+_RECURSION_LIMIT = 25   # maximum supervisor ↔ agent round-trips per session
+
+
+async def run_graph(state: dict[str, Any]) -> dict[str, Any]:
+    """
+    Invoke the full supervisor graph with the native LangGraph recursion limit.
+
+    Centralises the ``{"recursion_limit": _RECURSION_LIMIT}`` config so every
+    call site (HTTP router, background task, tests) uses the same ceiling.
+
+    Raises:
+        GraphRecursionError — if the graph exceeds _RECURSION_LIMIT hops.
+            Callers should catch this and return a 508 / degraded response.
+    """
+    graph = build_graph()
+    return await graph.ainvoke(state, config={"recursion_limit": _RECURSION_LIMIT})
 
 
 def build_graph() -> Any:

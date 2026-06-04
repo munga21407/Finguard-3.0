@@ -25,6 +25,14 @@ from src.workers.tasks.celery_app import celery_app
 
 # ── Extraction prompts ────────────────────────────────────────────────────────
 
+_DOCUMENT_TEXT_PROMPT = """\
+Extract all readable text from this document image for Finguard, a Kenyan SME platform.
+
+Return the text exactly as it appears, preserving layout structure where possible.
+Include all numbers, dates, names, and monetary amounts.
+If the document is not readable, return an empty string.
+"""
+
 _RECEIPT_PROMPT = """\
 Extract structured data from this receipt image for Finguard, a Kenyan SME platform.
 
@@ -72,6 +80,19 @@ def _mime_type(path: str) -> str:
 
 
 # ── Async Gemini vision helpers ───────────────────────────────────────────────
+
+async def _run_document_text_extraction(image_bytes: bytes, mime_type: str) -> str:
+    client = get_gemini_client()
+    response = await client.aio.models.generate_content(
+        model=settings.GEMINI_MODEL,
+        contents=[
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+            types.Part.from_text(_DOCUMENT_TEXT_PROMPT),
+        ],
+        config=types.GenerateContentConfig(temperature=0.0),
+    )
+    return (response.text or "").strip()
+
 
 async def _run_receipt_extraction(image_bytes: bytes, mime_type: str) -> ReceiptExtraction:
     client = get_gemini_client()
@@ -121,23 +142,43 @@ async def _run_invoice_image_extraction(
 )
 def process_document_ocr(self: Any, document_id: str, storage_path: str) -> dict[str, Any]:
     """
-    Extract text from an uploaded document via OCR.
+    Extract text from an uploaded document via Gemini multimodal.
 
     Args:
         document_id:   UUID of the document record.
-        storage_path:  File path or object-storage key of the image/PDF.
+        storage_path:  Local file path or object-storage key of the image/PDF.
 
     Returns:
         dict with keys: document_id, status, text, confidence.
+        On missing or unreadable file: status = "unreadable", text = "".
     """
     try:
-        # TODO: integrate Tesseract / EasyOCR / Google Vision
+        path = Path(storage_path)
+        if not path.exists():
+            logger.warning(
+                "Document OCR: file not found",
+                document_id=document_id,
+                path=storage_path,
+            )
+            return {"document_id": document_id, "status": "file_not_found", "text": "", "confidence": 0.0}
+
+        image_bytes = path.read_bytes()
+        mime = _mime_type(storage_path)
+
+        extracted_text: str = asyncio.run(
+            _run_document_text_extraction(image_bytes, mime)
+        )
+        confidence = 1.0 if extracted_text else 0.0
         return {
             "document_id": document_id,
             "status": "processed",
-            "text": "",
-            "confidence": 0.0,
+            "text": extracted_text,
+            "confidence": confidence,
         }
+
+    except OSError as exc:
+        logger.warning("Document OCR: cannot read file", document_id=document_id, error=str(exc))
+        return {"document_id": document_id, "status": "unreadable", "text": "", "confidence": 0.0}
     except Exception as exc:
         raise self.retry(exc=exc) from exc
 

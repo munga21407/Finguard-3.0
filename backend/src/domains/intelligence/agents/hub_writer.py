@@ -11,6 +11,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from src.core.logging import logger
+from src.core.metrics import HUB_WRITE_ERRORS
 from src.domains.intelligence.schemas import InsightArtifact, OrchestratorState
 from src.infrastructure.database.mongodb import get_mongo_db
 
@@ -25,8 +27,8 @@ _AGENT_TTL_HOURS: dict[str, int] = {
     "E": 0,    # Budget Watchdog — 30 min (see _AGENT_TTL_MINUTES)
     "F": 24,   # Tax Auditor
     "G": 24,   # Credit Strategist
-    "H": 1,    # Financial Advisor — 1 hour
-    "I": 1,    # External Integrator
+    "H": 1,    # Financial Advisor
+    "I": 1,    # External Integrator — FX / credit / KRA data stale after 1 h
     "J": 0,    # Executive Summarizer — 30 min (see _AGENT_TTL_MINUTES)
 }
 _AGENT_TTL_MINUTES: dict[str, int] = {
@@ -95,6 +97,10 @@ def _extract_payload_and_intent(context: dict[str, Any]) -> tuple[str, str, dict
             rr if isinstance(rr, dict) else {"report": str(rr)},
         )
 
+    # I — External Integrator
+    if "external_data" in context:
+        return ("I", "EXTERNAL_SYNC", context["external_data"])
+
     # A — Invoice Generator
     if "extracted_invoice" in context:
         return ("A", "GENERATE_INVOICE", context["extracted_invoice"])
@@ -110,8 +116,14 @@ def make_hub_writer_node() -> Any:
     async def hub_writer_node(state: OrchestratorState) -> dict[str, Any]:
         result = _extract_payload_and_intent(state["context"])
         if result is None:
-            # Nothing to cache — pass through silently
-            return {}
+            logger.warning(
+                "hub_writer: no recognizable agent key in context — "
+                "passing state through unmodified",
+                session_id=state.get("session_id"),
+            )
+            # Return the current context explicitly so downstream nodes are
+            # never handed a wiped state from an empty-dict return.
+            return {"context": state["context"]}
 
         agent_id, intent, payload = result
         now = datetime.now(UTC)
@@ -130,7 +142,23 @@ def make_hub_writer_node() -> Any:
         doc["created_at"] = doc["created_at"].isoformat()
 
         db = get_mongo_db()
-        await db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        try:
+            await db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        except Exception as exc:
+            HUB_WRITE_ERRORS.inc()
+            logger.error(
+                "hub_writer: MongoDB upsert failed — artifact NOT persisted",
+                artifact_id=doc["_id"],
+                agent_id=agent_id,
+                intent=intent,
+                session_id=state.get("session_id"),
+                error=str(exc),
+                exc_info=True,
+            )
+            # Return the current context unmodified so the LangGraph run can
+            # finish; hub_artifact_id is intentionally omitted to signal the
+            # artifact was not written.
+            return {"context": state["context"]}
 
         updated_context = dict(state["context"])
         updated_context["hub_artifact_id"] = doc["_id"]

@@ -370,7 +370,22 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
             # If _apply_match raises on any single match, session.begin() rolls
             # back the entire batch automatically; no partial state is committed.
             for match in all_matches:
-                await _apply_match(session, match)
+                try:
+                    await _apply_match(session, match)
+                except Exception as exc:
+                    # Log the offending invoice before re-raising so operators
+                    # can identify the problematic record in structured logs
+                    # without having to reconstruct it from a generic traceback.
+                    logger.error(
+                        "c_reconciler: _apply_match failed — rolling back entire batch",
+                        invoice_id=match.invoice_id,
+                        transaction_id=match.transaction_id,
+                        match_type=match.match_type,
+                        match_score=match.match_score,
+                        error=str(exc),
+                        exc_info=True,
+                    )
+                    raise  # propagates to session.begin() → full batch ROLLBACK
         else:
             exact_matches = []
             matched_txn_ids: set[str] = set()

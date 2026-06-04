@@ -151,19 +151,21 @@ def make_b_classifier_node(llm: Any = None) -> Any:  # llm kept for signature co
         updated_context = dict(state["context"])
         updated_context["classified_transactions"] = [c.model_dump() for c in classifications]
 
+        # In actions mode the agent is read-safe; the Celery task owns all DB
+        # writes and event publishing so this node stays side-effect-free.
         if mode == "actions":
-            # Lazy import avoids circular dependency at module load time
-            # (batch.py imports from this module's prompts; not from this file)
             try:
                 from src.workers.tasks.batch import classify_unclassified_ledger_entries  # noqa: PLC0415
-
                 classify_unclassified_ledger_entries.delay()
                 logger.info(
-                    "b_classifier dispatched batch classification task",
-                    entry_count=len(entries),
+                    "b_classifier: dispatched classify_unclassified_ledger_entries task",
+                    classified_count=len(classifications),
                 )
             except Exception as exc:
-                logger.warning("b_classifier: failed to dispatch batch task", error=str(exc))
+                logger.warning(
+                    "b_classifier: failed to dispatch Celery classification task",
+                    error=str(exc),
+                )
 
         summary = (
             f"Classified {len(classifications)} transactions. "
