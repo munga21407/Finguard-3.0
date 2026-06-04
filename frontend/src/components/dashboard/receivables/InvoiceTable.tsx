@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { StatusBadge } from "../StatusBadge";
 
 type InvoiceStatus = "sent" | "paid" | "overdue" | "draft";
@@ -29,7 +30,7 @@ export function InvoiceTable({ invoices = defaultInvoices }: InvoiceTableProps) 
     <div className="bg-lf-surface-container-lowest rounded-xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/30 flex flex-col">
       <div className="flex justify-between items-center mb-6">
         <h3 className="text-xl font-semibold tracking-tight text-lf-on-surface">Recent Invoices</h3>
-        <button className="text-lf-primary text-sm font-bold hover:underline">View All</button>
+        <Link href="/dashboard/invoices" className="text-lf-primary text-sm font-bold hover:underline">View All</Link>
       </div>
 
       <div className="overflow-x-auto">

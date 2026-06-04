@@ -11,7 +11,7 @@ const defaultActions: ActionItem[] = [
     id: "1",
     priority: "high",
     timeAgo: "2m ago",
-    message: "Unusual wire transfer detected: $450k to unknown vendor.",
+    message: "Agent D: Unusual wire transfer detected: $450k to unknown vendor.",
     actions: [
       { label: "Review", variant: "primary" },
       { label: "Dismiss", variant: "secondary" },
@@ -22,7 +22,24 @@ const defaultActions: ActionItem[] = [
     priority: "routine",
     timeAgo: "1h ago",
     message: "Batch invoice approval ready for sign-off (12 items).",
-    actions: [{ label: "Approve All", variant: "primary" }],
+    actions: [
+      { label: "Approve All", variant: "primary" },
+      { label: "View", variant: "secondary" },
+    ],
+  },
+  {
+    id: "3",
+    priority: "routine",
+    timeAgo: "3h ago",
+    message: "Agent F: Revenue projection adjusted +4.2% based on Q3 pipeline velocity. Q4 reallocation recommended.",
+    actions: [{ label: "View Analysis", variant: "primary" }],
+  },
+  {
+    id: "4",
+    priority: "high",
+    timeAgo: "5h ago",
+    message: "Agent G: New tax directive (2024-B) affects 3 active international vendor contracts. Addendums drafted.",
+    actions: [{ label: "Review Drafts", variant: "primary" }],
   },
 ];
 
