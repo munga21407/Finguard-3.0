@@ -1,39 +1,42 @@
-import { SignUpForm } from "./SignUpForm";
+"use client";
 
-interface SignUpCardProps {
-  onSubmit?: Parameters<typeof SignUpForm>[0]["onSubmit"];
-  onGoogleSignUp?: () => void;
-  onSSOSignUp?: () => void;
-  onLoginClick?: () => void;
-}
+// ─── SignUpCard ───────────────────────────────────────────────────────────────
 
-export function SignUpCard({
-  onSubmit,
-  onGoogleSignUp,
-  onSSOSignUp,
-  onLoginClick,
-}: SignUpCardProps) {
+import Link from "next/link";
+import { SignUpForm } from "@/components/auth/SignUpForm";
+
+export function SignUpCard() {
   return (
-    <div className="bg-lf-surface-container-lowest rounded-xl shadow-[0px_4px_20px_rgba(0,0,0,0.03)] p-8 md:p-10 border border-lf-outline-variant/30 backdrop-blur-sm">
+    <div className="auth-wrapper">
       {/* Logo */}
-      <div className="flex flex-col items-center mb-10">
-        <div className="w-12 h-12 bg-lf-primary flex items-center justify-center rounded-xl mb-4 shadow-lg shadow-lf-primary/20">
-          {/* Auto-graph / finance icon */}
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
-            <polyline points="16 7 22 7 22 13" />
-          </svg>
+      <div className="auth-logo-section">
+        <div className="auth-logo-icon">
+          <span>🛡️</span>
         </div>
-        <h1 className="text-lf-primary text-2xl font-semibold tracking-tight mb-1">FinCorp AI</h1>
-        <p className="text-lf-on-surface-variant text-sm">Create your enterprise account</p>
+        <h1 className="auth-logo-title">FinGuard 3.0</h1>
+        <p className="auth-logo-subtitle">AI-Powered Financial Operations</p>
       </div>
 
-      <SignUpForm
-        onSubmit={onSubmit}
-        onGoogleSignUp={onGoogleSignUp}
-        onSSOSignUp={onSSOSignUp}
-        onLoginClick={onLoginClick}
-      />
+      {/* Card */}
+      <div className="auth-card">
+        <div className="auth-card-header">
+          <h2 className="auth-title">Create account</h2>
+          <Link href="/login" className="auth-switch-button">
+            Sign in
+          </Link>
+        </div>
+
+        <SignUpForm />
+
+        <p className="auth-footer-text">
+          Already have an account?{" "}
+          <Link href="/login" className="auth-link">
+            Sign in
+          </Link>
+        </p>
+      </div>
+
+      <p className="auth-security-footer">🔒 Secured with JWT · Kenya Data Protection Act compliant</p>
     </div>
   );
 }

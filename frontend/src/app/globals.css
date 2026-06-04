@@ -1,3 +1,26 @@
+/* src/app/globals.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /* Your custom styles */
+  body {
+    @apply bg-lf-background text-lf-on-surface;
+  }
+}
+
+@layer components {
+  .auth-gradient {
+    @apply bg-gradient-to-br from-lf-primary via-lf-primary-container to-lf-secondary;
+  }
+  
+  .card-gradient {
+    @apply bg-white/10 backdrop-blur-lg border border-white/20;
+  }
+  
+  .btn-primary {
+    @apply bg-lf-primary hover:bg-lf-primary-container text-lf-on-primary 
+           font-semibold py-2 px-4 rounded-lg transition-all duration-200;
+  }
+}

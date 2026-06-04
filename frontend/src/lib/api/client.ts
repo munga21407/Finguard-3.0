@@ -1,23 +1,4 @@
-import axios from "axios";
+// ─── API Client ───────────────────────────────────────────────────────────────
+// Re-exports the configured Axios instance for use across the app.
 
-export const apiClient = axios.create({
-  baseURL: "/api/v1",
-  headers: { "Content-Type": "application/json" },
-});
-
-apiClient.interceptors.request.use((config) => {
-  const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
-
-apiClient.interceptors.response.use(
-  (res) => res,
-  async (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem("access_token");
-      window.location.href = "/login";
-    }
-    return Promise.reject(error);
-  }
-);
+export { default } from "@/lib/api/http-client";
