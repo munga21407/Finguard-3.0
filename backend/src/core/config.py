@@ -1,4 +1,4 @@
-from pydantic import field_validator
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
 
     DATABASE_URL: str
+    DATABASE_READONLY_URL: str = ""   # finguard_readonly role — used by Text-to-SQL
     MONGODB_URL: str
     MONGODB_DB: str = "finguard"
     REDIS_URL: str
@@ -29,8 +30,8 @@ class Settings(BaseSettings):
     PASSWORD_MIN_LENGTH: int = 8
 
     # Background workers
-    ENABLE_EXPENSE_EVENT_CONSUMER: bool = False
-    ENABLE_OUTBOX_PROJECTOR: bool = False
+    ENABLE_EXPENSE_EVENT_CONSUMER: bool = True
+    ENABLE_OUTBOX_PROJECTOR: bool = True
     OUTBOX_POLL_INTERVAL: float = 5.0
     OUTBOX_BATCH_SIZE: int = 50
     OUTBOX_MAX_RETRIES: int = 5
@@ -39,6 +40,18 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
+
+    # Observability — Bearer token protecting the /metrics endpoint.
+    # Leave empty to disable auth (development only; never empty in production).
+    METRICS_AUTH_SECRET: str = ""
+
+    # External financial API credentials (Agent I — External Integrator)
+    MPESA_CONSUMER_KEY: str = ""
+    MPESA_CONSUMER_SECRET: str = ""
+    MPESA_SHORTCODE: str = ""          # Business short code for STK Push
+    CBK_FX_API_KEY: str = ""           # Central Bank of Kenya FX rates API
+    METROPOL_API_KEY: str = ""         # Metropol credit bureau API
+    KRA_ECITIZEN_API_KEY: str = ""     # KRA e-Citizen VAT/tax status API
 
     @field_validator("CELERY_BROKER_URL", mode="before")
     @classmethod
@@ -49,7 +62,7 @@ class Settings(BaseSettings):
 
     @field_validator("AUTH_REDIS_URL", mode="before")
     @classmethod
-    def default_auth_redis(cls, v: str, info: object) -> str:
+    def default_auth_redis(cls, v: str, info: ValidationInfo) -> str:
         if not v:
             base: str = (info.data or {}).get("REDIS_URL", "redis://localhost:6379/0")
             return base.rsplit("/", 1)[0] + "/1"
@@ -57,11 +70,11 @@ class Settings(BaseSettings):
 
     @field_validator("RATE_LIMIT_REDIS_URL", mode="before")
     @classmethod
-    def default_rate_limit_redis(cls, v: str, info: object) -> str:
+    def default_rate_limit_redis(cls, v: str, info: ValidationInfo) -> str:
         if not v:
             base: str = (info.data or {}).get("REDIS_URL", "redis://localhost:6379/0")
             return base.rsplit("/", 1)[0] + "/2"
         return v
 
 
-settings = Settings()  # type: ignore[call-arg]
+settings = Settings()

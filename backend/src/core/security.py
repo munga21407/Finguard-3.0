@@ -1,11 +1,12 @@
-from datetime import datetime, timedelta, timezone
+import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from src.core.config import settings
-from src.core.exceptions import UnauthorizedException
+from src.core.exceptions import UnauthorizedError
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -21,7 +22,8 @@ def verify_password(plain: str, hashed: str) -> bool:
 def create_access_token(subject: str | int, extra: dict[str, Any] | None = None) -> str:
     payload: dict[str, Any] = {
         "sub": str(subject),
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+        "jti": str(uuid.uuid4()),   # unique ID — required for Redis blacklist revocation
+        "exp": datetime.now(UTC) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
         "type": "access",
     }
     if extra:
@@ -32,7 +34,7 @@ def create_access_token(subject: str | int, extra: dict[str, Any] | None = None)
 def create_refresh_token(subject: str | int) -> str:
     payload: dict[str, Any] = {
         "sub": str(subject),
-        "exp": datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        "exp": datetime.now(UTC) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
         "type": "refresh",
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
@@ -42,4 +44,4 @@ def decode_token(token: str) -> dict[str, Any]:
     try:
         return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
     except JWTError as exc:
-        raise UnauthorizedException("Invalid or expired token") from exc
+        raise UnauthorizedError("Invalid or expired token") from exc

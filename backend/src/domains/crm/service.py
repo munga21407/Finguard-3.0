@@ -2,7 +2,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.exceptions import ConflictException, NotFoundException
+from src.core.exceptions import ConflictError, NotFoundError
 from src.domains.crm.models import Customer
 from src.domains.crm.repository import CustomerRepository
 from src.domains.crm.schemas import CustomerCreate, CustomerUpdate
@@ -15,7 +15,7 @@ class CRMService:
 
     async def create_customer(self, data: CustomerCreate) -> Customer:
         if await self._repo.get_by_email(data.email):
-            raise ConflictException("Customer with this email already exists")
+            raise ConflictError("Customer with this email already exists")
         customer = Customer(**data.model_dump())
         customer = await self._repo.create(customer)
         await self._session.commit()
@@ -24,7 +24,7 @@ class CRMService:
     async def get_customer(self, customer_id: uuid.UUID) -> Customer:
         customer = await self._repo.get_by_id(customer_id)
         if not customer:
-            raise NotFoundException("Customer not found")
+            raise NotFoundError("Customer not found")
         return customer
 
     async def list_customers(self, limit: int = 50, offset: int = 0) -> list[Customer]:

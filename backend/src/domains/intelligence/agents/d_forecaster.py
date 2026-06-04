@@ -1,33 +1,429 @@
 """
 Agent D — Cash-Flow Forecaster.
 
-Responsibility:
-    Produce a 30/60/90-day cash-flow forecast by combining:
-      - Historical ledger debit/credit trends (PostgreSQL).
-      - Scheduled invoice due-dates (PostgreSQL).
-      - Seasonal adjustment factors (configurable per account).
-    Writes `context["forecast"]` as a list of {date, expected_balance} dicts.
+Agentic Hybrid Strategy for African SME volatility and data sparsity:
 
-Implementation notes (TODO):
-    1. Pull 12 months of daily net cash-flow from ledger_entries via sql_executor.
-    2. Fit a simple exponential smoothing model (or call Claude for narrative
-       adjustment based on known upcoming liabilities from invoices).
-    3. Overlay scheduled invoice payments (due_date, total from invoices table).
-    4. Publish "finance.forecast.generated" event in actions mode.
+  1. Quantitative Baseline  — Holt-Winters exponential smoothing (statsmodels)
+     fitted on up to 12 months of daily net cash-flow, projected 30 days forward.
+     Invoice due-date amounts are overlaid as known future outflows.
+
+  2. Semantic Regime Detector — Gemini evaluates the HW baseline, recent variance,
+     and upcoming liabilities to classify the business into one of five financial
+     regimes (Boom / Normal / Stress / Liquidity Crunch / Recovery) and generates
+     actionable advisory warnings calibrated for Kenyan SMEs.
+
+  3. Text-to-SQL CoVe — When context["text_to_sql_query"] is set, a three-step
+     Chain-of-Verification workflow (Drafter → Explainer → Auditor) generates,
+     translates, and audits a PostgreSQL query before executing it through the
+     read-only sql_executor, writing results to context["sql_result"].
+
+Writes context["forecast"] (CashFlowForecast) and optionally context["sql_result"]
+(CoVeSQLQuery) before returning to the Supervisor node.
 """
 from __future__ import annotations
 
+import json
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
+
+import numpy as np
+import structlog
 from langchain_core.messages import AIMessage
+from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domains.intelligence.schemas import OrchestratorState
+from google.genai import types
+
+from src.core.config import settings
+from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.prompts.d_forecaster import (
+    FORECASTER_COVE_AUDITOR_SYSTEM,
+    FORECASTER_COVE_DRAFTER_SYSTEM,
+    FORECASTER_COVE_EXPLAINER_SYSTEM,
+    FORECASTER_REGIME_SYSTEM,
+)
+from src.domains.intelligence.schemas import (
+    CashFlowForecast,
+    CoVeSQLQuery,
+    ForecastDataPoint,
+    OrchestratorState,
+    RegimeAnalysis,
+)
+from src.domains.intelligence.tools.sql_executor import execute_readonly_sql
+from src.infrastructure.database.postgres import AsyncSessionLocal
+
+logger = structlog.get_logger(__name__)
+
+_FORECAST_HORIZON = 30  # days
 
 
-def make_d_forecaster_node(llm=None):  # llm kept for signature compatibility
-    async def d_forecaster_node(state: OrchestratorState) -> dict:
-        # TODO: implement — see module docstring
+# ---------------------------------------------------------------------------
+# Private CoVe structured-output schemas
+# ---------------------------------------------------------------------------
+
+class _CoVeDraft(BaseModel):
+    sql_query: str
+    intent_summary: str
+
+
+class _CoVeExplanation(BaseModel):
+    plain_english: str
+
+
+class _CoVeAudit(BaseModel):
+    intent_preserved: bool
+    confidence: float      # 0.0–1.0
+    issues: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Data-fetch helpers
+# ---------------------------------------------------------------------------
+
+async def _fetch_daily_cashflow(
+    session: AsyncSession,
+) -> list[tuple[date, float]]:
+    """Pull 12 months of daily net cash-flow (credits minus debits) from ledger_entries."""
+    sql = text("""
+        SELECT
+            date_trunc('day', created_at AT TIME ZONE 'Africa/Nairobi')::date AS day,
+            SUM(
+                CASE WHEN transaction_type = 'credit' THEN amount::float
+                     ELSE -amount::float END
+            ) AS net_flow
+        FROM ledger_entries
+        WHERE created_at >= NOW() - INTERVAL '12 months'
+        GROUP BY day
+        ORDER BY day ASC
+    """)
+    result = await session.execute(sql)
+    return [(row[0], float(row[1])) for row in result.fetchall()]
+
+
+async def _fetch_current_balance(session: AsyncSession) -> float:
+    """Sum all ledger credits minus debits to derive the running account balance."""
+    sql = text("""
+        SELECT COALESCE(
+            SUM(CASE WHEN transaction_type = 'credit' THEN amount::float
+                     ELSE -amount::float END),
+            0.0
+        )
+        FROM ledger_entries
+    """)
+    result = await session.execute(sql)
+    return float(result.scalar() or 0.0)
+
+
+async def _fetch_upcoming_invoices(
+    session: AsyncSession,
+    horizon_days: int,
+) -> list[dict[str, Any]]:
+    """Return open invoices due within the forecast horizon, grouped by due date."""
+    sql = text("""
+        SELECT
+            due_date::date           AS due_date,
+            SUM(balance_due::float)  AS total_due
+        FROM invoices
+        WHERE status IN ('sent', 'overdue', 'partially_paid')
+          AND due_date BETWEEN NOW() AND NOW() + :interval::interval
+          AND balance_due > 0
+        GROUP BY due_date::date
+        ORDER BY due_date ASC
+    """)
+    result = await session.execute(sql, {"interval": f"{horizon_days} days"})
+    return [{"date": str(row[0]), "amount": float(row[1])} for row in result.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Holt-Winters model
+# ---------------------------------------------------------------------------
+
+def _fit_holtwinters(
+    daily_flows: list[tuple[Any, float]],
+    horizon: int = _FORECAST_HORIZON,
+) -> tuple[list[float], str]:
+    """
+    Fit a Holt-Winters ExponentialSmoothing model and return (forecast, model_name).
+
+    Adaptive strategy based on available data:
+      < 3 points  → flat forecast (last observed value)
+      3–13 points → additive trend only (no seasonal)
+      14+ points  → additive trend + additive weekly seasonality (period = 7)
+    """
+    # statsmodels import is deferred to avoid heavy startup cost for other agents
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing  # noqa: PLC0415
+
+    values = np.array([v for _, v in daily_flows], dtype=float)
+    n = len(values)
+
+    if n < 3:
+        last = float(values[-1]) if n > 0 else 0.0
+        return [last] * horizon, "flat"
+
+    use_seasonal = n >= 14
+    try:
+        model = ExponentialSmoothing(
+            values,
+            trend="add",
+            seasonal="add" if use_seasonal else None,
+            seasonal_periods=7 if use_seasonal else None,
+            initialization_method="estimated",
+        )
+        fit = model.fit(optimized=True, remove_bias=True)
+        forecast = fit.forecast(horizon).tolist()
+        model_name = "holt_winters_seasonal" if use_seasonal else "holt_winters_trend"
+    except Exception as exc:
+        logger.warning("d_forecaster: HW model failed, using linear trend", error=str(exc))
+        trend = float((values[-1] - values[0]) / n) if n >= 2 else 0.0
+        forecast = [float(values[-1]) + trend * (i + 1) for i in range(horizon)]
+        model_name = "linear_trend"
+
+    return forecast, model_name
+
+
+# ---------------------------------------------------------------------------
+# Regime Detector
+# ---------------------------------------------------------------------------
+
+async def _detect_regime(
+    current_balance: float,
+    forecast_flows: list[float],
+    daily_flows: list[tuple[Any, float]],
+    upcoming_invoices: list[dict[str, Any]],
+) -> RegimeAnalysis:
+    recent = [v for _, v in daily_flows[-30:]] if daily_flows else []
+    variance = float(np.std(recent)) if recent else 0.0
+    mean_flow = float(np.mean(recent)) if recent else 0.0
+    projected_30d = current_balance + sum(forecast_flows)
+    total_due = sum(inv["amount"] for inv in upcoming_invoices)
+
+    quantitative = {
+        "current_balance_kes": round(current_balance, 2),
+        "mean_daily_net_flow_kes": round(mean_flow, 2),
+        "daily_flow_std_dev_kes": round(variance, 2),
+        "projected_30d_balance_kes": round(projected_30d, 2),
+        "total_upcoming_invoices_due_kes": round(total_due, 2),
+        "num_upcoming_invoices": len(upcoming_invoices),
+        "forecast_30d_trend": "positive" if sum(forecast_flows) > 0 else "negative",
+        "historical_data_points": len(daily_flows),
+    }
+
+    prompt = (
+        f"{FORECASTER_REGIME_SYSTEM}\n\n"
+        "## Quantitative Summary\n"
+        f"{json.dumps(quantitative, indent=2)}\n\n"
+        "## 30-Day Baseline Forecast (daily net flows, KES)\n"
+        f"{json.dumps([round(f, 2) for f in forecast_flows], indent=2)}\n\n"
+        "## Upcoming Invoice Due Dates\n"
+        f"{json.dumps(upcoming_invoices[:15], indent=2)}\n\n"
+        "Determine the financial regime and provide risk factors, "
+        "advisory warnings, and a narrative."
+    )
+
+    client = get_gemini_client()
+    response = await client.aio.models.generate_content(
+        model=settings.GEMINI_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=RegimeAnalysis,
+            temperature=0.2,
+        ),
+    )
+    return RegimeAnalysis.model_validate_json(response.text or "{}")
+
+
+# ---------------------------------------------------------------------------
+# Chain-of-Verification Text-to-SQL
+# ---------------------------------------------------------------------------
+
+async def _cove_text_to_sql(user_query: str) -> CoVeSQLQuery:
+    """
+    Three-step CoVe pipeline:
+      1. Drafter  — LLM writes a PostgreSQL SELECT for the user's question.
+      2. Explainer — LLM translates that SQL back to plain English.
+      3. Auditor  — LLM verifies the explanation matches the original intent.
+
+    If the Auditor approves (intent_preserved=True, confidence ≥ 0.70), the
+    query is executed via the read-only sql_executor; results are attached.
+    """
+    client = get_gemini_client()
+
+    # ── Step 1: Draft ─────────────────────────────────────────────────────────
+    draft_prompt = (
+        f"{FORECASTER_COVE_DRAFTER_SYSTEM}\n\n"
+        f"User question: {user_query}\n\n"
+        "Write the PostgreSQL SELECT query."
+    )
+    draft_resp = await client.aio.models.generate_content(
+        model=settings.GEMINI_MODEL,
+        contents=draft_prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=_CoVeDraft,
+            temperature=0.0,
+        ),
+    )
+    draft = _CoVeDraft.model_validate_json(draft_resp.text or "{}")
+
+    # ── Step 2: Explain ───────────────────────────────────────────────────────
+    explain_prompt = (
+        f"{FORECASTER_COVE_EXPLAINER_SYSTEM}\n\n"
+        f"Query:\n{draft.sql_query}\n\n"
+        "Describe what this query retrieves in one paragraph."
+    )
+    explain_resp = await client.aio.models.generate_content(
+        model=settings.GEMINI_MODEL,
+        contents=explain_prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=_CoVeExplanation,
+            temperature=0.0,
+        ),
+    )
+    explanation = _CoVeExplanation.model_validate_json(explain_resp.text or "{}")
+
+    # ── Step 3: Audit ─────────────────────────────────────────────────────────
+    audit_prompt = (
+        f"{FORECASTER_COVE_AUDITOR_SYSTEM}\n\n"
+        f"User Question: {user_query}\n\n"
+        f"SQL Query:\n{draft.sql_query}\n\n"
+        f"Plain-English Translation:\n{explanation.plain_english}\n\n"
+        "Verify correctness, safety, and completeness. "
+        "Set intent_preserved = true only if the SQL correctly answers the question."
+    )
+    audit_resp = await client.aio.models.generate_content(
+        model=settings.GEMINI_MODEL,
+        contents=audit_prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=_CoVeAudit,
+            temperature=0.0,
+        ),
+    )
+    audit = _CoVeAudit.model_validate_json(audit_resp.text or "{}")
+
+    # ── Execute if approved ────────────────────────────────────────────────────
+    results: list[dict[str, Any]] | None = None
+    if audit.intent_preserved and audit.confidence >= 0.70:
+        try:
+            results = await execute_readonly_sql(draft.sql_query)
+            logger.info(
+                "d_forecaster: CoVe SQL executed",
+                rows=len(results),
+                query_summary=draft.intent_summary,
+            )
+        except Exception as exc:
+            logger.warning("d_forecaster: CoVe SQL execution failed", error=str(exc))
+
+    audit_notes = "; ".join(audit.issues) if audit.issues else "No issues found."
+    return CoVeSQLQuery(
+        original_query=user_query,
+        sql=draft.sql_query,
+        explanation=explanation.plain_english,
+        audit_passed=audit.intent_preserved and audit.confidence >= 0.70,
+        audit_notes=audit_notes,
+        results=results,
+    )
+
+
+# ---------------------------------------------------------------------------
+# LangGraph node
+# ---------------------------------------------------------------------------
+
+def make_d_forecaster_node(llm: Any = None) -> Any:  # llm kept for signature compatibility
+    async def d_forecaster_node(state: OrchestratorState) -> dict[str, Any]:
+        ctx = dict(state["context"])
+        horizon = int(ctx.get("forecast_horizon_days", _FORECAST_HORIZON))
+        text_to_sql_query: str | None = ctx.get("text_to_sql_query")
+
+        async with AsyncSessionLocal() as session:
+            # ── 1. Historical data ────────────────────────────────────────────
+            daily_flows = await _fetch_daily_cashflow(session)
+            current_balance = await _fetch_current_balance(session)
+            upcoming_invoices = await _fetch_upcoming_invoices(session, horizon)
+
+        # ── 2. Holt-Winters forecast ──────────────────────────────────────────
+        if daily_flows:
+            raw_forecast, model_name = _fit_holtwinters(daily_flows, horizon)
+        else:
+            raw_forecast = [0.0] * horizon
+            model_name = "no_data"
+
+        # ── 3. Invoice overlay → projected balance ────────────────────────────
+        today = date.today()
+        invoice_map = {inv["date"]: inv["amount"] for inv in upcoming_invoices}
+        data_points: list[ForecastDataPoint] = []
+        running_balance = current_balance
+
+        for i, net_flow in enumerate(raw_forecast):
+            day_str = (today + timedelta(days=i + 1)).isoformat()
+            scheduled = invoice_map.get(day_str, 0.0)
+            running_balance += net_flow - scheduled
+            data_points.append(
+                ForecastDataPoint(
+                    date=day_str,
+                    baseline_net_flow=round(net_flow, 2),
+                    scheduled_payment=round(scheduled, 2),
+                    projected_balance=round(running_balance, 2),
+                )
+            )
+
+        # ── 4. Semantic Regime Detector ───────────────────────────────────────
+        try:
+            regime = await _detect_regime(
+                current_balance, raw_forecast, daily_flows, upcoming_invoices
+            )
+        except Exception as exc:
+            logger.error("d_forecaster: regime detection failed", error=str(exc))
+            regime = RegimeAnalysis(
+                regime="Normal",
+                confidence=0.5,
+                risk_factors=["Regime detection unavailable — review data manually."],
+                advisory_warnings=["Monitor cash flow manually until regime analysis recovers."],
+                narrative=(
+                    "Automated regime analysis failed. "
+                    "The quantitative baseline is still valid. "
+                    "Please review your cash position manually."
+                ),
+            )
+
+        # ── 5. CoVe Text-to-SQL (optional) ───────────────────────────────────
+        if text_to_sql_query:
+            try:
+                sql_result = await _cove_text_to_sql(text_to_sql_query)
+                ctx["sql_result"] = sql_result.model_dump()
+            except Exception as exc:
+                logger.error("d_forecaster: CoVe workflow failed", error=str(exc))
+
+        # ── 6. Write forecast to context ──────────────────────────────────────
+        forecast = CashFlowForecast(
+            horizon_days=horizon,
+            current_balance=round(current_balance, 2),
+            data_points=data_points,
+            regime=regime,
+            model_used=model_name,
+            generated_at=datetime.now(UTC).isoformat(),
+        )
+        ctx["forecast"] = forecast.model_dump()
+
+        projected_final = data_points[-1].projected_balance if data_points else current_balance
+        summary = (
+            f"[d_forecaster] {horizon}-day forecast generated ({model_name}). "
+            f"Regime: {regime.regime} (confidence {regime.confidence:.0%}). "
+            f"Current: KES {current_balance:,.0f} → "
+            f"Projected: KES {projected_final:,.0f}."
+        )
+        if ctx.get("sql_result"):
+            sql_res = ctx["sql_result"]
+            summary += (
+                f" SQL query {'executed' if sql_res.get('audit_passed') else 'failed audit'}."
+            )
+
         return {
-            "messages": [AIMessage(content="[d_forecaster] Not yet implemented.", name="d_forecaster")],
-            "context": state["context"],
+            "messages": [AIMessage(content=summary, name="d_forecaster")],
+            "context": ctx,
         }
 
     return d_forecaster_node

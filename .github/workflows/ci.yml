@@ -39,12 +39,14 @@ jobs:
       - name: Lint
         run: uv run ruff check src tests
       - name: Type check
-        run: uv run mypy src
+        run: uv run mypy --explicit-package-bases src
       - name: Test
         run: uv run pytest tests/ -v --cov=src --cov-report=xml
         env:
           DATABASE_URL: postgresql+asyncpg://finguard:finguard@localhost:5432/finguard_test
           REDIS_URL: redis://localhost:6379/0
+          MONGODB_URL: mongodb://localhost:27017/finguard_test
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672//
           SECRET_KEY: ci-test-secret-key-not-for-production
 
   frontend-lint-build:

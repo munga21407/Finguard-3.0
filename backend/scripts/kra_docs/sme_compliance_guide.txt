@@ -1,0 +1,138 @@
+KENYA REVENUE AUTHORITY — SME COMPLIANCE GUIDE
+Tax Obligations for Small and Medium Enterprises in Kenya | Updated 2024
+
+SECTION 1: TAX REGISTRATION REQUIREMENTS
+------------------------------------------
+Every business operating in Kenya must register with KRA upon commencement of
+business. The following registrations may be required:
+
+1.1 PIN Registration
+  All businesses must obtain a Personal Identification Number (PIN) from KRA.
+  Required for: opening bank accounts, importing goods, tendering for contracts,
+  registering property, and applying for government licences.
+
+1.2 VAT Registration
+  Mandatory when annual turnover exceeds KES 5,000,000.
+  Voluntary registration permitted below threshold.
+  Apply via iTax portal within 30 days of exceeding the threshold.
+
+1.3 PAYE Registration
+  Required as soon as the business employs one or more employees.
+  Register on iTax and obtain an employer reference number.
+
+1.4 Turnover Tax Registration
+  Available to businesses with annual turnover KES 1,000,000 – 50,000,000.
+  Replaces Corporate Income Tax; rate is 3% of gross monthly turnover.
+
+SECTION 2: MONTHLY COMPLIANCE CALENDAR
+----------------------------------------
+Day 9 of each month:
+  - PAYE (employee income tax) remittance
+
+Day 20 of each month:
+  - VAT return filing and payment
+  - Withholding Tax remittance
+  - Turnover Tax (TOT) payment
+  - Excise Duty (if applicable)
+
+Day 9 of the month following each quarter:
+  - Agency Revenue (if applicable)
+
+6 months after accounting year-end:
+  - Annual corporate income tax return (IT2C)
+  - Instalment tax reconciliation
+
+SECTION 3: ANTI-MONEY LAUNDERING (AML) OBLIGATIONS
+-----------------------------------------------------
+Under the Proceeds of Crime and Anti-Money Laundering Act (POCAMLA), businesses
+in designated non-financial businesses and professions (DNFBPs) must:
+
+3.1 Customer Due Diligence (CDD)
+  - Verify customer identity before establishing a business relationship
+  - Enhanced due diligence for high-risk customers and politically exposed persons (PEPs)
+  - Ongoing monitoring of business relationships
+
+3.2 Suspicious Transaction Reporting
+  Large Cash Transactions: Any single transaction exceeding KES 1,000,000 in cash
+  must be reported to the Financial Reporting Centre (FRC) within 3 business days.
+
+  Suspicious Activity Reports (SARs): File with the FRC within 3 days of suspicion.
+
+  M-Pesa and mobile money transactions exceeding KES 500,000 in a single day
+  from a single counterparty should trigger enhanced due diligence.
+
+3.3 Record Keeping
+  All CDD records must be retained for at least 7 years from the date of the
+  last transaction.
+
+SECTION 4: DIGITAL SERVICES AND E-COMMERCE TAX
+------------------------------------------------
+With effect from 1 January 2021 (subsequently strengthened in 2024):
+
+4.1 Digital Service Tax (DST)
+  Non-resident digital marketplace operators providing digital services to Kenyan
+  consumers must register for DST at 1.5% of the gross transaction value.
+
+4.2 Significant Economic Presence (SEP) Tax
+  Non-resident entities with significant digital presence in Kenya (threshold:
+  annual revenue from Kenya ≥ KES 5,000,000) are subject to a 30% tax on
+  deemed profit (calculated as 10% of gross Kenya revenue).
+
+4.3 Local E-Commerce Platforms
+  Kenyan-registered e-commerce businesses are subject to standard VAT (16%) and
+  CIT (30%) on profits. eTIMS integration is mandatory for VAT-registered operators.
+
+SECTION 5: PENALTIES AND INTEREST SUMMARY
+-------------------------------------------
+Late Filing Penalties:
+  - VAT return: KES 10,000 or 5% of tax payable (whichever is greater)
+  - Income tax return: 5% per month, capped at 25% of tax due
+  - PAYE return: KES 10,000 or 25% of tax due (whichever is greater)
+
+Late Payment Interest:
+  - All taxes: 1% per month, simple interest, on outstanding tax
+  - Instalment tax shortfall: 20% of the shortfall amount
+
+Civil Penalties:
+  - Tax evasion: 100% of evaded tax
+  - Failure to maintain records: KES 500,000
+  - Failure to submit information to KRA: KES 200,000 per instance
+
+Criminal Sanctions:
+  - Tax fraud: 3 years imprisonment and/or fine equal to 200% of evaded tax
+  - Obstruction of KRA officers: 6 months imprisonment
+
+SECTION 6: TAX INCENTIVES FOR SMES
+-------------------------------------
+6.1 Export Processing Zone (EPZ) Companies
+  - 10-year tax holiday (0% CIT)
+  - 25% CIT rate thereafter for 10 additional years
+
+6.2 Special Economic Zone (SEZ) Companies
+  - 10% CIT rate for first 10 years
+  - 15% CIT rate thereafter
+
+6.3 Start-up Tax Incentives (Finance Act 2023)
+  - 5% CIT rate for the first 3 years for companies incorporated after January 2023
+  - 100% capital allowance for manufacturing equipment in the first year
+
+6.4 Agricultural Sector Incentives
+  - 0% CIT for the first 10 years for new agri-processing businesses
+  - Deductible environmental levy for sustainable farming practices
+
+SECTION 7: iTAX PORTAL OBLIGATIONS
+-------------------------------------
+All KRA interactions must be conducted through the iTax portal (itax.kra.go.ke):
+  - Tax registration and deregistration
+  - Return filing (monthly VAT, PAYE, annual CIT)
+  - Tax payment (integrated with RTGS, mobile banking, card payments)
+  - Tax Compliance Certificate (TCC) application
+  - Transfer pricing documentation submission
+  - Objection and appeal filing
+
+Businesses that fail to use iTax for mandatory transactions may face penalties
+and will be ineligible for the Tax Compliance Certificate needed for:
+  - Government tenders
+  - Import and export licences
+  - Obtaining credit from banks
+  - Renewing business permits

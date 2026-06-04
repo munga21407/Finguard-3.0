@@ -1,9 +1,15 @@
-from datetime import datetime, timezone
+from __future__ import annotations
+
+import uuid as _uuid
+from datetime import UTC, datetime
+from typing import Any
 
 from google.genai import types
+from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
+from src.core.logging import logger
 from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.models import AgentRun, AgentRunStatus
 from src.domains.intelligence.schemas import AgentRunCreate, ChatRequest, ChatResponse
@@ -24,11 +30,10 @@ class IntelligenceService:
             )
             for m in request.messages
         ]
-        config = (
-            types.GenerateContentConfig(system_instruction=request.system)
-            if request.system
-            else types.GenerateContentConfig(max_output_tokens=request.max_tokens)
-        )
+        config_kwargs: dict[str, Any] = {"max_output_tokens": request.max_tokens}
+        if request.system:
+            config_kwargs["system_instruction"] = request.system
+        config = types.GenerateContentConfig(**config_kwargs)
 
         response = await client.aio.models.generate_content(
             model=settings.GEMINI_MODEL,
@@ -57,7 +62,7 @@ class IntelligenceService:
         await self._session.refresh(run)
 
         run.status = AgentRunStatus.RUNNING
-        run.started_at = datetime.now(timezone.utc)
+        run.started_at = datetime.now(UTC)
         await self._session.flush()
 
         try:
@@ -68,10 +73,63 @@ class IntelligenceService:
             run.status = AgentRunStatus.FAILED
             run.error = str(exc)
         finally:
-            run.completed_at = datetime.now(timezone.utc)
+            run.completed_at = datetime.now(UTC)
 
         await self._session.commit()
         return run
 
-    async def _dispatch_agent(self, agent_name: str, input_data: dict) -> dict:
-        raise NotImplementedError(f"Agent '{agent_name}' not implemented")
+    async def _dispatch_agent(self, agent_name: str, input_data: dict[str, Any]) -> dict[str, Any]:
+        """
+        Invoke the full LangGraph orchestrator, routing the supervisor to the
+        requested agent first via the 'next' state key.
+
+        The surrounding `run_agent` already handles AgentRun status writes and
+        the session commit, so this method only needs to return the final output.
+        """
+        from src.domains.intelligence.orchestrator import build_graph
+
+        session_id = str(_uuid.uuid4())
+        query = input_data.get("query", input_data.get("intent", agent_name))
+
+        initial_state = {
+            "messages": [HumanMessage(content=str(query))],
+            "error_messages": [],
+            "next": "supervisor",
+            "context": {**input_data, "requested_agent": agent_name},
+            "session_id": session_id,
+            "user_id": input_data.get("user_id"),
+            "mode": input_data.get("mode", "insights"),
+        }
+
+        try:
+            graph = build_graph()
+            final_state = await graph.ainvoke(initial_state)
+        except Exception as exc:
+            logger.error(
+                "LangGraph invocation failed",
+                agent_name=agent_name,
+                session_id=session_id,
+                error=str(exc),
+            )
+            raise
+
+        agents_invoked: list[str] = list({
+            m.name
+            for m in final_state["messages"]
+            if hasattr(m, "name") and m.name
+        })
+
+        logger.info(
+            "LangGraph dispatch completed",
+            agent_name=agent_name,
+            session_id=session_id,
+            agents_invoked=agents_invoked,
+            error_count=len(final_state.get("error_messages", [])),
+        )
+
+        return {
+            "session_id": session_id,
+            "context": final_state.get("context", {}),
+            "agents_invoked": agents_invoked,
+            "error_messages": final_state.get("error_messages", []),
+        }

@@ -45,9 +45,8 @@ def _imported_modules(path: Path) -> list[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 modules.append(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                modules.append(node.module)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.append(node.module)
     return modules
 
 

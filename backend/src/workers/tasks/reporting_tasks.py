@@ -30,13 +30,18 @@ import asyncio
 import uuid
 from typing import Any
 
+import structlog
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.domains.intelligence.agents.f_auditor import make_f_auditor_node
 from src.domains.intelligence.agents.g_reporter import make_g_reporter_node
 from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
+from src.infrastructure.database.mongodb import init_mongo
 from src.infrastructure.database.postgres import AsyncSessionLocal
 from src.workers.tasks.celery_app import celery_app
+
+logger = structlog.get_logger(__name__)
 
 # ── Data-fetch helpers ────────────────────────────────────────────────────────
 
@@ -44,26 +49,34 @@ async def _fetch_ledger_snapshot(sme_id: str) -> dict[str, Any]:
     """Aggregate 12-month totals for the audit context."""
     sql = text("""
         SELECT
-            COALESCE(SUM(CASE WHEN transaction_type = 'credit' THEN amount ELSE 0 END), 0) AS revenue,
-            COALESCE(SUM(CASE WHEN transaction_type = 'debit'  THEN amount ELSE 0 END), 0) AS opex,
+            COALESCE(SUM(CASE WHEN transaction_type = 'credit'
+                             THEN amount ELSE 0 END), 0) AS revenue,
+            COALESCE(SUM(CASE WHEN transaction_type = 'debit'
+                             THEN amount ELSE 0 END), 0) AS opex,
             COUNT(*)  AS tx_count,
             MAX(amount) AS max_single_tx
         FROM ledger_entries
         WHERE created_at >= NOW() - INTERVAL '365 days'
     """)
-    try:
-        async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:
+        try:
             result = await session.execute(sql)
             row = result.fetchone()
-        if row:
-            return {
-                "revenue":       float(row[0] or 0),
-                "opex":          float(row[1] or 0),
-                "tx_count":      int(row[2] or 0),
-                "max_single_tx": float(row[3] or 0),
-            }
-    except Exception:
-        pass
+        except SQLAlchemyError as exc:
+            logger.exception(
+                "reporting: _fetch_ledger_snapshot DB query failed",
+                sme_id=sme_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            raise
+    if row:
+        return {
+            "revenue":       float(row[0] or 0),
+            "opex":          float(row[1] or 0),
+            "tx_count":      int(row[2] or 0),
+            "max_single_tx": float(row[3] or 0),
+        }
     return {"revenue": 0.0, "opex": 0.0, "tx_count": 0, "max_single_tx": 0.0}
 
 
@@ -72,25 +85,32 @@ async def _fetch_monthly_cashflows(sme_id: str) -> dict[str, Any]:
     sql = text("""
         SELECT
             TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
-            COALESCE(SUM(CASE WHEN transaction_type = 'credit' THEN amount ELSE 0 END), 0) AS revenue,
-            COALESCE(SUM(CASE WHEN transaction_type = 'debit'  THEN amount ELSE 0 END), 0) AS opex
+            COALESCE(SUM(CASE WHEN transaction_type = 'credit'
+                             THEN amount ELSE 0 END), 0) AS revenue,
+            COALESCE(SUM(CASE WHEN transaction_type = 'debit'
+                             THEN amount ELSE 0 END), 0) AS opex
         FROM ledger_entries
         WHERE created_at >= NOW() - INTERVAL '12 months'
         GROUP BY DATE_TRUNC('month', created_at)
         ORDER BY 1
     """)
-    try:
-        async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:
+        try:
             result = await session.execute(sql)
             rows = result.fetchall()
-        return {
-            "months":           [r[0] for r in rows],
-            "monthly_inflows":  [float(r[1] or 0) for r in rows],
-            "monthly_outflows": [float(r[2] or 0) for r in rows],
-        }
-    except Exception:
-        pass
-    return {"months": [], "monthly_inflows": [], "monthly_outflows": []}
+        except SQLAlchemyError as exc:
+            logger.exception(
+                "reporting: _fetch_monthly_cashflows DB query failed",
+                sme_id=sme_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            raise
+    return {
+        "months":           [r[0] for r in rows],
+        "monthly_inflows":  [float(r[1] or 0) for r in rows],
+        "monthly_outflows": [float(r[2] or 0) for r in rows],
+    }
 
 
 # ── Minimal state builder ─────────────────────────────────────────────────────
@@ -115,6 +135,8 @@ async def _run_intelligence_report(sme_id: str) -> dict[str, Any]:
 
     Returns the two MongoDB _id values so the UI can poll for them.
     """
+    await init_mongo()
+
     # Pre-load ledger data once; share across both agents
     ledger_snapshot = await _fetch_ledger_snapshot(sme_id)
     raw_ledger_data = await _fetch_monthly_cashflows(sme_id)
@@ -174,14 +196,14 @@ async def _run_intelligence_report(sme_id: str) -> dict[str, Any]:
 
 # ── Celery task ───────────────────────────────────────────────────────────────
 
-@celery_app.task(
+@celery_app.task(  # type: ignore[untyped-decorator]
     name="reporting.generate_monthly_intelligence_report",
     bind=True,
     max_retries=3,
     default_retry_delay=60,
     queue="batch_processing",
 )
-def generate_monthly_intelligence_report(self, sme_id: str) -> dict[str, Any]:
+def generate_monthly_intelligence_report(self: Any, sme_id: str) -> dict[str, Any]:
     """
     Generate a monthly AI intelligence report for the given SME.
 
@@ -208,4 +230,36 @@ def generate_monthly_intelligence_report(self, sme_id: str) -> dict[str, Any]:
     try:
         return asyncio.run(_run_intelligence_report(sme_id))
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
+
+
+# ── Monthly report dispatcher ─────────────────────────────────────────────────
+
+async def _fetch_all_customer_ids() -> list[str]:
+    """Return all customer IDs from PostgreSQL."""
+    sql = text("SELECT id::text FROM customers ORDER BY created_at ASC")
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(sql)
+        return [row[0] for row in result.fetchall()]
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name="reporting.dispatch_monthly_reports",
+    queue="batch_processing",
+)
+def dispatch_monthly_reports() -> dict[str, Any]:
+    """
+    Fired by Celery beat on the first of each month (UTC midnight).
+
+    Fetches all customer IDs and enqueues one
+    ``reporting.generate_monthly_intelligence_report`` task per customer so
+    Agent F + G run for every SME without blocking the beat thread.
+
+    Returns:
+        {"dispatched": int}  — number of per-customer tasks enqueued.
+    """
+    customer_ids: list[str] = asyncio.run(_fetch_all_customer_ids())
+    for cid in customer_ids:
+        generate_monthly_intelligence_report.delay(cid)
+    logger.info("Monthly report dispatch complete", dispatched=len(customer_ids))
+    return {"dispatched": len(customer_ids)}

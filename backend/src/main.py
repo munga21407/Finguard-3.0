@@ -1,25 +1,58 @@
 import asyncio
-from contextlib import asynccontextmanager
-from typing import AsyncIterator
+import hmac
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
+from typing import Annotated, Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+import src.core.metrics as _metrics  # noqa: F401 — registers all custom collectors
 from src.core.config import settings
 from src.core.exceptions import register_exception_handlers
 from src.core.logging import configure_logging
-import src.core.metrics as _metrics  # noqa: F401 — registers all custom collectors
+from src.domains.crm.router import router as crm_router
+from src.domains.finance.router import router as finance_router
+from src.domains.identity.router import limiter
+from src.domains.identity.router import router as identity_router
+from src.domains.intelligence.router import router as intelligence_router
 from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
 from src.infrastructure.database.postgres import close_db, init_db
+from src.domains.intelligence.security.vc_issuer import ensure_trust_log_ttl_index
 from src.infrastructure.message_bus.rabbitmq_publisher import close_rabbitmq, init_rabbitmq
-from src.domains.identity.router import limiter, router as identity_router
-from src.domains.crm.router import router as crm_router
-from src.domains.finance.router import router as finance_router
-from src.domains.intelligence.router import router as intelligence_router
+
+
+_metrics_bearer = HTTPBearer(auto_error=False)
+
+
+async def verify_metrics_token(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(_metrics_bearer)
+    ],
+) -> None:
+    """
+    Guard /metrics with a static Bearer token.
+    When METRICS_AUTH_SECRET is empty the check is skipped (development only —
+    never leave this unset in a production environment).
+    """
+    if not settings.METRICS_AUTH_SECRET:
+        return
+    token_ok = credentials is not None and hmac.compare_digest(
+        credentials.credentials, settings.METRICS_AUTH_SECRET
+    )
+    if not token_ok:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid metrics credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 @asynccontextmanager
@@ -27,10 +60,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     await init_db()
     await init_mongo()
+    await ensure_trust_log_ttl_index()
     await init_redis()
     await init_rabbitmq()
 
-    background_tasks: list[asyncio.Task] = []
+    background_tasks: list[asyncio.Task[Any]] = []
 
     if settings.ENABLE_EXPENSE_EVENT_CONSUMER:
         from src.workers.consumers.watchdog_consumer import run_watchdog_consumer
@@ -46,10 +80,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     for task in background_tasks:
         task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
     await close_rabbitmq()
     await close_redis()
@@ -76,7 +108,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    should_respect_env_var=False,
+    should_instrument_requests_inprogress=True,
+    excluded_handlers=["/health", "/metrics"],
+    inprogress_labels=True,
+).instrument(app)
+# .expose() is intentionally omitted — the /metrics route is defined manually
+# below so we can attach the verify_metrics_token authentication dependency.
+
 register_exception_handlers(app)
 
 app.include_router(identity_router, prefix="/api/v1/identity", tags=["identity"])
@@ -88,3 +130,11 @@ app.include_router(intelligence_router, prefix="/api/v1/intelligence", tags=["in
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics(
+    _: Annotated[None, Depends(verify_metrics_token)],
+) -> Response:
+    """Prometheus scrape endpoint — requires Bearer token when METRICS_AUTH_SECRET is set."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

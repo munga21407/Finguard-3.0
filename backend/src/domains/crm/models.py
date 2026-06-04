@@ -1,5 +1,6 @@
+import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, Enum, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -7,17 +8,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from src.infrastructure.database.postgres import Base
 
-import enum
 
-
-class CustomerStatus(str, enum.Enum):
+class CustomerStatus(enum.StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"
     PROSPECT = "prospect"
     CHURNED = "churned"
 
 
-class CustomerType(str, enum.Enum):
+class CustomerType(enum.StrEnum):
     INDIVIDUAL = "individual"
     BUSINESS = "business"
 
@@ -36,12 +35,13 @@ class Customer(Base):
         Enum(CustomerStatus), default=CustomerStatus.PROSPECT, nullable=False
     )
     notes: Mapped[str | None] = mapped_column(Text)
+    preferred_locale: Mapped[str | None] = mapped_column(String(50), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
-        onupdate=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )

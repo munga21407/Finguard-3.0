@@ -1,32 +1,32 @@
+import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, JSON, Numeric, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.infrastructure.database.postgres import Base
 from src.domains.finance.types import VaultType
+from src.infrastructure.database.postgres import Base
 
-import enum
 
-
-class TransactionType(str, enum.Enum):
+class TransactionType(enum.StrEnum):
     DEBIT = "debit"
     CREDIT = "credit"
 
 
-class InvoiceStatus(str, enum.Enum):
+class InvoiceStatus(enum.StrEnum):
     DRAFT = "draft"
     SENT = "sent"
     PAID = "paid"
+    PARTIALLY_PAID = "partially_paid"
     OVERDUE = "overdue"
     CANCELLED = "cancelled"
 
 
-class PaymentMethod(str, enum.Enum):
+class PaymentMethod(enum.StrEnum):
     BANK_TRANSFER = "bank_transfer"
     CARD = "card"
     MPESA = "mpesa"
@@ -43,6 +43,7 @@ class LedgerEntry(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="KES", nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     reference: Mapped[str | None] = mapped_column(String(255), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -63,6 +64,10 @@ class Invoice(Base):
     subtotal: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     tax: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
     total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    amount_paid: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), default=Decimal("0"), nullable=False
+    )
+    balance_due: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="KES", nullable=False)
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -73,9 +78,11 @@ class Invoice(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
-        onupdate=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+    payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="invoice")
 
 
 class Budget(Base):
@@ -140,6 +147,49 @@ class Expense(Base):
 
     mpesa_transaction: Mapped["MpesaTransaction | None"] = relationship(
         "MpesaTransaction", back_populates="expenses"
+    )
+
+
+class Payment(Base):
+    """Manual cash payment recorded against an invoice."""
+
+    __tablename__ = "payments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id"), nullable=False, index=True
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    vault: Mapped[VaultType] = mapped_column(Enum(VaultType), nullable=False)
+    reference_note: Mapped[str | None] = mapped_column(Text)
+    payment_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="payments")
+
+
+class BankStatementLine(Base):
+    """
+    Raw bank statement line used by Agent C (Reconciler) for ledger matching.
+
+    Two-pass reconciliation checks this table for exact (amount + date ±2 days +
+    reference substring) and fuzzy (Gemini) matches against `ledger_entries`.
+    """
+
+    __tablename__ = "bank_statement_lines"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    amount: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
+    date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    reference_text: Mapped[str | None] = mapped_column(Text)
+    is_reconciled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 

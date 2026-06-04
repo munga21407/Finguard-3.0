@@ -14,13 +14,14 @@ from langchain_core.tools import tool
 from src.infrastructure.message_bus.rabbitmq_publisher import publish
 
 ALLOWED_EXCHANGES = frozenset({
+    "finguard.events",         # primary domain event bus (finance.transactions.classified, etc.)
     "finguard.finance",
     "finguard.intelligence",
     "finguard.system",
 })
 
 
-def make_event_publisher(mode: str):  # type: ignore[return]
+def make_event_publisher(mode: str) -> Any:
     @tool
     async def publish_event(exchange: str, routing_key: str, payload: dict[str, Any]) -> str:
         """Publish a domain event to RabbitMQ.

@@ -12,9 +12,11 @@ from langchain_core.tools import tool
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 
-def make_mongo_reader(db: AsyncIOMotorDatabase):  # type: ignore[type-arg, return]
+def make_mongo_reader(db: AsyncIOMotorDatabase[Any]) -> Any:
     @tool
-    async def read_mongo(collection: str, filter: dict[str, Any], limit: int = 20) -> list[dict[str, Any]]:
+    async def read_mongo(
+        collection: str, filter: dict[str, Any], limit: int = 20
+    ) -> list[dict[str, Any]]:
         """Fetch documents from a MongoDB collection.
 
         Args:
