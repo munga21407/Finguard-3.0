@@ -28,7 +28,7 @@ interface AuditorInsightsProps {
 
 export function AuditorInsights({ items = defaultInsights }: AuditorInsightsProps) {
   return (
-    <div className="bg-white rounded-xl shadow-[0px_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 p-6 bg-lf-surface-container-low flex flex-col hover:shadow-[0px_8px_24px_rgba(107,56,212,0.08)] hover:border-lf-secondary-fixed transition-all">
+    <div className="bg-lf-surface-container-low rounded-xl shadow-[0px_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 p-6 flex flex-col hover:shadow-[0px_8px_24px_rgba(107,56,212,0.08)] hover:border-lf-secondary-fixed transition-all">
       {/* Header */}
       <div className="flex items-center gap-3 mb-6 pb-4 border-b border-lf-outline-variant/30">
         <div className="w-12 h-12 rounded-full bg-lf-secondary-container flex items-center justify-center border-2 border-lf-surface">

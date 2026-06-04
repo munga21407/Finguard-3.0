@@ -39,7 +39,7 @@ const reports: Report[] = [
 
 export function CoreReports() {
   return (
-    <div className="bg-white rounded-xl shadow-[0px_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 p-6 flex flex-col hover:shadow-[0px_8px_24px_rgba(107,56,212,0.08)] hover:border-lf-secondary-fixed transition-all">
+    <div className="bg-lf-surface-container-lowest rounded-xl shadow-[0px_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 p-6 flex flex-col hover:shadow-[0px_8px_24px_rgba(107,56,212,0.08)] hover:border-lf-secondary-fixed transition-all">
       <div className="flex justify-between items-center mb-6">
         <h3 className="text-xl font-semibold tracking-tight text-lf-on-surface">Core Reports</h3>
         <button className="text-lf-primary hover:text-lf-secondary transition-colors">

@@ -20,12 +20,19 @@ export const tokenManager = {
     if (typeof window === "undefined") return;
     localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
     localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+    // Non-HttpOnly cookie read by Next.js Edge middleware to protect /dashboard/*
+    // on hard refreshes (localStorage is not accessible on the Edge runtime).
+    document.cookie = "fg_session=1; path=/; SameSite=Lax; max-age=86400";
   },
 
   clearTokens(): void {
     if (typeof window === "undefined") return;
     localStorage.removeItem(ACCESS_TOKEN_KEY);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
+    // Immediately expire the session cookie so middleware redirects on the
+    // next request rather than serving a stale protected page.
+    document.cookie =
+      "fg_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
   },
 
   isTokenExpired(token: string): boolean {

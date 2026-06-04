@@ -34,7 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           id: payload.sub as string,
           email: payload.email as string,
           full_name: payload.full_name as string,
-          role: payload.role as User["role"],
+          role: (payload.role as string).toUpperCase() as User["role"],
           is_active: true,
           created_at: "",
         });
@@ -53,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 id: payload.sub as string,
                 email: payload.email as string,
                 full_name: payload.full_name as string,
-                role: payload.role as User["role"],
+                role: (payload.role as string).toUpperCase() as User["role"],
                 is_active: true,
                 created_at: "",
               });
@@ -79,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           id: payload.sub as string,
           email: payload.email as string,
           full_name: payload.full_name as string,
-          role: payload.role as User["role"],
+          role: (payload.role as string).toUpperCase() as User["role"],
           is_active: true,
           created_at: "",
         });
@@ -100,7 +100,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   // ── Logout ────────────────────────────────────────────────────────────────
-  const logout = useCallback(() => {
+  // Order matters: blacklist the JTI on the backend first so the token cannot
+  // be reused in the window between client-side clearance and expiry, then
+  // wipe local state. authClient.logout() is best-effort and never throws.
+  const logout = useCallback(async () => {
+    await authClient.logout();
     tokenManager.clearTokens();
     setUser(null);
     router.push("/login");

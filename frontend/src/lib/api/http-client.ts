@@ -21,13 +21,27 @@ const httpClient: AxiosInstance = axios.create({
   timeout: 30_000,
 });
 
-// ── Request interceptor — attach access token ─────────────────────────────────
+// ── Request interceptor — attach access token + idempotency key ───────────────
 httpClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
+    // Inject Bearer token on every request
     const token = tokenManager.getAccessToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+
+    // The intelligence router enforces a required Idempotency-Key header on
+    // all POST requests to prevent double-submissions (e.g. duplicate agent
+    // invocations from button double-clicks or network retries).
+    // Generate a fresh UUID per request unless the caller already provided one.
+    const isIntelligencePost =
+      config.method?.toLowerCase() === "post" &&
+      config.url?.includes("/api/v1/intelligence");
+
+    if (isIntelligencePost && !config.headers["Idempotency-Key"]) {
+      config.headers["Idempotency-Key"] = crypto.randomUUID();
+    }
+
     return config;
   },
   (error) => Promise.reject(error)

@@ -1,11 +1,7 @@
-export interface User {
-  id: string;
-  email: string;
-  full_name: string;
-  role: "admin" | "manager" | "accountant" | "viewer";
-  is_active: boolean;
-  created_at: string;
-}
+// Re-export the canonical User from the auth types so any future barrel
+// imports still resolve correctly. The duplicate lowercase-role User that
+// lived here previously has been removed — use @/types/auth directly.
+export type { User } from "@/types/auth";
 
 export interface Customer {
   id: string;

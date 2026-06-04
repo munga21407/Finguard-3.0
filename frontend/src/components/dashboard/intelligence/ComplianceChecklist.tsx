@@ -19,7 +19,7 @@ interface ComplianceChecklistProps {
 
 export function ComplianceChecklist({ items = defaultItems, progress = 25 }: ComplianceChecklistProps) {
   return (
-    <div className="bg-white rounded-xl shadow-[0px_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 flex flex-col overflow-hidden hover:shadow-[0px_8px_24px_rgba(107,56,212,0.08)] hover:border-lf-secondary-fixed transition-all">
+    <div className="bg-lf-surface-container-lowest rounded-xl shadow-[0px_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 flex flex-col overflow-hidden hover:shadow-[0px_8px_24px_rgba(107,56,212,0.08)] hover:border-lf-secondary-fixed transition-all">
       <div className="p-6 bg-lf-surface-container-low border-b border-lf-surface-variant">
         <h3 className="text-xl font-semibold tracking-tight text-lf-on-surface mb-1">Compliance</h3>
         <p className="text-sm text-lf-on-surface-variant">Filing status tracker</p>
