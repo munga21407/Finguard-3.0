@@ -70,6 +70,7 @@ const MOCK_EXTRACTED: InvoiceFormValues = {
 };
 
 async function mockExtract(_prompt: string): Promise<InvoiceFormValues> {
+  void _prompt;
   return new Promise((resolve) =>
     setTimeout(() => resolve(MOCK_EXTRACTED), 2000)
   );
