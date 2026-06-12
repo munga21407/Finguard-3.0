@@ -28,7 +28,7 @@ from sqlalchemy import text
 from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.llm_client import get_gemini_client
-from src.domains.intelligence.schemas import AgentFOutput, OrchestratorState
+from src.domains.intelligence.schemas import AgentFOutput, CompositeGenUIPayload, KeyFinding, OrchestratorState
 from src.domains.intelligence.services.tax_rag_service import get_relevant_tax_rules
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
@@ -294,9 +294,27 @@ Return a JSON object with exactly these fields:
         )
         logger.info(summary_msg, mode=mode)
 
+        # ── 7. Emit CompositeGenUIPayload ─────────────────────────────────
+        findings: list[KeyFinding] = [
+            KeyFinding(metric="Tax Type", value=tax_type),
+            KeyFinding(metric="Liability", value=f"KES {tax_liability:,.2f}"),
+            KeyFinding(metric="ETR", value=f"{etr:.1f}%"),
+            KeyFinding(metric="Flags", value=f"{len(analysis.compliance_flags)} issue(s)"),
+        ]
+        composite = CompositeGenUIPayload(
+            component_id="AuditorInsights",
+            props=output.model_dump(),
+            findings=findings,
+            fallback_text=(
+                f"Tax audit: {tax_type} | liability KES {tax_liability:,.2f} | "
+                f"ETR {etr:.1f}% | {len(analysis.compliance_flags)} compliance flag(s)."
+            ),
+        )
+
         return {
             "messages": [AIMessage(content=summary_msg, name="f_auditor")],
             "context": updated_ctx,
+            "gen_ui_payloads": [composite.to_gen_ui_payload()],
         }
 
     return f_auditor_node

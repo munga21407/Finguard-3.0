@@ -23,6 +23,7 @@ from typing import Any
 
 import numpy as np
 from langchain_core.messages import AIMessage
+from pydantic import BaseModel, Field as PydanticField
 from rapidfuzz import fuzz
 from sklearn.ensemble import IsolationForest  # type: ignore[import-untyped]
 
@@ -38,7 +39,12 @@ from src.core.metrics import (
 )
 from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.prompts.e_watchdog import WATCHDOG_SYSTEM
-from src.domains.intelligence.schemas import OrchestratorState, WatchdogAnalysis
+from src.domains.intelligence.schemas import (
+    CompositeGenUIPayload,
+    KeyFinding,
+    OrchestratorState,
+    WatchdogAnalysis,
+)
 from src.domains.intelligence.security.vc_issuer import issue_vc
 from src.domains.intelligence.tools.event_publisher import make_event_publisher
 from src.domains.intelligence.tools.sql_executor import make_sql_executor
@@ -76,6 +82,22 @@ DUPLICATE_THRESHOLD = 88.0
 
 # IsolationForest minimum samples before scoring
 ISOLATION_MIN_SAMPLES = 5
+
+
+# ---------------------------------------------------------------------------
+# Gemini structured output schema (local — mirrors KeyFinding for Gemini compat)
+# ---------------------------------------------------------------------------
+
+class _WatchdogFinding(BaseModel):
+    metric: str
+    value: str
+
+
+class _WatchdogLLMOutput(BaseModel):
+    current_state: str
+    anomaly_detected: bool
+    summary: str
+    findings: list[_WatchdogFinding] = PydanticField(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +399,7 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
             except Exception as exc:
                 logger.warning("Watchdog event publish failed", error=str(exc))
 
-        # ── Gemini narrative ──────────────────────────────────────────────
+        # ── Gemini structured narrative + findings ────────────────────────
         prompt_data = json.dumps({
             "spending_ratios": ratios[-14:],
             "hidden_states": state_labels[-14:],
@@ -386,29 +408,44 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
             "anomaly_score": anomaly_score,
             "isolation_score": iso_score,
             "is_duplicate": is_dup,
+            "duplicate_match_score": dup_score,
         }, indent=2)
         full_prompt = f"{WATCHDOG_SYSTEM}\n\nAnalysis data:\n{prompt_data}"
+        llm_output: _WatchdogLLMOutput | None = None
         try:
+            from google.genai import types as genai_types
             _t0 = time.monotonic()
             gemini_resp = await get_gemini_client().aio.models.generate_content(
                 model=settings.GEMINI_MODEL,
                 contents=full_prompt,
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=_WatchdogLLMOutput,
+                ),
             )
             _elapsed = time.monotonic() - _t0
             AGENT_LLM_LATENCY.labels(agent="e_watchdog", model=settings.GEMINI_MODEL).observe(
                 _elapsed
             )
-            # D3-spec canonical metric (label: agent_id)
             AGENT_LLM_PROCESSING.labels(agent_id="e_watchdog", model=settings.GEMINI_MODEL).observe(
                 _elapsed
             )
-            summary = gemini_resp.text or current_state
-        except Exception:
+            llm_output = _WatchdogLLMOutput.model_validate_json(gemini_resp.text or "{}")
+        except Exception as exc:
+            logger.warning("Agent E: Gemini structured output failed", error=str(exc))
+
+        summary: str
+        llm_findings: list[_WatchdogFinding]
+        if llm_output is not None:
+            summary = llm_output.summary
+            llm_findings = llm_output.findings
+        else:
             summary = (
                 f"Budget state: {current_state} | "
                 f"anomaly score: {anomaly_score:.2f} | "
                 f"isolation score: {iso_score:.2f}"
             )
+            llm_findings = []
 
         analysis = WatchdogAnalysis(
             account_id=account_id,
@@ -431,9 +468,34 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
         updated_context["watchdog_analysis"] = analysis.model_dump()
         updated_context["budget_watchdog_result"] = analysis.model_dump()
 
+        # ── CompositeGenUIPayload ─────────────────────────────────────────
+        candidate: dict = state["context"].get("candidate_invoice", {})
+        composite = CompositeGenUIPayload(
+            component_id="DuplicateInvoiceAlert",
+            props={
+                "anomaly_detected": anomaly_detected,
+                "anomaly_score": anomaly_score,
+                "isolation_score": iso_score,
+                "is_duplicate": is_dup,
+                "duplicate_match_score": dup_score,
+                "vc_id": vc_id,
+                "current_state": current_state,
+                "summary": summary,
+                **({"invoice_a": candidate} if candidate else {}),
+            },
+            findings=[KeyFinding(metric=f.metric, value=f.value) for f in llm_findings],
+            fallback_text=(
+                f"Watchdog: {current_state} state | "
+                f"anomaly score {anomaly_score:.2f} | "
+                f"{'Duplicate detected' if is_dup else 'No duplicate'} "
+                f"(match {dup_score:.0%})."
+            ),
+        )
+
         return {
             "messages": [AIMessage(content=summary, name="e_watchdog")],
             "context": updated_context,
+            "gen_ui_payloads": [composite.to_gen_ui_payload()],
         }
 
     return e_watchdog_node

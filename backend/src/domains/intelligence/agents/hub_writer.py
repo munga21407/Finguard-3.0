@@ -5,6 +5,9 @@ Reads the agent output from `state["context"]`, wraps it in an
 InsightArtifact, and upserts it into the `intelligence_hub` collection.
 The document key is `"<agent_id>:<intent>"` so repeated invocations
 refresh the cached artifact rather than creating duplicates.
+
+GenUI payloads from `state["gen_ui_payloads"]` are persisted separately
+under the key `"genui:<session_id>:<component_id>"` with a 1-hour TTL.
 """
 from __future__ import annotations
 
@@ -13,7 +16,12 @@ from typing import Any
 
 from src.core.logging import logger
 from src.core.metrics import HUB_WRITE_ERRORS
-from src.domains.intelligence.schemas import InsightArtifact, OrchestratorState
+from src.domains.intelligence.schemas import (
+    GenUIArtifact,
+    GenUIPayload,
+    InsightArtifact,
+    OrchestratorState,
+)
 from src.infrastructure.database.mongodb import get_mongo_db
 
 COLLECTION = "intelligence_hub"
@@ -36,6 +44,9 @@ _AGENT_TTL_MINUTES: dict[str, int] = {
     "E": 30,   # Budget Watchdog
     "J": 30,   # Executive Summarizer
 }
+
+# GenUI payloads are session-scoped UI state; 1 h matches the shortest agent TTL
+_GENUI_TTL_HOURS = 1
 
 
 def _ttl_delta(agent_id: str) -> timedelta:
@@ -112,21 +123,87 @@ def _extract_payload_and_intent(context: dict[str, Any]) -> tuple[str, str, dict
     return None
 
 
+async def _persist_gen_ui_payloads(
+    db: Any,
+    payloads: list[GenUIPayload],
+    session_id: str,
+    now: datetime,
+) -> list[str]:
+    """
+    Upsert each GenUIPayload into `intelligence_hub` and return the written IDs.
+
+    Document key: ``"genui:<session_id>:<component_id>"``
+    Repeated renders of the same component within a session refresh the
+    document rather than creating duplicates; props always reflect the
+    latest invocation.
+    """
+    artifact_ids: list[str] = []
+    ttl_expires_at = now + timedelta(hours=_GENUI_TTL_HOURS)
+
+    for payload in payloads:
+        artifact = GenUIArtifact(
+            component_id=payload.component_id,
+            props=payload.props,
+            fallback_text=payload.fallback_text,
+            session_id=session_id,
+            ttl_expires_at=ttl_expires_at,
+            created_at=now,
+        )
+        doc: dict[str, Any] = artifact.model_dump()
+        doc["_id"] = f"genui:{session_id}:{payload.component_id}"
+        doc["type"] = "gen_ui"
+        doc["ttl_expires_at"] = doc["ttl_expires_at"].isoformat()
+        doc["created_at"] = doc["created_at"].isoformat()
+
+        try:
+            await db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+            artifact_ids.append(doc["_id"])
+        except Exception as exc:
+            HUB_WRITE_ERRORS.inc()
+            logger.error(
+                "hub_writer: GenUI payload upsert failed — artifact NOT persisted",
+                artifact_id=doc["_id"],
+                component_id=payload.component_id,
+                session_id=session_id,
+                error=str(exc),
+                exc_info=True,
+            )
+
+    return artifact_ids
+
+
 def make_hub_writer_node() -> Any:
     async def hub_writer_node(state: OrchestratorState) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        db = get_mongo_db()
+        session_id: str = state.get("session_id", "")
+        updated_context = dict(state["context"])
+
+        # --- GenUI payloads ------------------------------------------------
+        gen_ui_payloads: list[GenUIPayload] = state.get("gen_ui_payloads") or []
+        if gen_ui_payloads:
+            written_ids = await _persist_gen_ui_payloads(db, gen_ui_payloads, session_id, now)
+            if written_ids:
+                updated_context["hub_genui_artifact_ids"] = written_ids
+                logger.info(
+                    "hub_writer: persisted GenUI payloads",
+                    count=len(written_ids),
+                    artifact_ids=written_ids,
+                    session_id=session_id,
+                )
+
+        # --- Agent insight artifacts ----------------------------------------
         result = _extract_payload_and_intent(state["context"])
         if result is None:
-            logger.warning(
-                "hub_writer: no recognizable agent key in context — "
-                "passing state through unmodified",
-                session_id=state.get("session_id"),
-            )
-            # Return the current context explicitly so downstream nodes are
-            # never handed a wiped state from an empty-dict return.
-            return {"context": state["context"]}
+            if not gen_ui_payloads:
+                logger.warning(
+                    "hub_writer: no recognizable agent key in context and no "
+                    "GenUI payloads — passing state through unmodified",
+                    session_id=session_id,
+                )
+            return {"context": updated_context}
 
         agent_id, intent, payload = result
-        now = datetime.now(UTC)
 
         artifact = InsightArtifact(
             agent_id=agent_id,
@@ -138,10 +215,10 @@ def make_hub_writer_node() -> Any:
 
         doc: dict[str, Any] = artifact.model_dump()
         doc["_id"] = f"{agent_id}:{intent}"          # idempotent compound key
+        doc["type"] = "insight"
         doc["ttl_expires_at"] = doc["ttl_expires_at"].isoformat()
         doc["created_at"] = doc["created_at"].isoformat()
 
-        db = get_mongo_db()
         try:
             await db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
         except Exception as exc:
@@ -151,16 +228,13 @@ def make_hub_writer_node() -> Any:
                 artifact_id=doc["_id"],
                 agent_id=agent_id,
                 intent=intent,
-                session_id=state.get("session_id"),
+                session_id=session_id,
                 error=str(exc),
                 exc_info=True,
             )
-            # Return the current context unmodified so the LangGraph run can
-            # finish; hub_artifact_id is intentionally omitted to signal the
-            # artifact was not written.
-            return {"context": state["context"]}
+            # Return whatever context we've accumulated (may include GenUI IDs)
+            return {"context": updated_context}
 
-        updated_context = dict(state["context"])
         updated_context["hub_artifact_id"] = doc["_id"]
         return {"context": updated_context}
 

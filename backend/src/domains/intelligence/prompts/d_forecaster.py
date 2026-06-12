@@ -78,6 +78,10 @@ variance to classify the business's current financial regime and provide advisor
 ## Output Requirements
 - Select exactly ONE regime from the five above.
 - List 2–5 specific risk factors observed in the provided data (quantitative where possible).
+  Include precise KES amounts and percentages where applicable — e.g.
+  "Runway: 3 months at current burn rate", "30-day projected deficit: KES 180,000",
+  "OpEx ratio: 112% above revenue".  These statements are parsed into visual metric
+  badges on the Finguard dashboard, so precision matters over prose.
 - List 2–4 actionable advisory warnings tailored to the detected regime.
 - Write a 2–3 sentence narrative summarising your assessment for an SME owner.
 - Be direct and practical — SME owners need actionable guidance, not academic analysis.

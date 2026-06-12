@@ -34,7 +34,7 @@ from sqlalchemy import text
 from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.llm_client import get_gemini_client
-from src.domains.intelligence.schemas import AgentGOutput, OrchestratorState
+from src.domains.intelligence.schemas import AgentGOutput, CompositeGenUIPayload, KeyFinding, OrchestratorState
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
 # ── Forecasting ───────────────────────────────────────────────────────────────
@@ -479,9 +479,36 @@ Write a strategic_narrative (3-5 sentences) that:
         )
         logger.info(summary_msg, mode=mode)
 
+        # ── Emit CompositeGenUIPayload ─────────────────────────────────────
+        findings: list[KeyFinding] = [
+            KeyFinding(metric="Score", value=f"{bankability_score}/100"),
+            KeyFinding(metric="Risk Tier", value=risk_tier),
+            KeyFinding(metric="Q1 Revenue", value=f"KES {q_revenue[0]:,.0f}" if q_revenue else "N/A"),
+            KeyFinding(metric="Q1 OpEx", value=f"KES {q_opex[0]:,.0f}" if q_opex else "N/A"),
+        ]
+        composite = CompositeGenUIPayload(
+            component_id="CreditStrategy",
+            props={
+                "bankability_score": bankability_score,
+                "risk_tier": risk_tier,
+                "strategic_narrative": narrative,
+                "quarterly_revenue_kes": q_revenue,
+                "quarterly_opex_kes": q_opex,
+                "historical_months": months[-12:] if months else [],
+            },
+            findings=findings,
+            fallback_text=(
+                f"Credit strategy: bankability {bankability_score}/100 ({risk_tier} risk). "
+                f"Q1 projected revenue KES {q_revenue[0]:,.0f}."
+                if q_revenue else
+                f"Credit strategy: bankability {bankability_score}/100 ({risk_tier} risk)."
+            ),
+        )
+
         return {
             "messages": [AIMessage(content=summary_msg, name="g_reporter")],
             "context": updated_ctx,
+            "gen_ui_payloads": [composite.to_gen_ui_payload()],
         }
 
     return g_reporter_node

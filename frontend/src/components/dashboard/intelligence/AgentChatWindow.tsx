@@ -10,12 +10,16 @@
 //     → stage: "polling"   CoVe animation done; useQuery polls every 2 s
 //     → stage: "idle"      status "completed" or "failed" → message committed
 //
-// The CoVe animation is intentionally optimistic: it reflects the real
-// Chain-of-Verification that runs inside the LangGraph backend but plays on
-// a fixed schedule so the UI feels alive from the first keystroke.
+// GenUI interception:
+//   When the status payload includes gen_ui_payloads[], the commit step
+//   attaches them to the agent ChatMessage.  MessageBubble detects the
+//   genUiPayloads field and bypasses the text renderer, mounting the
+//   corresponding component from GenUiRegistry and forwarding the JSON
+//   props directly.  Plain text messages are unaffected.
 //
-// The placeholder agent message is seeded on dispatch and its content is
-// filled in once the status query resolves, avoiding layout shift.
+// RBAC:
+//   canAct (MANAGER+) is computed once here and forwarded to every GenUI
+//   component via GenUiBlock so interactive buttons are gated at the root.
 
 import { useState, useRef, useEffect, useCallback, type FormEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -25,13 +29,17 @@ import type { Components } from "react-markdown";
 import { Send, Loader2, Bot, User, Sparkles, GitBranch, AlertTriangle, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { CoveTimeline } from "./CoveTimeline";
+import GenUiRegistry from "./GenUiRegistry";
+import { useRole } from "@/lib/hooks/useRole";
 import {
   dispatchConversation,
   checkConversationStatus,
   type ConversationStatusResponse,
+  type GenUIPayload,
 } from "@/lib/api/intelligence";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
 type MessageRole = "user" | "agent";
 
 /** "cove"    — optimistic CoVe stepper is playing
@@ -46,9 +54,13 @@ export interface ChatMessage {
   content: string;
   verifiedByCove?: boolean;
   isError?: boolean;
+  /** Structured UI payloads from gen_ui_payloads[]. When present and
+   *  content is empty, the text renderer is skipped entirely. */
+  genUiPayloads?: GenUIPayload[];
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+
 const COVE_PHASE_MS = 1_400;
 const POLL_INTERVAL_MS = 2_000;
 
@@ -59,17 +71,29 @@ const SUGGESTED_QUERIES = [
   "Compare revenue vs expenses YoY",
 ];
 
+/** Maps backend active_node strings to human-readable chat labels.
+ *  Displayed in the polling bubble so the user sees which agent is working. */
+const AGENT_NODE_LABELS: Record<string, string> = {
+  "running:a_generator":  "Extracting invoice data…",
+  "running:b_classifier": "Classifying transactions…",
+  "running:c_reconciler": "Running reconciliation pass…",
+  "running:d_forecaster": "Computing cash-flow forecast…",
+  "running:e_watchdog":   "Scanning for anomalies…",
+  "running:f_auditor":    "Running tax audit…",
+  "running:g_reporter":   "Generating credit report…",
+  "running:h_advisor":    "Composing financial advisory…",
+  "running:i_integrator": "Syncing external data…",
+  "running:j_summarizer": "Compiling executive summary…",
+  "running:hub_writer":   "Persisting to Intelligence Hub…",
+  "running:supervisor":   "Planning next step…",
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
 function uid() {
   return Math.random().toString(36).slice(2, 11);
 }
 
-/**
- * Derive the best available answer text from a completed status response.
- * The current backend stores the answer in MongoDB and only surfaces
- * artifact_id in the status payload. If the backend is later extended to
- * embed `answer` here it will be used automatically.
- */
 function resolveAnswer(status: ConversationStatusResponse): string {
   if (status.answer) return status.answer;
   if (status.artifact_id) {
@@ -80,6 +104,8 @@ function resolveAnswer(status: ConversationStatusResponse): string {
       `Navigate to **Intelligence → Core Reports** to view the rendered output.`
     );
   }
+  // Pure GenUI response — no text needed
+  if (status.gen_ui_payloads?.length) return "";
   return "Agent D completed the analysis. No artifact was returned.";
 }
 
@@ -87,7 +113,13 @@ function resolveError(status: ConversationStatusResponse): string {
   return `⚠️ **Agent D encountered an error**\n\n${status.detail ?? "An unknown error occurred in the LangGraph pipeline. Please retry."}`;
 }
 
+function activeNodeLabel(activeNode: string | null | undefined): string | null {
+  if (!activeNode) return null;
+  return AGENT_NODE_LABELS[activeNode] ?? activeNode.replace("running:", "") + "…";
+}
+
 // ── Markdown renderer ─────────────────────────────────────────────────────────
+
 const mdComponents: Components = {
   h1: ({ children }) => (
     <h1 className="text-lg font-bold text-lf-on-surface mt-4 mb-2 first:mt-0">{children}</h1>
@@ -142,16 +174,18 @@ const mdComponents: Components = {
 };
 
 // ── AgentChatWindow ───────────────────────────────────────────────────────────
+
 export function AgentChatWindow() {
+  const { hasRole } = useRole();
+  /** MANAGER+ can interact with GenUI action buttons */
+  const canAct = hasRole("MANAGER");
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [stage, setStage] = useState<PipelineStage>("idle");
   const [currentCovePhase, setCurrentCovePhase] = useState(-1);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
-  // Stable ref holding the ID of the in-flight placeholder agent message.
-  // Using a ref (not state) avoids a re-render when we set it, and the
-  // message update effect reads it without stale closure issues.
   const pendingMsgIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -160,15 +194,11 @@ export function AgentChatWindow() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, stage]);
 
-  // ── CoVe animation — plays while stage === "cove" ─────────────────────────
-  // Steps through phases 0 → 1 → 2 at COVE_PHASE_MS intervals, then marks
-  // all complete (phase 3) and transitions to "polling".
+  // ── CoVe animation ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (stage !== "cove") return;
-
     let phase = 0;
     setCurrentCovePhase(0);
-
     const id = setInterval(() => {
       phase += 1;
       if (phase < 3) {
@@ -176,11 +206,9 @@ export function AgentChatWindow() {
       } else {
         clearInterval(id);
         setCurrentCovePhase(3);
-        // Only advance if we haven't already been moved to error/idle
         setStage((prev) => (prev === "cove" ? "polling" : prev));
       }
     }, COVE_PHASE_MS);
-
     return () => clearInterval(id);
   }, [stage]);
 
@@ -189,10 +217,8 @@ export function AgentChatWindow() {
     mutationFn: (query: string) => dispatchConversation({ message: query }),
 
     onMutate: (query) => {
-      // Seed the chat history immediately — user message + empty placeholder
       const agentMsgId = uid();
       pendingMsgIdRef.current = agentMsgId;
-
       setMessages((prev) => [
         ...prev,
         { id: uid(), role: "user", content: query },
@@ -202,30 +228,17 @@ export function AgentChatWindow() {
 
     onSuccess: (data) => {
       if (data.session_id) {
-        // Background task dispatched — activate the status poller.
-        // Stage will already be moving through "cove" → "polling" via the
-        // animation effect, but we set session ID here so the query enables
-        // as soon as the animation finishes (or immediately if already done).
         setActiveSessionId(data.session_id);
         return;
       }
-
-      // Path 1 cache hit: artifact was returned synchronously (no polling needed)
+      // Path 1 cache hit — artifact served synchronously
       if (!data.refreshing && data.artifact) {
-        const answer =
-          (data.artifact.answer as string | undefined) ??
+        const answer = (data.artifact.answer as string | undefined) ??
           "Agent D returned a cached response from the Intelligence Hub.";
-
-        commitAgentMessage(answer, false);
+        commitAgentMessage(answer, false, false, data.gen_ui_payloads ?? []);
         return;
       }
-
-      // Unexpected: no session_id and no artifact
-      commitAgentMessage(
-        "⚠️ Agent D returned an unexpected response. Please retry.",
-        false,
-        true
-      );
+      commitAgentMessage("⚠️ Agent D returned an unexpected response. Please retry.", false, true);
     },
 
     onError: (err) => {
@@ -235,8 +248,6 @@ export function AgentChatWindow() {
   });
 
   // ── Status polling query ───────────────────────────────────────────────────
-  // Enabled only when we have a session_id AND the pipeline has reached the
-  // "polling" stage (i.e., the CoVe animation has completed).
   const { data: statusData } = useQuery({
     queryKey: ["chat-status", activeSessionId],
     queryFn: () => checkConversationStatus(activeSessionId!),
@@ -253,9 +264,13 @@ export function AgentChatWindow() {
   // ── Resolve status → commit message ───────────────────────────────────────
   useEffect(() => {
     if (!statusData || stage !== "polling") return;
-
     if (statusData.status === "completed") {
-      commitAgentMessage(resolveAnswer(statusData), true);
+      commitAgentMessage(
+        resolveAnswer(statusData),
+        true,
+        false,
+        statusData.gen_ui_payloads ?? []
+      );
     } else if (statusData.status === "failed") {
       commitAgentMessage(resolveError(statusData), false, true);
     }
@@ -264,12 +279,19 @@ export function AgentChatWindow() {
 
   // ── Shared commit helper ───────────────────────────────────────────────────
   const commitAgentMessage = useCallback(
-    (content: string, verifiedByCove: boolean, isError = false) => {
+    (
+      content: string,
+      verifiedByCove: boolean,
+      isError = false,
+      genUiPayloads: GenUIPayload[] = []
+    ) => {
       const msgId = pendingMsgIdRef.current;
       if (msgId) {
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === msgId ? { ...m, content, verifiedByCove, isError } : m
+            m.id === msgId
+              ? { ...m, content, verifiedByCove, isError, genUiPayloads }
+              : m
           )
         );
         pendingMsgIdRef.current = null;
@@ -287,7 +309,7 @@ export function AgentChatWindow() {
     const query = inputValue.trim();
     if (!query || stage !== "idle") return;
     setInputValue("");
-    setStage("cove"); // start CoVe animation immediately for responsiveness
+    setStage("cove");
     dispatchMutation.mutate(query);
   }
 
@@ -301,6 +323,7 @@ export function AgentChatWindow() {
   // ── Render ─────────────────────────────────────────────────────────────────
   const isEmpty = messages.length === 0 && stage === "idle";
   const isBusy = stage !== "idle";
+  const liveActiveNode = activeNodeLabel(statusData?.active_node);
 
   return (
     <div className="flex flex-col bg-lf-surface-container-lowest rounded-2xl border border-lf-outline-variant/20 shadow-[0_4px_24px_rgba(0,0,0,0.04)] overflow-hidden">
@@ -318,24 +341,15 @@ export function AgentChatWindow() {
           </p>
         </div>
         <div className="flex items-center gap-1.5">
-          <span
-            className={cn(
-              "w-2 h-2 rounded-full",
-              isBusy ? "bg-[#f59e0b] animate-pulse" : "bg-[#4ade80] animate-pulse"
-            )}
-          />
+          <span className={cn("w-2 h-2 rounded-full", isBusy ? "bg-[#f59e0b] animate-pulse" : "bg-[#4ade80] animate-pulse")} />
           <span className="text-xs font-semibold text-lf-on-surface-variant">
-            {stage === "cove"
-              ? "Verifying"
-              : stage === "polling"
-              ? "Analyzing"
-              : "Online"}
+            {stage === "cove" ? "Verifying" : stage === "polling" ? "Analyzing" : "Online"}
           </span>
         </div>
       </div>
 
       {/* ── Message area ───────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4 min-h-[420px] max-h-[520px]">
+      <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4 min-h-[420px] max-h-[580px]">
         {/* Empty state */}
         {isEmpty && (
           <div className="flex flex-col items-center justify-center flex-1 gap-6 py-8">
@@ -343,9 +357,7 @@ export function AgentChatWindow() {
               <GitBranch size={28} className="text-lf-primary" />
             </div>
             <div className="text-center">
-              <p className="text-base font-semibold text-lf-on-surface">
-                Ask Agent D anything
-              </p>
+              <p className="text-base font-semibold text-lf-on-surface">Ask Agent D anything</p>
               <p className="text-sm text-lf-on-surface-variant mt-1 max-w-sm">
                 Agent D queries your financial database using natural language.
                 Each response is validated through the CoVe pipeline.
@@ -353,9 +365,7 @@ export function AgentChatWindow() {
             </div>
             <div className="flex flex-wrap gap-2 justify-center max-w-lg">
               {SUGGESTED_QUERIES.map((q) => (
-                <button
-                  key={q}
-                  onClick={() => handleSuggestedQuery(q)}
+                <button key={q} onClick={() => handleSuggestedQuery(q)}
                   className="text-xs font-semibold text-lf-primary bg-lf-primary-fixed/30 hover:bg-lf-primary-fixed/60 border border-lf-primary/20 px-3 py-1.5 rounded-full transition-colors"
                 >
                   {q}
@@ -370,18 +380,15 @@ export function AgentChatWindow() {
           <MessageBubble
             key={msg.id}
             message={msg}
-            isPending={
-              msg.id === pendingMsgIdRef.current && stage === "polling"
-            }
+            isPending={msg.id === pendingMsgIdRef.current && stage === "polling"}
+            canAct={canAct}
           />
         ))}
 
         {/* ── CoVe Timeline bubble ──────────────────────────────────────── */}
         {stage === "cove" && (
           <div className="flex gap-3 self-start max-w-[85%]">
-            <div className="w-8 h-8 rounded-full bg-lf-primary-fixed border-2 border-lf-primary/20 flex items-center justify-center shrink-0 mt-0.5">
-              <Bot size={15} className="text-lf-primary" />
-            </div>
+            <AgentAvatar />
             <div className="bg-lf-primary-fixed/20 rounded-xl rounded-tl-sm border border-lf-primary-fixed-dim shadow-sm p-4 min-w-[260px]">
               <p className="text-[10px] font-bold tracking-widest uppercase text-lf-primary mb-3">
                 CoVe Pipeline Running
@@ -394,9 +401,7 @@ export function AgentChatWindow() {
         {/* ── Polling "thinking" bubble ─────────────────────────────────── */}
         {stage === "polling" && (
           <div className="flex gap-3 self-start max-w-[85%]">
-            <div className="w-8 h-8 rounded-full bg-lf-primary-fixed border-2 border-lf-primary/20 flex items-center justify-center shrink-0 mt-0.5">
-              <Bot size={15} className="text-lf-primary" />
-            </div>
+            <AgentAvatar />
             <div className="bg-lf-primary-fixed/20 rounded-xl rounded-tl-sm border border-lf-primary-fixed-dim shadow-sm p-4 min-w-[260px]">
               <p className="text-[10px] font-bold tracking-widest uppercase text-lf-primary mb-2">
                 CoVe Pipeline Complete
@@ -405,17 +410,18 @@ export function AgentChatWindow() {
               <div className="mt-3 pt-3 border-t border-lf-primary/10 flex items-center gap-2">
                 <RefreshCw size={12} className="text-lf-primary animate-spin shrink-0" />
                 <span className="text-xs font-semibold text-lf-primary">
-                  Agent D is analyzing your query…
+                  {liveActiveNode ?? "Agent D is analyzing your query…"}
                 </span>
               </div>
-              <p className="text-[10px] text-lf-on-surface-variant/60 mt-1">
-                Polling every {POLL_INTERVAL_MS / 1000}s
-              </p>
+              {liveActiveNode && (
+                <p className="text-[10px] text-lf-on-surface-variant/60 mt-1 pl-5">
+                  Polling every {POLL_INTERVAL_MS / 1000}s
+                </p>
+              )}
             </div>
           </div>
         )}
 
-        {/* Scroll anchor */}
         <div ref={messagesEndRef} />
       </div>
 
@@ -428,19 +434,14 @@ export function AgentChatWindow() {
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              handleSubmit();
-            }
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
           }}
           disabled={isBusy}
           rows={1}
           placeholder={
-            stage === "idle"
-              ? "Ask a question about your finances…"
-              : stage === "cove"
-              ? "CoVe pipeline running…"
-              : "Agent D is analyzing…"
+            stage === "idle" ? "Ask a question about your finances…"
+            : stage === "cove" ? "CoVe pipeline running…"
+            : "Agent D is analyzing…"
           }
           aria-label="Query input"
           className={cn(
@@ -463,55 +464,43 @@ export function AgentChatWindow() {
             "disabled:opacity-40 disabled:cursor-not-allowed"
           )}
         >
-          {isBusy ? (
-            <Loader2 size={18} className="animate-spin" />
-          ) : (
-            <Send size={17} />
-          )}
+          {isBusy ? <Loader2 size={18} className="animate-spin" /> : <Send size={17} />}
         </button>
       </form>
     </div>
   );
 }
 
-// ── MessageBubble ──────────────────────────────────────────────────────────────
-interface MessageBubbleProps {
-  message: ChatMessage;
-  /** True while this is the placeholder being populated by the status poller */
-  isPending: boolean;
+// ── AgentAvatar ────────────────────────────────────────────────────────────────
+
+function AgentAvatar() {
+  return (
+    <div className="w-8 h-8 rounded-full bg-lf-primary-fixed border-2 border-lf-primary/20 flex items-center justify-center shrink-0 mt-0.5">
+      <Bot size={15} className="text-lf-primary" />
+    </div>
+  );
 }
 
-function MessageBubble({ message, isPending }: MessageBubbleProps) {
+// ── MessageBubble ──────────────────────────────────────────────────────────────
+
+interface MessageBubbleProps {
+  message: ChatMessage;
+  isPending: boolean;
+  canAct: boolean;
+}
+
+function MessageBubble({ message, isPending, canAct }: MessageBubbleProps) {
   const isAgent = message.role === "agent";
-
   return (
-    <div
-      className={cn(
-        "flex gap-3",
-        isAgent
-          ? "self-start max-w-[92%]"
-          : "self-end max-w-[70%] flex-row-reverse"
-      )}
-    >
-      {/* Avatar */}
-      <div
-        className={cn(
-          "w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5",
-          isAgent
-            ? "bg-lf-primary-fixed border-2 border-lf-primary/20"
-            : "bg-lf-surface-container-high border-2 border-lf-outline-variant/30"
-        )}
-      >
-        {isAgent ? (
-          <Bot size={15} className="text-lf-primary" />
-        ) : (
-          <User size={15} className="text-lf-on-surface-variant" />
-        )}
+    <div className={cn("flex gap-3", isAgent ? "self-start max-w-[92%]" : "self-end max-w-[70%] flex-row-reverse")}>
+      <div className={cn(
+        "w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5",
+        isAgent ? "bg-lf-primary-fixed border-2 border-lf-primary/20" : "bg-lf-surface-container-high border-2 border-lf-outline-variant/30"
+      )}>
+        {isAgent ? <Bot size={15} className="text-lf-primary" /> : <User size={15} className="text-lf-on-surface-variant" />}
       </div>
-
-      {/* Bubble */}
       {isAgent ? (
-        <AgentBubble message={message} isPending={isPending} />
+        <AgentBubble message={message} isPending={isPending} canAct={canAct} />
       ) : (
         <div className="bg-lf-primary text-lf-on-primary rounded-xl rounded-tr-sm px-4 py-2.5 text-sm leading-relaxed shadow-sm">
           {message.content}
@@ -522,76 +511,99 @@ function MessageBubble({ message, isPending }: MessageBubbleProps) {
 }
 
 // ── AgentBubble ────────────────────────────────────────────────────────────────
-function AgentBubble({
-  message,
-  isPending,
-}: {
-  message: ChatMessage;
-  isPending: boolean;
-}) {
+
+function AgentBubble({ message, isPending, canAct }: { message: ChatMessage; isPending: boolean; canAct: boolean }) {
+  const hasGenUi = !!(message.genUiPayloads && message.genUiPayloads.length > 0);
+  const hasText  = !!message.content;
+
   return (
     <div className="flex flex-col gap-1.5 min-w-0">
-      {/* CoVe badge — shown on completed, non-error messages */}
-      {message.verifiedByCove && !isPending && !message.isError && (
-        <VerifiedBadge />
-      )}
+      {/* CoVe badge */}
+      {message.verifiedByCove && !isPending && !message.isError && <VerifiedBadge />}
 
       {/* Error badge */}
       {message.isError && !isPending && (
         <div className="flex items-center gap-1.5 self-start">
           <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wider text-lf-error bg-lf-error-container/40 border border-lf-error/20 px-2 py-0.5 rounded-full">
-            <AlertTriangle size={9} />
-            Error
+            <AlertTriangle size={9} />Error
           </span>
         </div>
       )}
 
-      {/* Content card */}
-      <div
-        className={cn(
+      {/* ── GenUI blocks — bypasses text renderer ──────────────────────────── */}
+      {!isPending && hasGenUi && (
+        <div className="flex flex-col gap-3">
+          {message.genUiPayloads!.map((payload, i) => (
+            <GenUiBlock key={i} payload={payload} canAct={canAct} />
+          ))}
+        </div>
+      )}
+
+      {/* ── Text content card — shown when text exists alongside or alone ─── */}
+      {(!hasGenUi || hasText) && (
+        <div className={cn(
           "bg-lf-surface-container-lowest rounded-xl rounded-tl-sm border shadow-sm p-4 min-w-0",
-          message.isError
-            ? "border-lf-error/20"
-            : "border-lf-outline-variant/20"
-        )}
-      >
-        {isPending ? (
-          /* Skeleton while waiting for the status poller to resolve */
-          <div className="flex flex-col gap-2">
-            <div className="h-2.5 w-48 bg-lf-surface-container-highest rounded-full animate-pulse" />
-            <div className="h-2.5 w-36 bg-lf-surface-container-highest rounded-full animate-pulse" />
-            <div className="h-2.5 w-44 bg-lf-surface-container-highest rounded-full animate-pulse" />
-          </div>
-        ) : (
-          <div className="min-w-0 overflow-hidden">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={mdComponents}
-            >
-              {message.content}
-            </ReactMarkdown>
-          </div>
-        )}
-      </div>
+          message.isError ? "border-lf-error/20" : "border-lf-outline-variant/20"
+        )}>
+          {isPending ? (
+            <div className="flex flex-col gap-2">
+              <div className="h-2.5 w-48 bg-lf-surface-container-highest rounded-full animate-pulse" />
+              <div className="h-2.5 w-36 bg-lf-surface-container-highest rounded-full animate-pulse" />
+              <div className="h-2.5 w-44 bg-lf-surface-container-highest rounded-full animate-pulse" />
+            </div>
+          ) : (
+            <div className="min-w-0 overflow-hidden">
+              {hasText ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                  {message.content}
+                </ReactMarkdown>
+              ) : (
+                <p className="text-sm text-lf-on-surface-variant italic">
+                  Agent D completed the analysis above.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
+// ── GenUiBlock ─────────────────────────────────────────────────────────────────
+// Intercepts a GenUIPayload, resolves the component_id against the registry,
+// and mounts the component with its props.  Falls back to plain text when the
+// component_id is unknown so the chat never shows a blank bubble.
+
+function GenUiBlock({ payload, canAct }: { payload: GenUIPayload; canAct: boolean }) {
+  const Component = GenUiRegistry[payload.component_id];
+
+  if (!Component) {
+    return (
+      <div className="bg-lf-surface-container-low rounded-xl border border-lf-outline-variant/20 px-4 py-3">
+        <p className="text-[10px] font-bold tracking-widest uppercase text-lf-on-surface-variant mb-1">
+          {payload.component_id}
+        </p>
+        <p className="text-sm text-lf-on-surface-variant italic">{payload.fallback_text}</p>
+      </div>
+    );
+  }
+
+  return (
+    <Component
+      {...(payload.props as Record<string, unknown>)}
+      canAct={canAct}
+    />
+  );
+}
+
 // ── VerifiedBadge ──────────────────────────────────────────────────────────────
+
 function VerifiedBadge() {
   return (
     <div className="flex items-center gap-1.5 self-start">
       <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wider text-[#166534] bg-[#dcfce7] border border-[#86efac] px-2 py-0.5 rounded-full">
-        <svg
-          width="10"
-          height="10"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="20 6 9 17 4 12" />
         </svg>
         CoVe Verified

@@ -11,6 +11,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -29,6 +30,7 @@ from src.domains.intelligence.orchestrator import (
 )
 from src.domains.intelligence.schemas import (
     ActionRequest,
+    GenUIPayload,
     InsightArtifact,
     InsightRequest,
     IntentRequest,
@@ -43,6 +45,70 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 _TASK_STATUS_TTL = 3600  # seconds — 1 hour
+
+# ---------------------------------------------------------------------------
+# Incremental GenUI block parser
+# ---------------------------------------------------------------------------
+
+# Agents embed structured UI payloads inside ```genui fences so that normal
+# markdown text and structured component directives can coexist in the same
+# message without ambiguity.  The regex is non-greedy so consecutive fences
+# are each matched independently.
+_GENUI_BLOCK_RE = re.compile(r"```genui\s*\n(.*?)\n```", re.DOTALL)
+
+
+def _parse_gen_ui_blocks(text: str) -> tuple[str, list[GenUIPayload]]:
+    """
+    Incrementally scan *text* for ```genui ... ``` fences and extract valid
+    GenUIPayload objects.
+
+    Returns ``(clean_text, payloads)`` where:
+    - ``clean_text`` has every successfully parsed fence removed so only
+      standard markdown remains for the chat window renderer.
+    - ``payloads`` is the ordered list of validated GenUIPayload objects.
+
+    Fences that fail JSON parsing or Pydantic validation are left as-is in
+    ``clean_text`` so the raw content is never silently dropped.
+    """
+    payloads: list[GenUIPayload] = []
+
+    def _replacer(match: re.Match) -> str:  # type: ignore[type-arg]
+        json_str = match.group(1).strip()
+        try:
+            data = json.loads(json_str)
+            payload = GenUIPayload(**data)
+            payloads.append(payload)
+            return ""  # strip the fence from the visible text
+        except Exception:
+            return match.group(0)  # keep malformed fences as plain text
+
+    clean_text = _GENUI_BLOCK_RE.sub(_replacer, text).strip()
+    return clean_text, payloads
+
+
+def _collect_gen_ui_from_messages(
+    messages: list[Any],
+) -> list[GenUIPayload]:
+    """
+    Walk every message in *messages*, apply _parse_gen_ui_blocks to string
+    content, and return the deduplicated union of all extracted payloads.
+
+    Deduplication is by (component_id, fallback_text) so that the same
+    component rendered twice in one session is only transmitted once.
+    """
+    seen: set[tuple[str, str]] = set()
+    collected: list[GenUIPayload] = []
+    for msg in messages:
+        content = getattr(msg, "content", None)
+        if not isinstance(content, str):
+            continue
+        _, payloads = _parse_gen_ui_blocks(content)
+        for p in payloads:
+            key = (p.component_id, p.fallback_text)
+            if key not in seen:
+                seen.add(key)
+                collected.append(p)
+    return collected
 
 # Idempotency key constants
 _IDEM_PREFIX = "idempotency:"
@@ -140,6 +206,7 @@ async def _run_orchestrator(
 
     initial_state: dict[str, Any] = {
         "messages": [HumanMessage(content=initial_message)],
+        "gen_ui_payloads": [],
         "error_messages": [],
         "next": "supervisor",
         "context": context,
@@ -301,6 +368,7 @@ class ConversationOrchestrator:
 
         state: OrchestratorState = {
             "messages": [HumanMessage(content=intent)],
+            "gen_ui_payloads": [],
             "error_messages": [],
             "next": "supervisor",
             "context": {
@@ -337,16 +405,83 @@ async def _graph_background_task(state: OrchestratorState) -> None:
     """
     Fire-and-forget wrapper executed by FastAPI BackgroundTasks.
 
-    Updates ``task_status:{session_id}`` in Redis to ``"completed"`` (with the
-    artifact_id from the graph context) or ``"failed"`` so the frontend can
-    detect completion by polling ``GET /conversation/{session_id}/status``.
+    Uses ``graph.astream(stream_mode="values")`` so that after every node
+    completes the full accumulated state snapshot is available.  The supervisor
+    writes ``state["next"]`` before routing, so each snapshot lets us emit a
+    localized ``running:<agent_node>`` update to Redis DB 0 — the frontend
+    polls this via ``GET /conversation/{session_id}/status`` to show which
+    agent is actively compiling data.
+
+    On completion the Redis key is updated to ``"completed"`` and includes:
+    - ``artifact_id``         — MongoDB key written by hub_writer
+    - ``genui_artifact_ids``  — MongoDB keys for GenUI payloads (hub_writer)
+    - ``gen_ui_payloads``     — serialized payloads for immediate client use
+    - ``active_node``         — cleared to null
     """
     session_id: str = state["session_id"]
     redis_client = get_redis()
+
     try:
-        final_state = await run_graph(state)
-        artifact_id: str | None = final_state.get("context", {}).get("hub_artifact_id")
-        status_payload = {"status": "completed", "artifact_id": artifact_id}
+        from src.domains.intelligence.orchestrator import build_graph
+
+        graph = build_graph()
+        config: dict[str, Any] = {"recursion_limit": 25}
+
+        final_state: dict[str, Any] = {}
+        prev_active: str = ""
+
+        # stream_mode="values" yields the FULL accumulated state after every
+        # node, so the last snapshot IS the final state — no second ainvoke.
+        async for snapshot in graph.astream(state, config=config, stream_mode="values"):
+            final_state = snapshot
+
+            # supervisor sets state["next"] immediately before the agent runs,
+            # so "next == b_classifier" means b_classifier is about to start.
+            current_next: str = snapshot.get("next", "FINISH") or "FINISH"
+            active_label = (
+                f"running:{current_next}" if current_next != "FINISH" else ""
+            )
+
+            if active_label != prev_active:
+                await redis_client.setex(
+                    f"task_status:{session_id}",
+                    _TASK_STATUS_TTL,
+                    json.dumps(
+                        {"status": "running", "active_node": active_label or None}
+                    ),
+                )
+                prev_active = active_label
+
+        # --- Collect GenUI payloads -----------------------------------------
+        # 1. Payloads the graph accumulated in state["gen_ui_payloads"]
+        state_payloads: list[GenUIPayload] = list(
+            final_state.get("gen_ui_payloads") or []
+        )
+        # 2. Payloads embedded as ```genui fences in agent message content
+        msg_payloads = _collect_gen_ui_from_messages(
+            final_state.get("messages", [])
+        )
+
+        # Merge: state payloads first (already validated by Pydantic in the
+        # graph), then message-embedded payloads that aren't already present.
+        seen: set[str] = {p.component_id for p in state_payloads}
+        all_gen_ui = list(state_payloads)
+        for p in msg_payloads:
+            if p.component_id not in seen:
+                seen.add(p.component_id)
+                all_gen_ui.append(p)
+
+        ctx = final_state.get("context", {})
+        artifact_id: str | None = ctx.get("hub_artifact_id")
+        genui_artifact_ids: list[str] | None = ctx.get("hub_genui_artifact_ids")
+
+        status_payload: dict[str, Any] = {
+            "status": "completed",
+            "artifact_id": artifact_id,
+            "genui_artifact_ids": genui_artifact_ids,
+            "gen_ui_payloads": [p.model_dump() for p in all_gen_ui],
+            "active_node": None,
+        }
         await redis_client.setex(
             f"task_status:{session_id}",
             _TASK_STATUS_TTL,
@@ -356,11 +491,17 @@ async def _graph_background_task(state: OrchestratorState) -> None:
             "conversation: background graph completed",
             session_id=session_id,
             artifact_id=artifact_id,
+            gen_ui_count=len(all_gen_ui),
             error_count=len(final_state.get("error_messages", [])),
         )
+
     except Exception as exc:
         error_msg = str(exc)[:500]  # cap Redis value size
-        status_payload = {"status": "failed", "detail": error_msg}
+        status_payload = {
+            "status": "failed",
+            "detail": error_msg,
+            "active_node": None,
+        }
         await redis_client.setex(
             f"task_status:{session_id}",
             _TASK_STATUS_TTL,
@@ -390,12 +531,20 @@ class ConversationResponse(BaseModel):
     session_id: str | None = None
     refreshing: bool
     artifact: dict[str, Any] | None = None
+    # Populated on Path 1 (cached read) when the artifact carries GenUI data.
+    # Always empty on Path 2 dispatches — poll the status endpoint instead.
+    gen_ui_payloads: list[dict[str, Any]] = []
 
 
 class TaskStatusResponse(BaseModel):
     session_id: str
-    status: str                     # "pending" | "completed" | "failed"
+    status: str                      # "pending" | "running" | "completed" | "failed"
     artifact_id: str | None = None
+    # Which agent node is actively compiling, e.g. "running:b_classifier".
+    # Null when status is "pending", "completed", or "failed".
+    active_node: str | None = None
+    # Structured GenUI payloads ready to render in the chat window.
+    gen_ui_payloads: list[dict[str, Any]] = []
     detail: str | None = None
 
 
@@ -613,13 +762,21 @@ async def conversation_status(
     Return the current execution status of a background graph run.
 
     Status values:
-      - ``"pending"``   — task is queued / in-flight
-      - ``"completed"`` — graph finished; ``artifact_id`` is populated when
-                          the hub writer persisted an artifact
+      - ``"pending"``   — task is queued, no node has started yet
+      - ``"running"``   — graph is mid-execution; ``active_node`` identifies
+                          which agent is currently compiling data, e.g.
+                          ``"running:b_classifier"`` or ``"running:e_watchdog"``
+      - ``"completed"`` — graph finished; ``artifact_id`` is set when hub_writer
+                          persisted an insight artifact; ``gen_ui_payloads``
+                          carries all structured UI components ready to render
       - ``"failed"``    — graph raised an unhandled exception; ``detail``
                           contains a truncated error message
 
     Returns 404 if the session_id is unknown or the 1-hour TTL has expired.
+
+    Poll this endpoint at ~1 s intervals while ``status == "running"`` and
+    render ``active_node`` as a typing indicator in the chat UI.  Stop polling
+    when status transitions to ``"completed"`` or ``"failed"``.
     """
     redis_client = get_redis()
     raw: str | None = await redis_client.get(f"task_status:{session_id}")  # type: ignore[assignment]
@@ -633,12 +790,13 @@ async def conversation_status(
     try:
         payload: dict[str, Any] = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        # Treat malformed payload as pending to avoid crashing the poller
         payload = {"status": "pending"}
 
     return TaskStatusResponse(
         session_id=session_id,
         status=payload.get("status", "pending"),
         artifact_id=payload.get("artifact_id"),
+        active_node=payload.get("active_node"),
+        gen_ui_payloads=payload.get("gen_ui_payloads") or [],
         detail=payload.get("detail"),
     )

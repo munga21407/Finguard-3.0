@@ -11,6 +11,20 @@
 import httpClient from "@/lib/api/http-client";
 import { ENDPOINTS } from "@/lib/api/endpoints";
 
+// ── Generative UI contract ────────────────────────────────────────────────────
+
+/**
+ * A structured UI payload emitted by an agent and embedded in the chat stream.
+ * `component_id` must match a key in GenUiRegistry; `props` are forwarded
+ * verbatim to the mounted component; `fallback_text` is shown when the
+ * component cannot be resolved or rendered.
+ */
+export interface GenUIPayload {
+  component_id: string;
+  props: Record<string, unknown>;
+  fallback_text: string;
+}
+
 // ── Request types ─────────────────────────────────────────────────────────────
 
 export interface DispatchConversationPayload {
@@ -30,23 +44,31 @@ export interface ConversationDispatchResponse {
   session_id: string | null;
   refreshing: boolean;
   artifact: Record<string, unknown> | null;
+  gen_ui_payloads?: GenUIPayload[];
 }
 
 /**
  * Returned by GET /conversation/{session_id}/status.
  *
- * status: "pending"   — task is in-flight
- *         "completed" — graph finished; artifact_id is populated
- *         "failed"    — graph raised; detail contains the error
+ * status: "pending"   — task is queued, no node has started
+ *         "running"   — graph mid-execution; active_node identifies
+ *                       the agent currently compiling data, e.g.
+ *                       "running:b_classifier" or "running:e_watchdog"
+ *         "completed" — graph finished; artifact_id is set;
+ *                       gen_ui_payloads carries structured UI components
+ *         "failed"    — graph raised; detail contains the truncated error
  *
- * `answer` is not returned by the current backend but is typed here for
- * forward-compatibility — if the backend is later extended to embed the
- * answer in the status payload this field will be populated automatically.
+ * `answer` is typed for forward-compatibility — the backend may embed it
+ * directly in the status payload in a future sprint.
  */
 export interface ConversationStatusResponse {
   session_id: string;
-  status: "pending" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed";
   artifact_id: string | null;
+  /** Which agent node is actively compiling, e.g. "running:b_classifier". */
+  active_node: string | null;
+  /** Structured GenUI payloads ready to mount in the chat window. */
+  gen_ui_payloads: GenUIPayload[];
   detail: string | null;
   answer?: string;
 }

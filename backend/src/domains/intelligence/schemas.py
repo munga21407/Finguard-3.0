@@ -32,10 +32,96 @@ AGENT_NAMES = Literal[
 ]
 
 
+# ---------------------------------------------------------------------------
+# Generative UI — type-safe contract between backend and chat window
+# ---------------------------------------------------------------------------
+
+class GenUIPayload(BaseModel):
+    """
+    Envelope for a Generative UI component rendered inside the client chat window.
+
+    ``component_id`` must exactly match a key registered in the frontend
+    component registry (e.g. ``"InvoiceCard"``, ``"CashFlowChart"``).
+    ``props`` carries the component's required properties; the shape is
+    validated at runtime against the registry entry on the client side.
+    ``fallback_text`` is rendered whenever the component cannot be mounted
+    (unknown id, render error, reduced-motion mode, etc.).
+    """
+
+    component_id: str = Field(
+        ...,
+        min_length=1,
+        description="Frontend registry key for the component to render",
+    )
+    props: dict[str, Any] = Field(
+        ...,
+        description="Component-specific props matching the component's required properties",
+    )
+    fallback_text: str = Field(
+        ...,
+        min_length=1,
+        description="Plain-text fallback shown when the component cannot be rendered",
+    )
+
+    @field_validator("component_id")
+    @classmethod
+    def _no_whitespace(cls, v: str) -> str:
+        if v != v.strip():
+            raise ValueError("component_id must not have leading or trailing whitespace")
+        return v
+
+
+class KeyFinding(BaseModel):
+    """A single key metric distilled from agent analysis for GenUI metric badges."""
+
+    metric: str = Field(..., min_length=1, description="Short label (e.g. 'Runway', 'Regime')")
+    value: str = Field(..., min_length=1, description="Formatted display value (e.g. '4 Months', 'KES 1.2M')")
+
+
+class CompositeGenUIPayload(BaseModel):
+    """
+    Extended GenUI envelope separating deterministic computed figures (props) from
+    LLM-generated contextual key findings (findings).
+
+    props    — deterministic agent-computed data forwarded directly to the component.
+    findings — LLM-generated KeyFinding bullet points surfaced as metric badges.
+    """
+
+    component_id: str = Field(..., min_length=1)
+    props: dict[str, Any] = Field(...)
+    findings: list[KeyFinding] = Field(default_factory=list)
+    fallback_text: str = Field(..., min_length=1)
+
+    @field_validator("component_id")
+    @classmethod
+    def _no_whitespace(cls, v: str) -> str:
+        if v != v.strip():
+            raise ValueError("component_id must not have leading or trailing whitespace")
+        return v
+
+    def to_gen_ui_payload(self) -> "GenUIPayload":
+        """Downcast to GenUIPayload, merging findings into props for the state accumulator."""
+        return GenUIPayload(
+            component_id=self.component_id,
+            props={**self.props, "findings": [f.model_dump() for f in self.findings]},
+            fallback_text=self.fallback_text,
+        )
+
+
 class OrchestratorState(TypedDict):
-    """Shared state threaded through every node in the LangGraph."""
+    """Shared state threaded through every node in the LangGraph.
+
+    ``messages`` accumulates standard LangChain BaseMessage objects
+    (HumanMessage, AIMessage, ToolMessage) via the add_messages reducer.
+
+    ``gen_ui_payloads`` accumulates structured GenUIPayload envelopes
+    alongside the conversational messages; the operator.add reducer
+    appends new payloads without overwriting earlier ones, so the full
+    render history is preserved for the session.
+    """
 
     messages: Annotated[list[BaseMessage], add_messages]
+    gen_ui_payloads: Annotated[list[GenUIPayload], operator.add]
     error_messages: Annotated[list[str], operator.add]
     next: str                        # which node the supervisor routes to next
     context: dict[str, Any]          # arbitrary data accumulated across nodes
@@ -55,6 +141,17 @@ class InsightArtifact(BaseModel):
     intent: str                     # e.g. "GENERATE_INVOICE"
     payload: dict[str, Any]         # agent output serialised as dict
     ttl_expires_at: datetime        # when this cached insight expires
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class GenUIArtifact(BaseModel):
+    """Written to `intelligence_hub` for each GenUI payload emitted in a session."""
+
+    component_id: str
+    props: dict[str, Any]
+    fallback_text: str
+    session_id: str
+    ttl_expires_at: datetime
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

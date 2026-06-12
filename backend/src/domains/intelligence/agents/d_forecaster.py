@@ -45,8 +45,10 @@ from src.domains.intelligence.prompts.d_forecaster import (
 )
 from src.domains.intelligence.schemas import (
     CashFlowForecast,
+    CompositeGenUIPayload,
     CoVeSQLQuery,
     ForecastDataPoint,
+    KeyFinding,
     OrchestratorState,
     RegimeAnalysis,
 )
@@ -56,6 +58,23 @@ from src.infrastructure.database.postgres import AsyncSessionLocal
 logger = structlog.get_logger(__name__)
 
 _FORECAST_HORIZON = 30  # days
+
+
+def _estimate_runway(balance: float, daily_flows: list[float]) -> str:
+    """Estimate days/months until cash balance hits zero from daily forecast flows."""
+    running = balance
+    for i, flow in enumerate(daily_flows):
+        running += flow
+        if running <= 0:
+            days = i + 1
+            return f"{days // 30} Months" if days >= 60 else f"{days} Days"
+    # Balance stays positive through forecast — try to extrapolate
+    avg_daily = sum(daily_flows) / max(len(daily_flows), 1)
+    if avg_daily >= 0:
+        return ">30 Days"
+    extra = int(running / max(-avg_daily, 0.01))
+    total = len(daily_flows) + extra
+    return f"{total // 30} Months" if total >= 60 else f"{total} Days"
 
 
 # ---------------------------------------------------------------------------
@@ -421,9 +440,36 @@ def make_d_forecaster_node(llm: Any = None) -> Any:  # llm kept for signature co
                 f" SQL query {'executed' if sql_res.get('audit_passed') else 'failed audit'}."
             )
 
+        # ── 7. Emit CompositeGenUIPayload ─────────────────────────────────────
+        runway = _estimate_runway(current_balance, raw_forecast)
+        findings: list[KeyFinding] = [
+            KeyFinding(metric="Regime", value=regime.regime),
+            KeyFinding(metric="Confidence", value=f"{regime.confidence:.0%}"),
+            KeyFinding(metric="30d Balance", value=f"KES {projected_final:,.0f}"),
+            KeyFinding(metric="Runway", value=runway),
+        ]
+        for rf in regime.risk_factors[:2]:
+            findings.append(KeyFinding(metric="Risk", value=rf[:100]))
+
+        composite = CompositeGenUIPayload(
+            component_id="CashFlowChart",
+            props={
+                "current_balance": round(current_balance, 2),
+                "data_points": [dp.model_dump() for dp in data_points],
+                "regime": regime.model_dump(),
+            },
+            findings=findings,
+            fallback_text=(
+                f"Cash flow forecast: {regime.regime} regime. "
+                f"Current KES {current_balance:,.0f} → projected KES {projected_final:,.0f} "
+                f"in {horizon} days. Runway: {runway}."
+            ),
+        )
+
         return {
             "messages": [AIMessage(content=summary, name="d_forecaster")],
             "context": ctx,
+            "gen_ui_payloads": [composite.to_gen_ui_payload()],
         }
 
     return d_forecaster_node
