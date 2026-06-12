@@ -93,6 +93,7 @@ class IntelligenceService:
 
         initial_state = {
             "messages": [HumanMessage(content=str(query))],
+            "gen_ui_payloads": [],
             "error_messages": [],
             "next": "supervisor",
             "context": {**input_data, "requested_agent": agent_name},

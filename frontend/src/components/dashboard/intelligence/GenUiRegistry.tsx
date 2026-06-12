@@ -58,6 +58,44 @@ const GenUiRegistry: Record<string, React.ElementType> = {
       ),
     { ssr: false, loading: () => <RegistrySkeleton /> }
   ),
+
+  /** Agent G — Credit Strategist: bankability score + risk tier + narrative */
+  CreditStrategy: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/CreditStrategy").then(
+        (m) => ({ default: m.CreditStrategy })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  // ── Sprint 7 chart components ──────────────────────────────────────────────
+
+  /** Agent F — Tax Auditor: concentric donut (VAT vs CIT) + threshold ring */
+  TaxLiabilityDonut: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/TaxLiabilityDonut").then(
+        (m) => ({ default: m.TaxLiabilityDonut })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** Agent E — Watchdog: half-circle anomaly gauge + HMM probability bars */
+  BudgetWatchdogMeter: dynamic(
+    () =>
+      import("@/components/dashboard/command-center/BudgetWatchdogMeter").then(
+        (m) => ({ default: m.BudgetWatchdogMeter })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** Agent G — Credit Strategist: 4-axis radar chart with sub-scores */
+  BankabilityScoreRadar: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/BankabilityScoreRadar").then(
+        (m) => ({ default: m.BankabilityScoreRadar })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
 };
 
 export default GenUiRegistry;

@@ -85,7 +85,7 @@ def _compute_bankability_score(
     hist_opex: list[float],
     fc_revenue: list[float],
     fc_opex: list[float],
-) -> tuple[int, str]:
+) -> tuple[int, str, dict[str, int]]:
     """
     Deterministic bankability score (0-100) using four sub-components:
 
@@ -152,7 +152,13 @@ def _compute_bankability_score(
     total = min(100, max(0, total))
 
     tier = "LOW" if total >= 75 else "MEDIUM" if total >= 45 else "HIGH"
-    return total, tier
+    sub_scores: dict[str, int] = {
+        "trend_score": trend_score,
+        "ratio_score": ratio_score,
+        "consistency_score": consistency_score,
+        "runway_score": runway_score,
+    }
+    return total, tier, sub_scores
 
 
 # ── Database helper ───────────────────────────────────────────────────────────
@@ -391,7 +397,7 @@ def make_g_reporter_node(llm: Any = None) -> Any:  # llm kept for signature comp
         q_opex = [round(sum(fc_opex[i:i + 3]), 2) for i in range(0, 12, 3)]
 
         # ── 3. Deterministic bankability score ────────────────────────────
-        bankability_score, risk_tier = _compute_bankability_score(
+        bankability_score, risk_tier, sub_scores = _compute_bankability_score(
             hist_revenue, hist_opex, fc_revenue, fc_opex
         )
 
@@ -487,7 +493,7 @@ Write a strategic_narrative (3-5 sentences) that:
             KeyFinding(metric="Q1 OpEx", value=f"KES {q_opex[0]:,.0f}" if q_opex else "N/A"),
         ]
         composite = CompositeGenUIPayload(
-            component_id="CreditStrategy",
+            component_id="BankabilityScoreRadar",
             props={
                 "bankability_score": bankability_score,
                 "risk_tier": risk_tier,
@@ -495,6 +501,7 @@ Write a strategic_narrative (3-5 sentences) that:
                 "quarterly_revenue_kes": q_revenue,
                 "quarterly_opex_kes": q_opex,
                 "historical_months": months[-12:] if months else [],
+                **sub_scores,
             },
             findings=findings,
             fallback_text=(

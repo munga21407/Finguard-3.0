@@ -485,7 +485,7 @@ async def _graph_background_task(state: OrchestratorState) -> None:
         await redis_client.setex(
             f"task_status:{session_id}",
             _TASK_STATUS_TTL,
-            json.dumps(status_payload),
+            json.dumps(status_payload, default=str),
         )
         logger.info(
             "conversation: background graph completed",

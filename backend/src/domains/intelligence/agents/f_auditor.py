@@ -149,6 +149,13 @@ def make_f_auditor_node(llm: Any = None) -> Any:  # llm kept for signature compa
         tax_type, tax_liability, etr = _calculate_tax_liability(
             revenue, opex, tax_regime, period_days
         )
+        _annual_rev = revenue * (365.0 / max(period_days, 1))
+        vat_component = round(revenue * 0.16, 2) if _annual_rev >= _VAT_THRESHOLD_ANNUAL_KES else 0.0
+        cit_component = round(max(revenue - opex, 0.0) * 0.30, 2)
+        if tax_regime.upper() == "VAT":
+            vat_component, cit_component = tax_liability, 0.0
+        elif tax_regime.upper() in ("CORPORATE_TAX", "CIT"):
+            vat_component, cit_component = 0.0, tax_liability
 
         # ── 3. RAG — retrieve relevant KRA sections ───────────────────────
         rag_query = (
@@ -302,8 +309,8 @@ Return a JSON object with exactly these fields:
             KeyFinding(metric="Flags", value=f"{len(analysis.compliance_flags)} issue(s)"),
         ]
         composite = CompositeGenUIPayload(
-            component_id="AuditorInsights",
-            props=output.model_dump(),
+            component_id="TaxLiabilityDonut",
+            props={**output.model_dump(), "vat_component": vat_component, "cit_component": cit_component},
             findings=findings,
             fallback_text=(
                 f"Tax audit: {tax_type} | liability KES {tax_liability:,.2f} | "

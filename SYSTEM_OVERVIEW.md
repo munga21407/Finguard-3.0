@@ -143,9 +143,13 @@ Finguard-3.0/
 │               └── reporting_tasks.py    # generate_monthly_intelligence_report (Agent F + G)
 ├── frontend/                          # Next.js 15 application
 │   ├── package.json
+│   ├── playwright.config.ts           # Playwright E2E config (Chromium, reuses dev server)
+│   ├── e2e/
+│   │   └── chat-composite-flow.spec.ts # E2E tests: skeleton → composite render, fallback, network error
 │   └── src/
 │       ├── app/                       # Next.js App Router pages
 │       │   ├── layout.tsx
+│       │   ├── globals.css
 │       │   ├── page.tsx               # Root redirect → /dashboard
 │       │   ├── login/page.tsx
 │       │   ├── register/page.tsx
@@ -170,20 +174,46 @@ Finguard-3.0/
 │       │   │   ├── TopNavBar.tsx
 │       │   │   ├── KpiCard.tsx
 │       │   │   ├── StatusBadge.tsx
-│       │   │   ├── command-center/    # AiActionCenter, CashFlowChart, IntelligenceInsights
-│       │   │   ├── intelligence/      # AuditorInsights, ComplianceChecklist, CoreReports, StrategicForecast
+│       │   │   ├── command-center/
+│       │   │   │   ├── AiActionCenter.tsx
+│       │   │   │   ├── CashFlowChart.tsx        # Recharts ComposedChart; GenUI component_id "CashFlowChart"
+│       │   │   │   ├── IntelligenceInsights.tsx
+│       │   │   │   └── BudgetWatchdogMeter.tsx  # Recharts RadialBarChart half-gauge; component_id "BudgetWatchdogMeter"
+│       │   │   ├── intelligence/
+│       │   │   │   ├── AgentChatWindow.tsx       # Chat UI: dispatch → CoVe → polling → composite render
+│       │   │   │   ├── CoveTimeline.tsx          # CoVe stepper animation
+│       │   │   │   ├── GenUiRegistry.tsx         # next/dynamic registry: component_id → React component
+│       │   │   │   ├── CompositeInsightBlock.tsx # Layout wrapper: findings badges (left) + viz (right)
+│       │   │   │   ├── CompositeInsightSkeleton.tsx # Animate-pulse skeleton matching composite layout
+│       │   │   │   ├── GenUiBoundary.tsx         # React Error Boundary (class component) for chart crashes
+│       │   │   │   ├── AuditorInsights.tsx
+│       │   │   │   ├── ComplianceChecklist.tsx
+│       │   │   │   ├── CoreReports.tsx
+│       │   │   │   ├── StrategicForecast.tsx
+│       │   │   │   ├── CreditStrategy.tsx        # Legacy Agent G card (kept for cached payloads)
+│       │   │   │   ├── TaxLiabilityDonut.tsx     # Recharts PieChart donut; component_id "TaxLiabilityDonut"
+│       │   │   │   └── BankabilityScoreRadar.tsx # Recharts RadarChart; component_id "BankabilityScoreRadar"
 │       │   │   ├── alerts/            # AlertKpiCards, DuplicateInvoiceAlert, VendorActivityAlert
 │       │   │   ├── payables/          # AgentIntegrations, DepartmentBudgets, RecentOutgoing
 │       │   │   └── receivables/       # AgentStatus, InvoiceTable
 │       │   ├── forms/                 # LoginForm, RegisterForm
 │       │   ├── layouts/               # DashboardLayout, Providers (TanStack Query)
-│       │   ├── charts/
 │       │   └── ui/
 │       ├── lib/
-│       │   ├── api/client.ts          # Axios client (NEXT_PUBLIC_API_URL)
-│       │   ├── hooks/                 # TanStack Query hooks
-│       │   └── utils/cn.ts            # clsx + tailwind-merge helper
-│       └── types/index.ts
+│       │   ├── api/
+│       │   │   ├── http-client.ts     # Axios singleton: Bearer injection, 401 silent refresh, idempotency key
+│       │   │   ├── endpoints.ts       # Typed endpoint constants (INTELLIGENCE, IDENTITY, etc.)
+│       │   │   └── intelligence.ts    # dispatchConversation, checkConversationStatus; KeyFinding + GenUIPayload types
+│       │   ├── auth/
+│       │   │   ├── auth-context.tsx   # React context: user, isAuthenticated, login, logout
+│       │   │   └── token-manager.ts   # localStorage access/refresh token CRUD + isTokenExpired + fg_session cookie
+│       │   ├── hooks/
+│       │   │   ├── useAuth.ts         # Re-export of useAuthContext
+│       │   │   └── useRole.ts         # hasRole(minRole) RBAC helper based on role hierarchy
+│       │   └── utils/cn.ts            # clsx + tailwind-merge class name helper
+│       └── types/
+│           ├── index.ts
+│           └── auth.ts                # UserRole type (OWNER | ADMIN | MANAGER | ACCOUNTANT | VIEWER)
 ├── infrastructure/
 │   ├── docker-compose.yml             # Production Docker Compose
 │   ├── docker-compose.dev.yml         # Dev overrides
@@ -243,9 +273,11 @@ Finguard-3.0/
 | Data Fetching | TanStack Query | ≥5.62.0 |
 | HTTP Client | Axios | ≥1.7.0 |
 | Charts | Recharts | ≥2.13.0 |
+| Markdown | react-markdown + remark-gfm | ≥10.1.0 / ≥4.0.1 |
 | Forms | React Hook Form + Zod | ≥7.54.0 / ≥3.23.0 |
 | Icons | lucide-react | ≥0.460.0 |
 | Date Utilities | date-fns | ≥4.1.0 |
+| E2E Testing | Playwright | ≥1.60.0 |
 
 ### Infrastructure
 
@@ -484,6 +516,30 @@ All agents are LangGraph nodes. They receive `OrchestratorState`, perform their 
 
 **Implementation Status**: ✅ Complete — all 10 agents are fully implemented.
 
+### GenUI Payload Contract
+
+Agents D, E, F, and G each emit a `CompositeGenUIPayload` (defined in `schemas.py`) which is a superset of `GenUIPayload`. The composite type carries:
+- **`props`** — deterministic, numerically computed chart props
+- **`findings: list[KeyFinding]`** — LLM-generated `{metric, value}` badges
+
+`CompositeGenUIPayload.to_gen_ui_payload()` merges `findings` into `props["findings"]` before writing to `OrchestratorState.gen_ui_payloads`, so `hub_writer.py` and the existing router need no changes. The frontend uses the presence of a non-empty `props.findings` array to route the payload to `CompositeInsightBlock` instead of `GenUiBlock`.
+
+```python
+class KeyFinding(BaseModel):
+    metric: str
+    value: str
+
+class CompositeGenUIPayload(BaseModel):
+    component_id: str
+    props: dict[str, Any]
+    fallback_text: str
+    findings: list[KeyFinding] = []
+
+    def to_gen_ui_payload(self) -> GenUIPayload:
+        merged = {**self.props, "findings": [f.model_dump() for f in self.findings]}
+        return GenUIPayload(component_id=self.component_id, props=merged, fallback_text=self.fallback_text)
+```
+
 ---
 
 ### Agent A — Invoice Generator ✅
@@ -540,6 +596,7 @@ All agents are LangGraph nodes. They receive `OrchestratorState`, perform their 
 | Prompts | `prompts/d_forecaster.py` — multi-phase: (1) CoVe SQL-drafting prompt (schema-masked), (2) regime-detection prompt, (3) narrative explainer prompt |
 | Schema masking | `tools/sql_executor.py::get_masked_schema("D")` — returns DDL only for `ledger_entries`, `invoices`, `budgets`, `expenses`; all SQL validated by sqlglot AST before execution |
 | Output schemas | `ForecastDataPoint`, `CashFlowForecast`, `CoVeSQLQuery` |
+| GenUI payload | `CompositeGenUIPayload` → `component_id: "CashFlowChart"`. Props include `current_balance`, `data_points[]`, `regime`. Findings: `[{metric:"Regime",value:…}, {metric:"Runway",value:…}, {metric:"Confidence",value:…}]` |
 | Method | Fetches 12 months of daily net cash-flow via `_fetch_daily_cashflow`, fits Holt-Winters exponential smoothing (`_fit_holtwinters`), detects financial regime (growth/stable/stressed/declining) via `_detect_regime`, overlays upcoming invoice due-dates, Gemini narrative. Uses read-only `finguard_readonly` PostgreSQL role. |
 | Side effect | Publishes `finance.forecast.generated` in actions mode |
 | Hub TTL | 1 hour |
@@ -554,6 +611,7 @@ All agents are LangGraph nodes. They receive `OrchestratorState`, perform their 
 | Trigger | RabbitMQ `expenses.created` event (via `watchdog_consumer.py`) or direct supervisor routing |
 | Context key written | `watchdog_result` |
 | Output schema | `WatchdogAnalysis` (current_state, state_probabilities, anomaly_score, isolation_score, is_duplicate, vc_id, summary) |
+| GenUI payload | `CompositeGenUIPayload` → `component_id: "BudgetWatchdogMeter"`. Props include `anomaly_score`, `current_state`, `state_probabilities: {HEALTHY, STABLE, CRITICAL}` (uses constant `STATE_LABELS`, not per-step Viterbi labels), `anomaly_detected`, `is_duplicate`, `summary`. Findings: top-2 HMM state probabilities + anomaly index. |
 | Method | Hidden Markov Model (3 states: HEALTHY/STABLE/CRITICAL) + IsolationForest + rapidfuzz duplicate detection + Gemini narrative |
 | HMM | Forward algorithm for P(state\|observations), Viterbi for most-likely path |
 | Duplicate detection | rapidfuzz similarity on expense reference strings |
@@ -572,7 +630,9 @@ All agents are LangGraph nodes. They receive `OrchestratorState`, perform their 
 | Trigger | Supervisor routes here for tax/compliance requests |
 | Context key written | `tax_audit_result` |
 | Output schema | `AgentFOutput` (tax_type, tax_liability, effective_tax_rate, compliance_flags, kra_references, audit_summary) |
-| Method | Deterministic calculations (Kenya: 16% VAT, 30% CIT) + pgvector RAG against `knowledge_base` table (top-3 KRA excerpts via Gemini `text-embedding-004` 768-dim) + Gemini structured output |
+| GenUI payload | `CompositeGenUIPayload` → `component_id: "TaxLiabilityDonut"`. Props include all `AgentFOutput` fields plus `vat_component` and `cit_component` (computed post-`_calculate_tax_liability` from annualised revenue). Findings: ETR percentage + top compliance flag count. |
+| Method | Deterministic calculations (Kenya: 16% VAT threshold KES 8M annual, 30% CIT) + pgvector RAG against `knowledge_base` table (top-3 KRA excerpts via Gemini `text-embedding-004` 768-dim) + Gemini structured output |
+| VAT/CIT split | `vat_component = revenue × 0.16` when annualised revenue ≥ KES 8M; `cit_component = max(revenue − opex, 0) × 0.30`. Overridden by `tax_regime` field when explicitly "VAT" or "CIT". |
 | RAG service | `services/tax_rag_service.py` — embeds query, L2-distance search, returns excerpts |
 | Hub TTL | 1 day |
 
@@ -586,7 +646,8 @@ All agents are LangGraph nodes. They receive `OrchestratorState`, perform their 
 | Trigger | Supervisor routes here for credit/report requests |
 | Context key written | `credit_strategy_result`, `credit_forecast` |
 | Output schema | `AgentGOutput` (bankability_score 0-100, risk_tier, strategic_narrative) |
-| Method | Holt-Winters exponential smoothing (statsmodels) for 12-month forecast → deterministic 4-component bankability score → Gemini narrative generation |
+| GenUI payload | `CompositeGenUIPayload` → `component_id: "BankabilityScoreRadar"`. Props include all `AgentGOutput` fields plus `trend_score`, `ratio_score`, `consistency_score`, `runway_score` sub-scores (the 4 bankability components exposed individually for radar axis rendering). Findings: overall score + risk tier + trend direction. |
+| Method | Holt-Winters exponential smoothing (statsmodels) for 12-month forecast → deterministic 4-component bankability score → Gemini narrative generation. `_compute_bankability_score` returns `tuple[int, str, dict[str, int]]` (score, tier, sub_scores). |
 | Bankability components | Revenue trend (30pts) + Expense ratio (30pts) + Cash-flow consistency CoV (20pts) + Forecast solvency (20pts) |
 | Risk tiers | LOW (≥75) / MEDIUM (45-74) / HIGH (<45) |
 | Fallback | Linear extrapolation (<4 data points) or last-value drift (statsmodels failure) |
@@ -812,21 +873,66 @@ All routes are registered in `src/main.py` under `/api/v1/` prefix.
 | `/dashboard/payables` | Payables / AP (DepartmentBudgets, RecentOutgoing, AgentIntegrations) |
 | `/dashboard/payables/alerts` | Budget alerts (AlertKpiCards, DuplicateInvoiceAlert, VendorActivityAlert, RecentlyResolvedAlerts) |
 
+### Chat Pipeline (AgentChatWindow)
+
+`/dashboard/intelligence` hosts a live NL query interface. The pipeline is:
+
+```
+User types query
+  → stage: "cove"   — optimistic CoVe stepper (3 × 1400ms phases) plays while
+                       dispatchConversation POST fires in parallel
+  → stage: "polling" — useQuery polls GET /conversation/{id}/status every 2s
+                        AgentBubble renders <CompositeInsightSkeleton> during this phase
+  → stage: "idle"   — status "completed" → commitAgentMessage() attaches
+                       gen_ui_payloads to the ChatMessage; composite routing fires
+```
+
+**Composite routing** (in `AgentBubble`): if `payload.props.findings` is a non-empty array → `CompositeInsightBlock`; otherwise → `GenUiBlock`.
+
+**Error handling**:
+- `GenUiBoundary` (React class Error Boundary) wraps every chart component; on render error it falls back to `fallback_text` + findings as plain text — chat window never blanks.
+- `isError` from polling `useQuery` is watched via `useEffect`; on network failure the error message is committed directly to the chat message slot.
+
+### GenUI Registry
+
+`GenUiRegistry.tsx` maps `component_id` strings to lazily-loaded React components via `next/dynamic` (all `ssr: false`):
+
+| component_id | Component | Agent | Chart type |
+|---|---|---|---|
+| `CashFlowChart` | `command-center/CashFlowChart.tsx` | D | Recharts `ComposedChart` (area + line) |
+| `BudgetWatchdogMeter` | `command-center/BudgetWatchdogMeter.tsx` | E | Recharts `RadialBarChart` half-gauge |
+| `TaxLiabilityDonut` | `intelligence/TaxLiabilityDonut.tsx` | F | Recharts `PieChart` concentric donut |
+| `BankabilityScoreRadar` | `intelligence/BankabilityScoreRadar.tsx` | G | Recharts `RadarChart` 4-axis |
+| `DuplicateInvoiceAlert` | `alerts/DuplicateInvoiceAlert.tsx` | E (legacy) | Alert card |
+| `AuditorInsights` | `intelligence/AuditorInsights.tsx` | F (legacy) | Insight card |
+| `CreditStrategy` | `intelligence/CreditStrategy.tsx` | G (legacy) | Score card |
+
+Legacy entries are kept so cached `InsightArtifact` documents with old `component_id` values continue to render correctly.
+
 ### Key Components
 
 | Component | Purpose |
 |---|---|
+| `intelligence/AgentChatWindow.tsx` | Chat UI: query dispatch, CoVe animation, polling, composite/legacy routing |
+| `intelligence/CoveTimeline.tsx` | 3-phase CoVe verification stepper animation |
+| `intelligence/GenUiRegistry.tsx` | `next/dynamic` registry mapping `component_id` → React component |
+| `intelligence/CompositeInsightBlock.tsx` | Layout wrapper: findings badges left + chart right; prop validation + GenUiBoundary |
+| `intelligence/CompositeInsightSkeleton.tsx` | `animate-pulse` skeleton matching composite 2-panel layout; shown during polling |
+| `intelligence/GenUiBoundary.tsx` | React class Error Boundary; catches chart render crashes; shows fallback_text + findings |
+| `intelligence/TaxLiabilityDonut.tsx` | Agent F: concentric Recharts donut (VAT/CIT outer ring + ETR threshold inner ring) |
+| `command-center/BudgetWatchdogMeter.tsx` | Agent E: Recharts half-circle gauge + HMM state probability bars |
+| `intelligence/BankabilityScoreRadar.tsx` | Agent G: Recharts 4-axis radar; sub-scores normalised to 0-100 for equal axes |
+| `command-center/CashFlowChart.tsx` | Agent D: Recharts ComposedChart with actual/forecast areas and confidence bounds |
 | `command-center/AiActionCenter.tsx` | AI action approval/rejection panel |
-| `command-center/CashFlowChart.tsx` | Cash flow trend chart (Recharts) |
 | `command-center/IntelligenceInsights.tsx` | Summary of latest agent outputs |
-| `intelligence/AuditorInsights.tsx` | Agent F tax audit results display |
+| `intelligence/AuditorInsights.tsx` | Agent F tax audit results display (legacy card) |
 | `intelligence/ComplianceChecklist.tsx` | KRA compliance status list |
 | `intelligence/CoreReports.tsx` | Links to financial reports |
 | `intelligence/StrategicForecast.tsx` | Agent G bankability score + forecast chart |
 | `receivables/AgentStatus.tsx` | Real-time agent run status badges |
 | `receivables/InvoiceTable.tsx` | Sortable/filterable invoice list |
 | `payables/DepartmentBudgets.tsx` | Budget utilisation by department |
-| `alerts/DuplicateInvoiceAlert.tsx` | Agent E duplicate detection alert card |
+| `alerts/DuplicateInvoiceAlert.tsx` | Agent E duplicate detection alert card (legacy) |
 | `dashboard/KpiCard.tsx` | Reusable KPI stat card |
 | `dashboard/Sidebar.tsx` | Navigation sidebar |
 | `dashboard/DashboardLayout.tsx` | Dashboard shell with sidebar + top nav |
@@ -835,7 +941,12 @@ All routes are registered in `src/main.py` under `/api/v1/` prefix.
 
 | File | Purpose |
 |---|---|
-| `lib/api/client.ts` | Axios instance pointed at `NEXT_PUBLIC_API_URL` |
+| `lib/api/http-client.ts` | Axios singleton: Bearer token injection, 401 silent refresh, POST idempotency key |
+| `lib/api/endpoints.ts` | Typed URL constants (`INTELLIGENCE.CONVERSATION`, `INTELLIGENCE.CONVERSATION_STATUS`, etc.) |
+| `lib/api/intelligence.ts` | `dispatchConversation`, `checkConversationStatus`; `KeyFinding` + `GenUIPayload` interfaces |
+| `lib/auth/auth-context.tsx` | React auth context: `user`, `isAuthenticated`, `login`, `logout` |
+| `lib/auth/token-manager.ts` | localStorage token CRUD, `isTokenExpired`, `fg_session` cookie for Next.js middleware |
+| `lib/hooks/useRole.ts` | `hasRole(minRole)` RBAC helper using 5-tier role hierarchy |
 | `lib/utils/cn.ts` | `clsx` + `tailwind-merge` class name helper |
 | `components/layouts/Providers.tsx` | TanStack Query `QueryClientProvider` |
 
@@ -1150,6 +1261,24 @@ RABBITMQ_PASSWORD=finguard
 
 **File**: `domains/intelligence/services/tax_rag_service.py`
 
+### 17. CompositeGenUIPayload — Findings + Visualisation Split
+
+**Pattern**: Each chart-producing agent (D, E, F, G) builds a `CompositeGenUIPayload` with two sections: `props` (deterministic chart data) and `findings: list[KeyFinding]` (LLM-generated metric badges). `to_gen_ui_payload()` merges findings into `props["findings"]` before the payload reaches `OrchestratorState`, so no schema changes are required downstream. The React layer detects a non-empty `findings` array and renders a `CompositeInsightBlock` (two-column: badges left, chart right) instead of the single-component `GenUiBlock`.
+
+**Files**: `domains/intelligence/schemas.py` (`CompositeGenUIPayload`, `KeyFinding`); `agents/d_forecaster.py`, `e_watchdog.py`, `f_auditor.py`, `g_reporter.py`; `frontend/src/components/dashboard/intelligence/CompositeInsightBlock.tsx`
+
+### 18. React Error Boundary for GenUI Components
+
+**Pattern**: `GenUiBoundary` (a React class component) wraps every chart component rendered inside `CompositeInsightBlock`. If a chart crashes during render (malformed props, Recharts edge case, missing data), `getDerivedStateFromError` sets `hasError=true` and the boundary renders the payload's `fallback_text` plus all `findings` badges as plain text — the chat window never goes blank. The error is logged to the console with the `component_id` and React component stack for debugging.
+
+**File**: `frontend/src/components/dashboard/intelligence/GenUiBoundary.tsx`
+
+### 19. Composite Loading Skeleton
+
+**Pattern**: While the polling `useQuery` is waiting for `status: "completed"`, `AgentBubble` renders `CompositeInsightSkeleton` in place of the text card. The skeleton mirrors the two-panel composite layout (4 badge placeholders left, a chart card with header + body + text rows right) using Tailwind `animate-pulse`. This gives users a layout-accurate loading affordance rather than generic pulse bars. It is controlled by the `isPending` prop derived from `pendingMsgIdRef.current === message.id && stage === "polling"`.
+
+**File**: `frontend/src/components/dashboard/intelligence/CompositeInsightSkeleton.tsx`
+
 ---
 
 ## 15. Celery Tasks
@@ -1251,19 +1380,19 @@ ENABLE_OUTBOX_PROJECTOR=true         # Starts PostgreSQL outbox → MongoDB proj
 
 ## Agent Summary Table
 
-| Agent | Name | Status | Core Algorithm | Context Key Written | Hub TTL |
-|---|---|---|---|---|---|
-| A | Invoice Generator | ✅ Complete | Gemini structured extraction | `extracted_invoice` | 1h |
-| B | Transaction Classifier | ✅ Complete | Gemini zero-shot + batch Celery pipeline | `classified_transactions` | 1h |
-| C | Reconciler | ✅ Complete | Exact match + Gemini semantic scoring; atomic transaction | `reconciliation_report` | 10m |
-| D | Cash-Flow Forecaster | ✅ Complete | Holt-Winters + regime detection + CoVe schema-masked SQL | `forecast` | 1h |
-| E | Budget Watchdog | ✅ Complete | HMM + IsolationForest + rapidfuzz + AML flag | `watchdog_result` | 30m |
-| F | Tax Auditor | ✅ Complete | Deterministic Kenya tax + pgvector RAG + AML flag | `tax_audit_result` | 1d |
-| G | Credit Strategist | ✅ Complete | Holt-Winters + bankability score + Gemini NLG | `credit_strategy_result` | 1d |
-| H | Financial Advisor | ✅ Complete | Gemini multi-step reasoning + RBAC clip | `advice` | 1h |
-| I | External Integrator | ✅ Complete | httpx M-Pesa / CBK FX / Metropol / KRA + mock fallbacks | `external_data` | 1h |
-| J | Executive Summarizer | ✅ Complete | Gemini context distillation ≤5 bullets + locale-aware | `executive_summary` | 30m |
+| Agent | Name | Status | Core Algorithm | Context Key Written | GenUI component_id | Hub TTL |
+|---|---|---|---|---|---|---|
+| A | Invoice Generator | ✅ Complete | Gemini structured extraction | `extracted_invoice` | — | 1h |
+| B | Transaction Classifier | ✅ Complete | Gemini zero-shot + batch Celery pipeline | `classified_transactions` | — | 1h |
+| C | Reconciler | ✅ Complete | Exact match + Gemini semantic scoring; atomic transaction | `reconciliation_report` | — | 10m |
+| D | Cash-Flow Forecaster | ✅ Complete | Holt-Winters + regime detection + CoVe schema-masked SQL | `forecast` | `CashFlowChart` | 1h |
+| E | Budget Watchdog | ✅ Complete | HMM + IsolationForest + rapidfuzz + AML flag | `watchdog_result` | `BudgetWatchdogMeter` | 30m |
+| F | Tax Auditor | ✅ Complete | Deterministic Kenya tax + pgvector RAG + AML flag | `tax_audit_result` | `TaxLiabilityDonut` | 1d |
+| G | Credit Strategist | ✅ Complete | Holt-Winters + bankability score + Gemini NLG | `credit_strategy_result` | `BankabilityScoreRadar` | 1d |
+| H | Financial Advisor | ✅ Complete | Gemini multi-step reasoning + RBAC clip | `advice` | — | 1h |
+| I | External Integrator | ✅ Complete | httpx M-Pesa / CBK FX / Metropol / KRA + mock fallbacks | `external_data` | — | 1h |
+| J | Executive Summarizer | ✅ Complete | Gemini context distillation ≤5 bullets + locale-aware | `executive_summary` | — | 30m |
 
 ---
 
-*Last updated: 2026-06-04*
+*Last updated: 2026-06-12*

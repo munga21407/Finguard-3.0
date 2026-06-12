@@ -30,6 +30,8 @@ import { Send, Loader2, Bot, User, Sparkles, GitBranch, AlertTriangle, RefreshCw
 import { cn } from "@/lib/utils/cn";
 import { CoveTimeline } from "./CoveTimeline";
 import GenUiRegistry from "./GenUiRegistry";
+import { CompositeInsightBlock } from "./CompositeInsightBlock";
+import { CompositeInsightSkeleton } from "./CompositeInsightSkeleton";
 import { useRole } from "@/lib/hooks/useRole";
 import {
   dispatchConversation,
@@ -248,7 +250,7 @@ export function AgentChatWindow() {
   });
 
   // ── Status polling query ───────────────────────────────────────────────────
-  const { data: statusData } = useQuery({
+  const { data: statusData, isError: isPollingError } = useQuery({
     queryKey: ["chat-status", activeSessionId],
     queryFn: () => checkConversationStatus(activeSessionId!),
     enabled: stage === "polling" && !!activeSessionId,
@@ -260,6 +262,18 @@ export function AgentChatWindow() {
     staleTime: 1_000,
     retry: false,
   });
+
+  // ── Polling network error → commit error message ──────────────────────────
+  useEffect(() => {
+    if (isPollingError && stage === "polling") {
+      commitAgentMessage(
+        "Unable to reach the agent status endpoint. Please check your connection and retry.",
+        false,
+        true
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPollingError]);
 
   // ── Resolve status → commit message ───────────────────────────────────────
   useEffect(() => {
@@ -533,37 +547,40 @@ function AgentBubble({ message, isPending, canAct }: { message: ChatMessage; isP
       {/* ── GenUI blocks — bypasses text renderer ──────────────────────────── */}
       {!isPending && hasGenUi && (
         <div className="flex flex-col gap-3">
-          {message.genUiPayloads!.map((payload, i) => (
-            <GenUiBlock key={i} payload={payload} canAct={canAct} />
-          ))}
+          {message.genUiPayloads!.map((payload, i) => {
+            const findings = payload.props["findings"];
+            const isComposite = Array.isArray(findings) && findings.length > 0;
+            return isComposite
+              ? <CompositeInsightBlock key={i} payload={payload} canAct={canAct} />
+              : <GenUiBlock key={i} payload={payload} canAct={canAct} />;
+          })}
         </div>
       )}
 
-      {/* ── Text content card — shown when text exists alongside or alone ─── */}
-      {(!hasGenUi || hasText) && (
+      {/* ── Composite skeleton while polling ──────────────────────────────── */}
+      {isPending && (
+        <div data-testid="composite-skeleton">
+          <CompositeInsightSkeleton />
+        </div>
+      )}
+
+      {/* ── Text content card — only when settled ─────────────────────────── */}
+      {!isPending && (!hasGenUi || hasText) && (
         <div className={cn(
           "bg-lf-surface-container-lowest rounded-xl rounded-tl-sm border shadow-sm p-4 min-w-0",
           message.isError ? "border-lf-error/20" : "border-lf-outline-variant/20"
         )}>
-          {isPending ? (
-            <div className="flex flex-col gap-2">
-              <div className="h-2.5 w-48 bg-lf-surface-container-highest rounded-full animate-pulse" />
-              <div className="h-2.5 w-36 bg-lf-surface-container-highest rounded-full animate-pulse" />
-              <div className="h-2.5 w-44 bg-lf-surface-container-highest rounded-full animate-pulse" />
-            </div>
-          ) : (
-            <div className="min-w-0 overflow-hidden">
-              {hasText ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                  {message.content}
-                </ReactMarkdown>
-              ) : (
-                <p className="text-sm text-lf-on-surface-variant italic">
-                  Agent D completed the analysis above.
-                </p>
-              )}
-            </div>
-          )}
+          <div className="min-w-0 overflow-hidden">
+            {hasText ? (
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                {message.content}
+              </ReactMarkdown>
+            ) : (
+              <p className="text-sm text-lf-on-surface-variant italic">
+                Agent D completed the analysis above.
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>

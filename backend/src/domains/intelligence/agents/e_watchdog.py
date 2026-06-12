@@ -471,7 +471,7 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
         # ── CompositeGenUIPayload ─────────────────────────────────────────
         candidate: dict = state["context"].get("candidate_invoice", {})
         composite = CompositeGenUIPayload(
-            component_id="DuplicateInvoiceAlert",
+            component_id="BudgetWatchdogMeter",
             props={
                 "anomaly_detected": anomaly_detected,
                 "anomaly_score": anomaly_score,
@@ -480,6 +480,7 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
                 "duplicate_match_score": dup_score,
                 "vc_id": vc_id,
                 "current_state": current_state,
+                "state_probabilities": dict(zip(STATE_LABELS, state_probs.tolist())),
                 "summary": summary,
                 **({"invoice_a": candidate} if candidate else {}),
             },

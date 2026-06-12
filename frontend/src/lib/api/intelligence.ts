@@ -13,11 +13,21 @@ import { ENDPOINTS } from "@/lib/api/endpoints";
 
 // ── Generative UI contract ────────────────────────────────────────────────────
 
+/** Sprint 6 key-finding badge emitted by CompositeGenUIPayload on the backend. */
+export interface KeyFinding {
+  metric: string;
+  value: string;
+}
+
 /**
  * A structured UI payload emitted by an agent and embedded in the chat stream.
  * `component_id` must match a key in GenUiRegistry; `props` are forwarded
  * verbatim to the mounted component; `fallback_text` is shown when the
  * component cannot be resolved or rendered.
+ *
+ * Sprint 6: composite agents also embed `findings: KeyFinding[]` inside `props`
+ * via `CompositeGenUIPayload.to_gen_ui_payload()`.  The chat router uses the
+ * presence of that key to select `CompositeInsightBlock` instead of `GenUiBlock`.
  */
 export interface GenUIPayload {
   component_id: string;
