@@ -23,7 +23,6 @@ frontend/dist/
 frontend/build/
 frontend/coverage/
 frontend/.eslintcache
-frontend/next-env.d.ts
 frontend/*.tsbuildinfo
 
 # ─── Backend (Python / FastAPI) ─────────────────────────────────────────────
@@ -73,4 +72,3 @@ infrastructure/nginx/certs/
 *.tmp
 .cache/
 tmp/
-SYSTEM_OVERVIEW.md
