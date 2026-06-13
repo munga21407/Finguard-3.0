@@ -62,7 +62,8 @@ export function CompositeInsightBlock({ payload, canAct }: CompositeInsightBlock
 
   // Strip findings from props before forwarding to the visualization component
   // so individual components don't receive an unknown prop they can't handle.
-  const { findings: _stripped, ...vizProps } = payload.props;
+  const vizProps: Record<string, unknown> = { ...payload.props };
+  delete vizProps.findings;
 
   const Component = GenUiRegistry[payload.component_id];
 

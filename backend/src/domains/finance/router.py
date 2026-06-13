@@ -3,10 +3,12 @@ import hmac
 import uuid
 from typing import Annotated, Any
 
+import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
+from src.core.exceptions import UnprocessableError
 from src.domains.finance.schemas import (
     BudgetCreate,
     BudgetResponse,
@@ -22,10 +24,11 @@ from src.domains.finance.schemas import (
     PaymentResponse,
 )
 from src.domains.finance.service import FinanceService
-from src.domains.identity.dependencies import CurrentUser
+from src.domains.identity.dependencies import RequireFinanceRead, RequireFinanceWrite
 from src.infrastructure.database.postgres import get_db
 
 router = APIRouter()
+logger = structlog.get_logger(__name__)
 
 DBSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -74,7 +77,7 @@ async def verify_mpesa_signature(
 
 @router.post("/ledger", response_model=LedgerEntryResponse, status_code=201)
 async def post_ledger_entry(
-    data: LedgerEntryCreate, db: DBSession, _: CurrentUser
+    data: LedgerEntryCreate, db: DBSession, _: RequireFinanceWrite
 ) -> LedgerEntryResponse:
     entry = await FinanceService(db).post_ledger_entry(data)
     return LedgerEntryResponse.model_validate(entry)
@@ -85,7 +88,7 @@ async def post_ledger_entry(
 @router.get("/invoices", response_model=list[InvoiceResponse])
 async def list_invoices(
     db: DBSession,
-    _: CurrentUser,
+    _: RequireFinanceRead,
     customer_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> list[InvoiceResponse]:
     invoices = await FinanceService(db).list_invoices(customer_id=customer_id)
@@ -93,14 +96,16 @@ async def list_invoices(
 
 
 @router.get("/invoices/{invoice_id}", response_model=InvoiceResponse)
-async def get_invoice(invoice_id: uuid.UUID, db: DBSession, _: CurrentUser) -> InvoiceResponse:
+async def get_invoice(
+    invoice_id: uuid.UUID, db: DBSession, _: RequireFinanceRead
+) -> InvoiceResponse:
     invoice = await FinanceService(db).get_invoice(invoice_id)
     return InvoiceResponse.model_validate(invoice)
 
 
 @router.post("/invoices", response_model=InvoiceResponse, status_code=201)
 async def create_invoice(
-    data: InvoiceCreate, db: DBSession, _: CurrentUser
+    data: InvoiceCreate, db: DBSession, _: RequireFinanceWrite
 ) -> InvoiceResponse:
     invoice = await FinanceService(db).create_invoice(data)
     return InvoiceResponse.model_validate(invoice)
@@ -108,7 +113,7 @@ async def create_invoice(
 
 @router.patch("/invoices/{invoice_id}", response_model=InvoiceResponse)
 async def update_invoice(
-    invoice_id: uuid.UUID, data: InvoiceUpdate, db: DBSession, _: CurrentUser
+    invoice_id: uuid.UUID, data: InvoiceUpdate, db: DBSession, _: RequireFinanceWrite
 ) -> InvoiceResponse:
     invoice = await FinanceService(db).update_invoice(invoice_id, data)
     return InvoiceResponse.model_validate(invoice)
@@ -116,7 +121,7 @@ async def update_invoice(
 
 @router.post("/invoices/{invoice_id}/pay", response_model=InvoiceResponse)
 async def mark_invoice_paid(
-    invoice_id: uuid.UUID, db: DBSession, _: CurrentUser
+    invoice_id: uuid.UUID, db: DBSession, _: RequireFinanceWrite
 ) -> InvoiceResponse:
     invoice = await FinanceService(db).mark_invoice_paid(invoice_id)
     return InvoiceResponse.model_validate(invoice)
@@ -126,7 +131,7 @@ async def mark_invoice_paid(
 
 @router.post("/expenses", response_model=ExpenseResponse, status_code=201)
 async def create_expense(
-    data: ExpenseCreate, db: DBSession, _: CurrentUser
+    data: ExpenseCreate, db: DBSession, _: RequireFinanceWrite
 ) -> ExpenseResponse:
     expense = await FinanceService(db).create_expense(data)
     return ExpenseResponse.model_validate(expense)
@@ -135,7 +140,7 @@ async def create_expense(
 @router.get("/expenses", response_model=list[ExpenseResponse])
 async def list_expenses(
     db: DBSession,
-    _: CurrentUser,
+    _: RequireFinanceRead,
     limit: int = Query(default=100, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[ExpenseResponse]:
@@ -158,8 +163,15 @@ async def mpesa_callback(
     HMAC-SHA256 signature is verified by the verify_mpesa_signature dependency
     before this handler executes. Returns 200 immediately to satisfy Daraja's
     ACK requirement regardless of downstream processing outcome.
+
+    A malformed or incomplete callback is rejected (not persisted) but still
+    ACKed — retrying an unprocessable payload would never succeed, so we record
+    the rejection in the logs rather than asking Daraja to resend it.
     """
-    await FinanceService(db).process_mpesa_callback(payload)
+    try:
+        await FinanceService(db).process_mpesa_callback(payload)
+    except UnprocessableError as exc:
+        logger.warning("mpesa: callback rejected as unprocessable", detail=exc.detail)
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
@@ -169,7 +181,7 @@ async def mpesa_callback(
 async def record_cash_payment(
     data: PaymentCreate,
     db: DBSession,
-    current_user: CurrentUser,
+    current_user: RequireFinanceWrite,
 ) -> PaymentResponse:
     payment = await FinanceService(db).record_cash_payment(data, current_user)
     return PaymentResponse.model_validate(payment)
@@ -179,13 +191,13 @@ async def record_cash_payment(
 
 @router.post("/budgets", response_model=BudgetResponse, status_code=201)
 async def create_budget(
-    data: BudgetCreate, db: DBSession, _: CurrentUser
+    data: BudgetCreate, db: DBSession, _: RequireFinanceWrite
 ) -> BudgetResponse:
     budget = await FinanceService(db).create_budget(data)
     return BudgetResponse.model_validate(budget)
 
 
 @router.get("/budgets", response_model=list[BudgetResponse])
-async def list_budgets(db: DBSession, _: CurrentUser) -> list[BudgetResponse]:
+async def list_budgets(db: DBSession, _: RequireFinanceRead) -> list[BudgetResponse]:
     budgets = await FinanceService(db).list_budgets()
     return [BudgetResponse.model_validate(b) for b in budgets]

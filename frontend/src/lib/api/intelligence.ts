@@ -83,6 +83,53 @@ export interface ConversationStatusResponse {
   answer?: string;
 }
 
+// ── Agent A — invoice extraction ──────────────────────────────────────────────
+
+/** One extracted line item (mirrors backend ExtractedLineItem). */
+export interface ExtractedLineItem {
+  description: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+}
+
+/** Agent A's structured invoice extraction (mirrors backend ExtractedInvoice). */
+export interface ExtractedInvoice {
+  vendor: string | null;
+  customer: string | null;
+  invoice_number: string | null;
+  issue_date: string | null;
+  due_date: string | null;
+  currency: string;
+  subtotal: number | null;
+  tax: number | null;
+  total: number | null;
+  line_items: ExtractedLineItem[];
+  confidence: number;
+}
+
+interface IntentResponse {
+  session_id: string;
+  intent: string;
+  invoice_payload: ExtractedInvoice | null;
+  hub_artifact_id: string | null;
+}
+
+/**
+ * Run Agent A over a free-text description and return the structured invoice
+ * extraction (or null when the model could not extract one). The caller maps
+ * this into the editable invoice form for review before saving.
+ */
+export async function extractInvoice(
+  userInput: string
+): Promise<ExtractedInvoice | null> {
+  const { data } = await httpClient.post<IntentResponse>(
+    ENDPOINTS.INTELLIGENCE.INTENT,
+    { user_input: userInput, intent: "GENERATE_INVOICE" }
+  );
+  return data.invoice_payload;
+}
+
 // ── API functions ─────────────────────────────────────────────────────────────
 
 /**

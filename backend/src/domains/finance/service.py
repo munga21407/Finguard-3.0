@@ -1,7 +1,9 @@
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
+import structlog
+from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,12 +33,14 @@ from src.domains.finance.schemas import (
     InvoiceUpdate,
     LedgerEntryCreate,
     MpesaCallbackPayload,
+    MpesaStkCallback,
     MpesaTransactionResponse,
     PaymentCreate,
 )
 from src.domains.finance.types import VaultType
 from src.domains.identity.models import User
-from src.infrastructure.message_bus.rabbitmq_publisher import publish
+
+logger = structlog.get_logger(__name__)
 
 
 class FinanceService:
@@ -84,11 +88,15 @@ class FinanceService:
         return invoice
 
     async def mark_invoice_paid(self, invoice_id: uuid.UUID) -> Invoice:
-        from datetime import datetime
-
-        invoice = await self._invoice_repo.get_by_id(invoice_id)
+        invoice = await self._invoice_repo.get_by_id_for_update(invoice_id)
         if not invoice:
             raise NotFoundError("Invoice not found")
+        # Settle the monetary fields too — not just status/paid_at.  Leaving
+        # amount_paid/balance_due untouched would violate the
+        # ck_invoices_balance_due_consistent constraint (balance_due =
+        # total - amount_paid) and leave a "paid" invoice with a non-zero balance.
+        invoice.amount_paid = invoice.total
+        invoice.balance_due = Decimal("0")
         invoice.status = InvoiceStatus.PAID
         invoice.paid_at = datetime.now(UTC)
         invoice = await self._invoice_repo.save(invoice)
@@ -120,23 +128,30 @@ class FinanceService:
             },
         )
 
-        await self._session.commit()
-        await publish(
-            "finguard.events",
-            "expenses.created",
-            {
-                "event_name": "expenses.created",
-                "emitted_at": datetime.now(UTC).isoformat(),
-                "payload": {
-                    "expense_id": str(expense.id),
-                    "amount": float(expense.amount),
-                    "category": expense.category,
-                    "vault": expense.vault.value,
-                    "occurred_at": expense.created_at.isoformat(),
-                    "source": "database.expenses",
+        # Emit via the transactional outbox — written in the SAME transaction as
+        # the expense INSERT and budget UPDATE.  Previously this published to
+        # RabbitMQ *after* commit, so a broker outage silently dropped the event
+        # while the database row persisted.  The projector now delivers it with
+        # at-least-once semantics.
+        self._session.add(
+            OutboxEvent(
+                exchange="finguard.events",
+                routing_key="expenses.created",
+                payload={
+                    "event_name": "expenses.created",
+                    "emitted_at": datetime.now(UTC).isoformat(),
+                    "payload": {
+                        "expense_id": str(expense.id),
+                        "amount": float(expense.amount),
+                        "category": expense.category,
+                        "vault": expense.vault.value,
+                        "occurred_at": expense.created_at.isoformat(),
+                        "source": "database.expenses",
+                    },
                 },
-            },
+            )
         )
+        await self._session.commit()
         return expense
 
     async def list_expenses(self, limit: int = 100, offset: int = 0) -> list[Expense]:
@@ -148,58 +163,100 @@ class FinanceService:
         self, payload: MpesaCallbackPayload
     ) -> MpesaTransactionResponse | None:
         """
-        Parse a Daraja STK Push callback, persist the transaction, and emit
-        an `mpesa.reconciled` event for downstream agents.
+        Parse a Daraja STK Push callback, persist the transaction, and enqueue
+        an ``mpesa.reconciled`` event via the transactional outbox.
 
-        Returns None when the callback signals a failed payment (ResultCode != 0).
+        Returns:
+            MpesaTransactionResponse — on a successful, fully-formed callback
+                (or the existing record when the receipt was already processed).
+            None — when the callback reports a failed payment (ResultCode != 0).
+
+        Raises:
+            UnprocessableError — when the envelope is malformed, or a *success*
+                callback is missing the receipt number, amount, or phone.  The
+                caller (router) ACKs Daraja regardless; we never persist a
+                transaction with blank identifiers or a zero amount.
         """
-        body = payload.Body
-        stk = body.get("stkCallback", {})
-        result_code: int = stk.get("ResultCode", -1)
-        if result_code != 0:
-            # Failed payment — nothing to persist
+        # ── 1. Validate the envelope shape with the strict schema ────────────
+        stk_raw = payload.Body.get("stkCallback")
+        if not isinstance(stk_raw, dict):
+            raise UnprocessableError("Malformed M-Pesa callback: missing 'stkCallback' object")
+        try:
+            stk = MpesaStkCallback.model_validate(stk_raw)
+        except ValidationError as exc:
+            raise UnprocessableError(
+                f"Malformed M-Pesa stkCallback: {exc.error_count()} validation error(s)"
+            ) from exc
+
+        # ── 2. Non-success callbacks: nothing to persist ─────────────────────
+        if stk.ResultCode != 0:
+            logger.info(
+                "mpesa: non-success callback ignored",
+                result_code=stk.ResultCode,
+                checkout_request_id=stk.CheckoutRequestID,
+            )
             return None
 
-        # Extract fields from CallbackMetadata.Item list
-        items: dict[str, str | int | float] = {
-            item["Name"]: item.get("Value", "")
-            for item in stk.get("CallbackMetadata", {}).get("Item", [])
+        # ── 3. Require the metadata a real successful payment always carries ──
+        items: dict[str, str | int | float | None] = {
+            item.Name: item.Value
+            for item in (stk.CallbackMetadata.Item if stk.CallbackMetadata else [])
         }
-        trans_id = str(items.get("MpesaReceiptNumber", ""))
-        amount = Decimal(str(items.get("Amount", 0)))
-        phone = str(items.get("PhoneNumber", ""))
-        bill_ref = stk.get("CheckoutRequestID", "")
+        receipt = items.get("MpesaReceiptNumber")
+        amount_raw = items.get("Amount")
+        phone_raw = items.get("PhoneNumber")
+        if not receipt or amount_raw is None or not phone_raw:
+            raise UnprocessableError(
+                "Successful M-Pesa callback missing required metadata "
+                "(MpesaReceiptNumber, Amount, or PhoneNumber)"
+            )
+        try:
+            amount = Decimal(str(amount_raw))
+        except (InvalidOperation, ValueError) as exc:
+            raise UnprocessableError(
+                f"M-Pesa callback has non-numeric Amount: {amount_raw!r}"
+            ) from exc
+        if amount <= 0:
+            raise UnprocessableError(f"M-Pesa callback Amount must be positive, got {amount}")
 
-        # Idempotent: skip if already recorded
+        trans_id = str(receipt)
+        phone = str(phone_raw)
+        bill_ref = stk.CheckoutRequestID
+
+        # ── 4. Idempotent: skip if this receipt was already recorded ─────────
         existing = await self._mpesa_repo.get_by_trans_id(trans_id)
         if existing:
+            logger.info("mpesa: duplicate callback ignored", trans_id=trans_id)
             return MpesaTransactionResponse.model_validate(existing)
 
+        # ── 5. Persist transaction + outbox event in one transaction ─────────
         txn = MpesaTransaction(
             trans_id=trans_id,
             amount=amount,
             phone=phone,
             bill_ref=bill_ref,
             vault=VaultType.MPESA,
+            raw_payload=payload.Body,  # retained for audit / dispute resolution
         )
         txn = await self._mpesa_repo.create(txn)
-        await self._session.commit()
-
-        await publish(
-            "finguard.events",
-            "mpesa.reconciled",
-            {
-                "event_name": "mpesa.reconciled",
-                "emitted_at": datetime.now(UTC).isoformat(),
-                "payload": {
-                    "trans_id": txn.trans_id,
-                    "amount": float(txn.amount),
-                    "phone": txn.phone,
-                    "bill_ref": txn.bill_ref,
-                    "vault": txn.vault.value,
+        self._session.add(
+            OutboxEvent(
+                exchange="finguard.events",
+                routing_key="mpesa.reconciled",
+                payload={
+                    "event_name": "mpesa.reconciled",
+                    "emitted_at": datetime.now(UTC).isoformat(),
+                    "payload": {
+                        "trans_id": txn.trans_id,
+                        "amount": float(txn.amount),
+                        "phone": txn.phone,
+                        "bill_ref": txn.bill_ref,
+                        "vault": txn.vault.value,
+                    },
                 },
-            },
+            )
         )
+        await self._session.commit()
         return MpesaTransactionResponse.model_validate(txn)
 
     # ── Invoices (extra reads) ─────────────────────────────────────────────────
@@ -236,8 +293,12 @@ class FinanceService:
         All mutations (invoice update + payment row + outbox event) are flushed
         together and committed in a single transaction — no partial writes are
         possible even if the process crashes after commit returns.
+
+        The invoice row is locked FOR UPDATE before its balance is read so two
+        concurrent payments against the same invoice serialise; without the lock
+        both could read the same balance_due and over-credit the invoice.
         """
-        invoice = await self._invoice_repo.get_by_id(data.invoice_id)
+        invoice = await self._invoice_repo.get_by_id_for_update(data.invoice_id)
         if not invoice:
             raise NotFoundError("Invoice not found")
 
@@ -252,6 +313,10 @@ class FinanceService:
         if invoice.balance_due == Decimal("0"):
             invoice.status = InvoiceStatus.PAID
             invoice.paid_at = datetime.now(UTC)
+        else:
+            # Partial settlement — reflect it in the status so the dashboard and
+            # Agent E watchdog don't treat a part-paid invoice as still fully open.
+            invoice.status = InvoiceStatus.PARTIALLY_PAID
 
         # Persist the payment record
         payment = Payment(

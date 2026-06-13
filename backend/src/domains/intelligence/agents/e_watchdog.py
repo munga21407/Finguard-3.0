@@ -23,10 +23,10 @@ from typing import Any
 
 import numpy as np
 from langchain_core.messages import AIMessage
-from pydantic import BaseModel, Field as PydanticField
+from pydantic import BaseModel
+from pydantic import Field as PydanticField
 from rapidfuzz import fuzz
 from sklearn.ensemble import IsolationForest  # type: ignore[import-untyped]
-
 from sqlalchemy import text
 
 from src.core.config import settings
@@ -47,7 +47,7 @@ from src.domains.intelligence.schemas import (
 )
 from src.domains.intelligence.security.vc_issuer import issue_vc
 from src.domains.intelligence.tools.event_publisher import make_event_publisher
-from src.domains.intelligence.tools.sql_executor import make_sql_executor
+from src.domains.intelligence.tools.sql_executor import execute_readonly_sql
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
 # ---------------------------------------------------------------------------
@@ -273,29 +273,31 @@ async def _fetch_spending_ratios(
     return ratios if ratios else [0.5]
 
 
-async def _fetch_recent_amounts(session: Any, limit: int = 50) -> list[float]:
-    """Fetch recent ledger debit amounts for IsolationForest training."""
-    executor = make_sql_executor(session)
-    rows = await executor.ainvoke({"query": f"""
+async def _fetch_recent_amounts(limit: int = 50) -> list[float]:
+    """Fetch recent ledger debit amounts for IsolationForest training.
+
+    Runs under the read-only role (ReadOnlyAsyncSessionLocal) for defence in
+    depth, not the watchdog's read-write session.
+    """
+    rows = await execute_readonly_sql(f"""
         SELECT amount
         FROM ledger_entries
         WHERE transaction_type = 'debit'
         ORDER BY created_at DESC
         LIMIT {limit}
-    """})
+    """)
     return [float(r["amount"]) for r in rows]
 
 
-async def _fetch_recent_invoices(session: Any, limit: int = 30) -> list[dict[str, Any]]:
-    """Fetch recent invoice metadata for duplicate detection."""
-    executor = make_sql_executor(session)
-    rows = await executor.ainvoke({"query": f"""
+async def _fetch_recent_invoices(limit: int = 30) -> list[dict[str, Any]]:
+    """Fetch recent invoice metadata for duplicate detection (read-only role)."""
+    rows = await execute_readonly_sql(f"""
         SELECT invoice_number, total AS amount,
                customer_id::text AS vendor
         FROM invoices
         ORDER BY created_at DESC
         LIMIT {limit}
-    """})
+    """)
     return [dict(r) for r in rows]
 
 
@@ -313,8 +315,8 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
         # Agent E creates and tears down its own session (thread-isolated pool)
         async with AsyncSessionLocal() as session:
             ratios = await _fetch_spending_ratios(account_id, session, period_days)
-            amounts = await _fetch_recent_amounts(session)
-            recent_invoices = await _fetch_recent_invoices(session)
+            amounts = await _fetch_recent_amounts()
+            recent_invoices = await _fetch_recent_invoices()
 
         # ── HMM ──────────────────────────────────────────────────────────────
         state_probs: np.ndarray = _forward_algorithm(ratios)
@@ -480,7 +482,9 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
                 "duplicate_match_score": dup_score,
                 "vc_id": vc_id,
                 "current_state": current_state,
-                "state_probabilities": dict(zip(STATE_LABELS, state_probs.tolist())),
+                "state_probabilities": dict(
+                    zip(STATE_LABELS, state_probs.tolist(), strict=False)
+                ),
                 "summary": summary,
                 **({"invoice_a": candidate} if candidate else {}),
             },

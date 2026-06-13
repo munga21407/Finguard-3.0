@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -25,16 +26,30 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 # Read-only engine for the finguard_readonly PostgreSQL role.
-# Falls back to the main engine when DATABASE_READONLY_URL is not configured.
-if not settings.DATABASE_READONLY_URL:
+# In production DATABASE_READONLY_URL MUST be configured — running LLM-generated
+# (Text-to-SQL) queries against the fully-privileged main engine defeats the
+# defence-in-depth boundary, so we fail closed.  Outside production we fall back
+# to the main engine with a loud warning to keep local dev frictionless.
+def _resolve_readonly_url() -> str:
+    if settings.DATABASE_READONLY_URL:
+        return settings.DATABASE_READONLY_URL
+    if settings.ENVIRONMENT == "production":
+        raise RuntimeError(
+            "DATABASE_READONLY_URL must be set in production. LLM-generated SQL "
+            "(Agent D Text-to-SQL / Agent E watchdog) must run under the "
+            "finguard_readonly role, never the privileged main engine. Run "
+            "infrastructure/db_security.sql and set DATABASE_READONLY_URL."
+        )
     _logger.warning(
-        "DATABASE_READONLY_URL is not set — Agent D (Text-to-SQL / CoVe) will "
-        "execute LLM-generated queries against the fully-privileged main database "
-        "engine. Run `docker compose exec postgres psql -U finguard -d finguard "
-        "-f infrastructure/db_security.sql` then set DATABASE_READONLY_URL to "
-        "enforce the finguard_readonly role boundary."
+        "DATABASE_READONLY_URL is not set — read-only SQL will execute against "
+        "the fully-privileged main database engine. This is allowed only outside "
+        "production. Run infrastructure/db_security.sql and set "
+        "DATABASE_READONLY_URL to enforce the finguard_readonly role boundary."
     )
-_readonly_url = settings.DATABASE_READONLY_URL or settings.DATABASE_URL
+    return settings.DATABASE_URL
+
+
+_readonly_url = _resolve_readonly_url()
 _readonly_engine = create_async_engine(
     _readonly_url,
     pool_pre_ping=True,
@@ -55,8 +70,14 @@ class Base(DeclarativeBase):
 
 
 async def init_db() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Verify database connectivity at startup.
+
+    Schema is owned by Alembic migrations (run as a gated deploy step), NOT by
+    ``create_all`` — auto-creating tables at runtime masks migration drift and
+    can leave a half-formed schema in production.
+    """
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
 
 
 async def close_db() -> None:

@@ -11,7 +11,10 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from src.infrastructure.message_bus.rabbitmq_publisher import publish
+from src.infrastructure.message_bus.rabbitmq_publisher import (
+    BrokerUnavailableError,
+    publish,
+)
 
 ALLOWED_EXCHANGES = frozenset({
     "finguard.events",         # primary domain event bus (finance.transactions.classified, etc.)
@@ -37,7 +40,15 @@ def make_event_publisher(mode: str) -> Any:
             return "Event publishing is disabled in 'insights' mode."
         if exchange not in ALLOWED_EXCHANGES:
             return f"Exchange '{exchange}' is not permitted. Allowed: {sorted(ALLOWED_EXCHANGES)}"
-        await publish(exchange, routing_key, payload)
+        try:
+            await publish(exchange, routing_key, payload)
+        except BrokerUnavailableError:
+            # Degrade gracefully rather than crashing the LangGraph node — the
+            # broker is down, but the agent run should still complete.
+            return (
+                f"Event publish to {exchange}/{routing_key} deferred: "
+                "message broker is temporarily unavailable."
+            )
         return f"Event published to {exchange}/{routing_key}"
 
     return publish_event

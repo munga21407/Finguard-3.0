@@ -8,7 +8,7 @@ AI-powered financial operations platform for small-to-medium enterprises, with d
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Next.js 15 Frontend (port 3001)                        │
+│  Next.js 15 Frontend (port 3000)                        │
 │  React 19 · TypeScript · Tailwind · TanStack Query      │
 └──────────────────────┬──────────────────────────────────┘
                        │ HTTP
@@ -131,13 +131,13 @@ DATABASE_READONLY_URL=postgresql+asyncpg://finguard_readonly:<password>@localhos
 
 | Service | URL | Default Credentials |
 |---|---|---|
-| Frontend | http://localhost:3001 | Register or use seeded admin |
+| Frontend | http://localhost:3000 | Register or use seeded admin |
 | Backend API | http://localhost:8000 | — |
 | API Docs (Swagger) | http://localhost:8000/docs | — |
 | RabbitMQ Management | http://localhost:15672 | finguard / finguard_dev_pass |
 | Celery Flower | http://localhost:5555 | admin / admin |
 | Prometheus | http://localhost:9090 | — |
-| Grafana | http://localhost:3000 | admin / $GRAFANA_PASSWORD |
+| Grafana | http://localhost:3001 | admin / $GRAFANA_PASSWORD |
 
 ---
 
@@ -286,7 +286,6 @@ Pre-built Grafana dashboards are in `monitoring/grafana/dashboards/`.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /` | Service alive (always 200) |
-| `GET /api/health` | Full dependency check (PostgreSQL, MongoDB, Redis) |
-| `GET /api/auth/health` | Auth service ready (used by Docker healthcheck) |
-| `GET /metrics` | Prometheus metrics |
+| `GET /health` · `GET /health/live` | Liveness — process is up (always 200) |
+| `GET /health/ready` | Readiness — checks PostgreSQL + Redis (503 when degraded) |
+| `GET /metrics` | Prometheus metrics (Bearer-protected when `METRICS_AUTH_SECRET` is set) |

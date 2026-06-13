@@ -6,16 +6,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domains.crm.schemas import CustomerCreate, CustomerResponse, CustomerUpdate
 from src.domains.crm.service import CRMService
-from src.domains.identity.dependencies import get_current_user
+from src.domains.identity.dependencies import RequireCrmRead, RequireCrmWrite
 from src.infrastructure.database.postgres import get_db
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter()
 
 DBSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 @router.post("/customers", response_model=CustomerResponse, status_code=201)
-async def create_customer(data: CustomerCreate, db: DBSession) -> CustomerResponse:
+async def create_customer(
+    data: CustomerCreate, db: DBSession, _: RequireCrmWrite
+) -> CustomerResponse:
     customer = await CRMService(db).create_customer(data)
     return CustomerResponse.model_validate(customer)
 
@@ -23,6 +25,7 @@ async def create_customer(data: CustomerCreate, db: DBSession) -> CustomerRespon
 @router.get("/customers", response_model=list[CustomerResponse])
 async def list_customers(
     db: DBSession,
+    _: RequireCrmRead,
     limit: int = Query(50, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[CustomerResponse]:
@@ -31,14 +34,16 @@ async def list_customers(
 
 
 @router.get("/customers/{customer_id}", response_model=CustomerResponse)
-async def get_customer(customer_id: uuid.UUID, db: DBSession) -> CustomerResponse:
+async def get_customer(
+    customer_id: uuid.UUID, db: DBSession, _: RequireCrmRead
+) -> CustomerResponse:
     customer = await CRMService(db).get_customer(customer_id)
     return CustomerResponse.model_validate(customer)
 
 
 @router.patch("/customers/{customer_id}", response_model=CustomerResponse)
 async def update_customer(
-    customer_id: uuid.UUID, data: CustomerUpdate, db: DBSession
+    customer_id: uuid.UUID, data: CustomerUpdate, db: DBSession, _: RequireCrmWrite
 ) -> CustomerResponse:
     customer = await CRMService(db).update_customer(customer_id, data)
     return CustomerResponse.model_validate(customer)

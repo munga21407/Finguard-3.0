@@ -40,6 +40,16 @@ class InvoiceRepository:
     async def get_by_id(self, invoice_id: uuid.UUID) -> Invoice | None:
         return await self._session.get(Invoice, invoice_id)
 
+    async def get_by_id_for_update(self, invoice_id: uuid.UUID) -> Invoice | None:
+        """
+        Fetch an invoice with a row-level write lock (SELECT … FOR UPDATE).
+
+        Used by payment application so concurrent payments against the same
+        invoice serialise — preventing a lost-update race where two requests
+        both read the same balance_due and over-credit the invoice.
+        """
+        return await self._session.get(Invoice, invoice_id, with_for_update=True)
+
     async def get_by_number(self, number: str) -> Invoice | None:
         result = await self._session.execute(
             select(Invoice).where(Invoice.invoice_number == number)

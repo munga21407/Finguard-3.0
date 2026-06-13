@@ -16,6 +16,7 @@ class UserUpdate(BaseModel):
     full_name: str | None = None
     role: UserRole | None = None
     is_active: bool | None = None
+    is_verified: bool | None = None
 
 
 class UserResponse(BaseModel):
@@ -43,3 +44,9 @@ class TokenResponse(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+
+
+class LogoutRequest(BaseModel):
+    # Optional: when supplied, the refresh token's jti is also blacklisted so a
+    # stolen refresh token cannot outlive the logout.
+    refresh_token: str | None = None

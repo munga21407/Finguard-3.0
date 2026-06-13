@@ -12,11 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        # pgvector image so the knowledge_base VECTOR table / migrations work.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: finguard
           POSTGRES_PASSWORD: finguard
-          POSTGRES_DB: finguard_test
+          POSTGRES_DB: finguard
         ports: ["5432:5432"]
         options: >-
           --health-cmd pg_isready
@@ -26,6 +27,12 @@ jobs:
       redis:
         image: redis:7
         ports: ["6379:6379"]
+      mongodb:
+        image: mongo:7
+        ports: ["27017:27017"]
+      rabbitmq:
+        image: rabbitmq:3.13-alpine
+        ports: ["5672:5672"]
     defaults:
       run:
         working-directory: backend
@@ -36,6 +43,10 @@ jobs:
           version: "latest"
       - name: Install dependencies
         run: uv sync --all-extras
+      - name: Create test database
+        # conftest derives the test DB by replacing /finguard -> /finguard_test,
+        # so DATABASE_URL must use the base name and finguard_test must exist.
+        run: PGPASSWORD=finguard psql -h localhost -U finguard -d finguard -c "CREATE DATABASE finguard_test;"
       - name: Lint
         run: uv run ruff check src tests
       - name: Type check
@@ -43,11 +54,45 @@ jobs:
       - name: Test
         run: uv run pytest tests/ -v --cov=src --cov-report=xml
         env:
-          DATABASE_URL: postgresql+asyncpg://finguard:finguard@localhost:5432/finguard_test
+          DATABASE_URL: postgresql+asyncpg://finguard:finguard@localhost:5432/finguard
           REDIS_URL: redis://localhost:6379/0
           MONGODB_URL: mongodb://localhost:27017/finguard_test
           RABBITMQ_URL: amqp://guest:guest@localhost:5672//
-          SECRET_KEY: ci-test-secret-key-not-for-production
+          SECRET_KEY: ci-test-secret-key-not-for-production-32
+
+  migration-check:
+    name: Backend — Migrations apply cleanly
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: finguard
+          POSTGRES_PASSWORD: finguard
+          POSTGRES_DB: finguard
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - run: uv sync --all-extras
+      - name: alembic upgrade head
+        run: uv run alembic -c alembic/alembic.ini upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://finguard:finguard@localhost:5432/finguard
+          REDIS_URL: redis://localhost:6379/0
+          MONGODB_URL: mongodb://localhost:27017/finguard
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672//
+          SECRET_KEY: ci-test-secret-key-not-for-production-32
 
   frontend-lint-build:
     name: Frontend — Lint & Build
@@ -65,3 +110,39 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+
+  security-scan:
+    name: Security — SAST, deps & secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      # Secret scanning is a hard gate — credentials must never merge.
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Dependency + SAST scans run report-first (continue-on-error) so a known
+      # unfixable transitive advisory (e.g. the ecdsa Minerva CVE, not
+      # exploitable here with HS256) doesn't block the pipeline. Tighten to
+      # blocking once the backlog is triaged.
+      - name: Python dependency audit (pip-audit)
+        working-directory: backend
+        continue-on-error: true
+        run: uv run --with pip-audit pip-audit
+
+      - name: Python SAST (bandit)
+        working-directory: backend
+        continue-on-error: true
+        run: uv run --with bandit bandit -r src -ll
+
+      - name: Frontend dependency audit (npm audit)
+        working-directory: frontend
+        continue-on-error: true
+        run: npm audit --audit-level=high

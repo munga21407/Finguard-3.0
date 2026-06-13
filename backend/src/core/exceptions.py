@@ -36,6 +36,11 @@ class UnprocessableError(AppError):
     detail = "Unprocessable entity"
 
 
+class TooManyRequestsError(AppError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    detail = "Too many requests"
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def app_exception_handler(request: Request, exc: AppError) -> JSONResponse:

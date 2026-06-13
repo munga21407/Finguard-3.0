@@ -10,8 +10,12 @@ execution.  Retry policy:
 """
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import json
+import socket
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -27,6 +31,48 @@ logger = structlog.get_logger(__name__)
 
 # Default client-level timeout (connect + read) in seconds.
 _DEFAULT_TIMEOUT = 15.0
+
+# SSRF guard — only these schemes are permitted, and the resolved host must be a
+# public address.  This tool issues requests on behalf of an LLM-driven agent,
+# so an attacker who influences the URL must not be able to reach internal
+# services or the cloud metadata endpoint (169.254.169.254).
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+
+class BlockedURLError(ValueError):
+    """Raised when a requested URL fails the SSRF safety checks."""
+
+
+async def _assert_public_url(url: str) -> None:
+    """Reject non-http(s) schemes and any host that resolves to a non-public IP."""
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        raise BlockedURLError(f"blocked URL scheme: {parsed.scheme!r}")
+    host = parsed.hostname
+    if not host:
+        raise BlockedURLError("blocked URL: missing host")
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        infos = await asyncio.to_thread(
+            socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM
+        )
+    except socket.gaierror as exc:
+        raise BlockedURLError(f"blocked URL: DNS resolution failed for {host!r}") from exc
+
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise BlockedURLError(
+                f"blocked URL: {host} resolves to non-public address {ip}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +175,10 @@ def make_http_caller(timeout: float = _DEFAULT_TIMEOUT) -> Any:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            # SSRF guard: validate the target before any network call.  Redirects
+            # are disabled so a public URL cannot 30x-bounce into an internal host.
+            await _assert_public_url(url)
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                 response = await _send_with_retry(
                     client, method, url, resolved_headers, params, body
                 )

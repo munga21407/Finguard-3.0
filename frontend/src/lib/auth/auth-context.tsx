@@ -24,48 +24,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // ── Bootstrap: decode stored token on mount ──────────────────────────────
+  // ── Bootstrap: hydrate the user from the backend on mount ─────────────────
+  // The access token only carries `sub`/`role`, so the authoritative user
+  // (email, full_name, role) comes from GET /me rather than being decoded from
+  // the JWT. If the access token is missing/expired but a refresh token exists,
+  // refresh first so an active session is recovered transparently.
   useEffect(() => {
-    const token = tokenManager.getAccessToken();
-    if (token && !tokenManager.isTokenExpired(token)) {
-      const payload = tokenManager.decodePayload(token);
-      if (payload) {
-        setUser({
-          id: payload.sub as string,
-          email: payload.email as string,
-          full_name: payload.full_name as string,
-          role: (payload.role as string).toUpperCase() as User["role"],
-          is_active: true,
-          created_at: "",
-        });
-      }
-    } else if (token) {
-      // Token expired — try silent refresh
-      const refreshToken = tokenManager.getRefreshToken();
-      if (refreshToken) {
-        authClient
-          .refreshToken(refreshToken)
-          .then((tokens: { access_token: string; refresh_token: string }) => {
-            tokenManager.setTokens(tokens.access_token, tokens.refresh_token);
-            const payload = tokenManager.decodePayload(tokens.access_token);
-            if (payload) {
-              setUser({
-                id: payload.sub as string,
-                email: payload.email as string,
-                full_name: payload.full_name as string,
-                role: (payload.role as string).toUpperCase() as User["role"],
-                is_active: true,
-                created_at: "",
-              });
-            }
-          })
-          .catch(() => tokenManager.clearTokens())
-          .finally(() => setIsLoading(false));
-        return;
-      }
-      tokenManager.clearTokens();
+    let cancelled = false;
+    const accessToken = tokenManager.getAccessToken();
+    const refreshToken = tokenManager.getRefreshToken();
+
+    if (!accessToken && !refreshToken) {
+      setIsLoading(false);
+      return;
     }
-    setIsLoading(false);
+
+    async function hydrate() {
+      try {
+        if (
+          (!accessToken || tokenManager.isTokenExpired(accessToken)) &&
+          refreshToken
+        ) {
+          const tokens = await authClient.refreshToken(refreshToken);
+          tokenManager.setTokens(tokens.access_token, tokens.refresh_token);
+        }
+        const me = await authClient.getMe();
+        if (!cancelled) setUser(me);
+      } catch {
+        if (!cancelled) tokenManager.clearTokens();
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    hydrate();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ── Login ─────────────────────────────────────────────────────────────────
@@ -73,17 +68,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (email: string, password: string) => {
       const tokens = await authClient.login({ email, password });
       tokenManager.setTokens(tokens.access_token, tokens.refresh_token);
-      const payload = tokenManager.decodePayload(tokens.access_token);
-      if (payload) {
-        setUser({
-          id: payload.sub as string,
-          email: payload.email as string,
-          full_name: payload.full_name as string,
-          role: (payload.role as string).toUpperCase() as User["role"],
-          is_active: true,
-          created_at: "",
-        });
-      }
+      // Hydrate the full user from the backend rather than the (partial) JWT.
+      setUser(await authClient.getMe());
       router.push("/dashboard");
     },
     [router]

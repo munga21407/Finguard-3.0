@@ -53,6 +53,30 @@ class AuthAPIClient {
     return responseData;
   }
 
+  /**
+   * Fetch the authenticated user from the backend source of truth.
+   * The access token only carries `sub`/`role`, so email/full_name/verification
+   * status must come from GET /me rather than being decoded from the JWT.
+   */
+  async getMe(): Promise<User> {
+    const token = tokenManager.getAccessToken();
+    const response = await fetch(`${this.baseUrl}${ENDPOINTS.AUTH.ME}`, {
+      headers: { Authorization: `Bearer ${token ?? ""}` },
+    });
+
+    if (!response.ok) throw new Error("Failed to load current user");
+
+    const data = await response.json();
+    return {
+      id: data.id,
+      email: data.email,
+      full_name: data.full_name,
+      role: String(data.role).toUpperCase() as User["role"],
+      is_active: data.is_active,
+      created_at: data.created_at,
+    };
+  }
+
   async refreshToken(refreshToken: string): Promise<AuthTokens> {
     const data: RefreshRequest = { refresh_token: refreshToken };
 
@@ -79,18 +103,23 @@ class AuthAPIClient {
    */
   async logout(): Promise<void> {
     const token = tokenManager.getAccessToken();
-    if (!token) return;
+    const refreshToken = tokenManager.getRefreshToken();
+    if (!token && !refreshToken) return;
 
     try {
       await fetch(`${this.baseUrl}${ENDPOINTS.AUTH.LOGOUT}`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        // Send the refresh token so the backend blacklists it too — otherwise a
+        // stolen refresh token would outlive logout until its 7-day expiry.
+        body: JSON.stringify({ refresh_token: refreshToken }),
       });
     } catch {
       // Network errors are swallowed — the caller clears local tokens
-      // regardless. The backend JTI expires naturally via the token's exp claim.
+      // regardless. The backend JTIs expire naturally via their exp claim.
     }
   }
 }

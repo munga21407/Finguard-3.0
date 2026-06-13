@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domains.identity.models import User
@@ -16,6 +16,15 @@ class UserRepository:
     async def get_by_email(self, email: str) -> User | None:
         result = await self._session.execute(select(User).where(User.email == email))
         return result.scalar_one_or_none()
+
+    async def count(self) -> int:
+        return (await self._session.scalar(select(func.count()).select_from(User))) or 0
+
+    async def list_all(self, limit: int = 100, offset: int = 0) -> list[User]:
+        result = await self._session.execute(
+            select(User).order_by(User.created_at.asc()).limit(limit).offset(offset)
+        )
+        return list(result.scalars().all())
 
     async def create(self, user: User) -> User:
         self._session.add(user)

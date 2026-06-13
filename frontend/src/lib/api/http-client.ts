@@ -30,15 +30,16 @@ httpClient.interceptors.request.use(
       config.headers.Authorization = `Bearer ${token}`;
     }
 
-    // The intelligence router enforces a required Idempotency-Key header on
-    // all POST requests to prevent double-submissions (e.g. duplicate agent
-    // invocations from button double-clicks or network retries).
-    // Generate a fresh UUID per request unless the caller already provided one.
-    const isIntelligencePost =
+    // Only /ai-insights and /ai-actions require an Idempotency-Key (they may
+    // trigger side-effecting agent runs / payments). /intent and /conversation
+    // do not, so we scope the header to the endpoints that actually need it.
+    const url = config.url ?? "";
+    const needsIdempotencyKey =
       config.method?.toLowerCase() === "post" &&
-      config.url?.includes("/api/v1/intelligence");
+      (url.includes("/intelligence/ai-insights") ||
+        url.includes("/intelligence/ai-actions"));
 
-    if (isIntelligencePost && !config.headers["Idempotency-Key"]) {
+    if (needsIdempotencyKey && !config.headers["Idempotency-Key"]) {
       config.headers["Idempotency-Key"] = crypto.randomUUID();
     }
 

@@ -22,7 +22,10 @@ from langchain_core.messages import HumanMessage
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field, ValidationError
 
-from src.domains.identity.dependencies import CurrentUser
+from src.domains.identity.dependencies import (
+    RequireIntelligenceAct,
+    RequireIntelligenceRead,
+)
 from src.domains.intelligence.orchestrator import (
     GraphRecursionError,
     build_invoice_graph,
@@ -389,6 +392,11 @@ class ConversationOrchestrator:
             _TASK_STATUS_TTL,
             json.dumps({"status": "pending"}),
         )
+        # Record the owning user so the status endpoint can reject cross-user
+        # polling of someone else's session (IDOR protection).
+        await redis_client.setex(
+            f"task_owner:{session_id}", _TASK_STATUS_TTL, user_id or ""
+        )
 
         background_tasks.add_task(_graph_background_task, state)
 
@@ -555,7 +563,7 @@ class TaskStatusResponse(BaseModel):
 @router.post("/ai-insights", response_model=OrchestrationResponse)
 async def ai_insights(
     request: InsightRequest,
-    current_user: CurrentUser,
+    current_user: RequireIntelligenceRead,
     idempotency_key: str = Header(
         ...,
         alias="Idempotency-Key",
@@ -606,7 +614,7 @@ async def ai_insights(
 @router.post("/ai-actions", response_model=OrchestrationResponse)
 async def ai_actions(
     request: ActionRequest,
-    current_user: CurrentUser,
+    current_user: RequireIntelligenceAct,
     idempotency_key: str = Header(
         ...,
         alias="Idempotency-Key",
@@ -656,7 +664,7 @@ async def ai_actions(
 @router.post("/intent", response_model=IntentResponse)
 async def invoke_intent(
     request: IntentRequest,
-    current_user: CurrentUser,
+    current_user: RequireIntelligenceAct,
 ) -> IntentResponse:
     """
     Focused invoice-generation graph: Agent A → Hub Writer → END.
@@ -693,7 +701,7 @@ async def invoke_intent(
 async def conversation(
     request: ConversationRequest,
     background_tasks: BackgroundTasks,
-    current_user: CurrentUser,
+    current_user: RequireIntelligenceRead,
 ) -> ConversationResponse:
     """
     Dual-path insight delivery endpoint.
@@ -756,7 +764,7 @@ async def conversation(
 @router.get("/conversation/{session_id}/status", response_model=TaskStatusResponse)
 async def conversation_status(
     session_id: str,
-    current_user: CurrentUser,
+    current_user: RequireIntelligenceRead,
 ) -> TaskStatusResponse:
     """
     Return the current execution status of a background graph run.
@@ -779,6 +787,17 @@ async def conversation_status(
     when status transitions to ``"completed"`` or ``"failed"``.
     """
     redis_client = get_redis()
+
+    # IDOR guard: a session may only be polled by the user who created it.
+    # Return 404 (not 403) on mismatch so the existence of others' sessions is
+    # not revealed.
+    owner: str | None = await redis_client.get(f"task_owner:{session_id}")  # type: ignore[assignment]
+    if owner is not None and owner != str(current_user.id):
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found or status has expired.",
+        )
+
     raw: str | None = await redis_client.get(f"task_status:{session_id}")  # type: ignore[assignment]
 
     if raw is None:

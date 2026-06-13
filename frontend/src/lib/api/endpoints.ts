@@ -7,6 +7,7 @@ export const ENDPOINTS = {
     REGISTER: "/api/v1/identity/register",
     REFRESH: "/api/v1/identity/token/refresh",
     LOGOUT: "/api/v1/identity/logout",
+    ME: "/api/v1/identity/me",
   },
 
   // Finance

@@ -9,8 +9,8 @@ permissions:
   packages: write
 
 jobs:
-  deploy:
-    name: Build & Push Docker Images
+  build-and-push:
+    name: Build, scan & push images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,19 +24,75 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tag by commit SHA (immutable, rollback-able) as well as latest.
       - name: Build & push backend
         uses: docker/build-push-action@v5
         with:
           context: ./backend
+          target: production
           push: true
-          tags: ghcr.io/${{ env.REPO_LC }}/backend:latest
+          tags: |
+            ghcr.io/${{ env.REPO_LC }}/backend:latest
+            ghcr.io/${{ env.REPO_LC }}/backend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
       - name: Build & push frontend
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
+          target: production
           push: true
-          tags: ghcr.io/${{ env.REPO_LC }}/frontend:latest
+          tags: |
+            ghcr.io/${{ env.REPO_LC }}/frontend:latest
+            ghcr.io/${{ env.REPO_LC }}/frontend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Scan the built backend image; fail on fixable CRITICAL vulnerabilities.
+      - name: Trivy image scan (backend)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ env.REPO_LC }}/backend:${{ github.sha }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  deploy:
+    name: Migrate, deploy & smoke-test
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # Gated: set the DEPLOY_ENABLED repo variable to "true" and configure the
+    # `production` environment (with required reviewers) to enable. Until then
+    # this job is inert so merges to main don't auto-ship.
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      # 1) Apply migrations BEFORE the new image serves traffic.
+      - name: Run database migrations
+        working-directory: backend
+        run: uv sync --no-dev && uv run alembic -c alembic/alembic.ini upgrade head
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.PROD_REDIS_URL }}
+          MONGODB_URL: ${{ secrets.PROD_MONGODB_URL }}
+          RABBITMQ_URL: ${{ secrets.PROD_RABBITMQ_URL }}
+          SECRET_KEY: ${{ secrets.PROD_SECRET_KEY }}
+
+      # 2) Roll out the SHA-tagged image (kubectl/compose/etc. for your target).
+      - name: Deploy backend image
+        run: |
+          echo "Deploy ghcr.io/${GITHUB_REPOSITORY,,}/backend:${GITHUB_SHA} to production"
+          # e.g. kubectl set image deploy/backend backend=ghcr.io/.../backend:${GITHUB_SHA}
+
+      # 3) Smoke-test readiness; on failure, roll back to the previous SHA.
+      - name: Smoke test
+        run: |
+          echo "curl -fsS https://${{ secrets.PROD_HOST }}/health/ready"
+          # curl -fsS "https://${{ secrets.PROD_HOST }}/health/ready" || exit 1

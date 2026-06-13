@@ -114,6 +114,9 @@ class MpesaTransaction(Base):
     vault: Mapped[VaultType] = mapped_column(
         Enum(VaultType), nullable=False, default=VaultType.MPESA
     )
+    # Full raw Daraja callback envelope, retained for audit and dispute
+    # resolution.  Nullable for rows written before this column existed.
+    raw_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     is_reconciled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

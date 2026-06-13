@@ -7,7 +7,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PUBLIC_ROUTES = ["/login", "/signup", "/"];
 const PROTECTED_PREFIX = "/dashboard";
 
 export function middleware(request: NextRequest) {
@@ -17,9 +16,6 @@ export function middleware(request: NextRequest) {
   const sessionCookie = request.cookies.get("fg_session")?.value;
 
   const isProtected = pathname.startsWith(PROTECTED_PREFIX);
-  const isPublic = PUBLIC_ROUTES.some(
-    (r) => pathname === r || pathname.startsWith(r + "/")
-  );
 
   // Unauthenticated user trying to access a protected route
   if (isProtected && !sessionCookie) {

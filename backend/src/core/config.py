@@ -1,4 +1,4 @@
-from pydantic import ValidationInfo, field_validator
+from pydantic import ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -75,6 +75,36 @@ class Settings(BaseSettings):
             base: str = (info.data or {}).get("REDIS_URL", "redis://localhost:6379/0")
             return base.rsplit("/", 1)[0] + "/2"
         return v
+
+    @model_validator(mode="after")
+    def _validate_production(self) -> "Settings":
+        """Fail fast on unsafe production configuration.
+
+        These checks only apply when ENVIRONMENT == "production" so local dev and
+        CI stay frictionless, but a real deployment cannot boot with a placeholder
+        secret, debug mode, an open CORS policy, or the security boundaries
+        (read-only DB role, /metrics auth) left unset.
+        """
+        if self.ENVIRONMENT != "production":
+            return self
+
+        problems: list[str] = []
+        if self.DEBUG:
+            problems.append("DEBUG must be false")
+        if len(self.SECRET_KEY) < 32 or "change-me" in self.SECRET_KEY.lower():
+            problems.append("SECRET_KEY must be a strong (>=32 char) non-placeholder value")
+        if not self.DATABASE_READONLY_URL:
+            problems.append("DATABASE_READONLY_URL must be set")
+        if not self.METRICS_AUTH_SECRET:
+            problems.append("METRICS_AUTH_SECRET must be set")
+        if "*" in self.ALLOWED_ORIGINS:
+            problems.append("ALLOWED_ORIGINS must not contain '*'")
+
+        if problems:
+            raise ValueError(
+                "Invalid production configuration: " + "; ".join(problems)
+            )
+        return self
 
 
 settings = Settings()

@@ -23,6 +23,11 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
+import {
+  extractInvoice,
+  type ExtractedInvoice,
+} from "@/lib/api/intelligence";
+import { createInvoice, resolveCustomerId } from "@/lib/api/finance";
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 // Mirrors the PydanticAI InvoiceExtraction model on the backend.
@@ -55,24 +60,28 @@ const invoiceSchema = z.object({
 
 export type InvoiceFormValues = z.infer<typeof invoiceSchema>;
 
-// ── Mock extractor ────────────────────────────────────────────────────────────
-// Replace the body with: return httpClient.post(ENDPOINTS.INTELLIGENCE.INTENT, { prompt })
-// The mock seeds realistic data so the UI is testable end-to-end today.
+// ── Extraction mapping ──────────────────────────────────────────────────────
+// Map Agent A's ExtractedInvoice into the editable form. When extraction
+// returns null (model unavailable / nothing to extract) we fall back to a blank
+// editable row so the user can still fill the invoice in manually.
 
-const MOCK_EXTRACTED: InvoiceFormValues = {
-  merchant: "Juma Building Supplies",
-  currency: "KES",
-  dueDate: new Date(Date.now() + 7 * 86_400_000).toISOString().split("T")[0],
-  items: [
-    { description: "Bags of Cement (50 kg)", quantity: 10, unitPrice: 500 },
-  ],
-  notes: "Automatically extracted by Agent A. Please verify before sending.",
-};
+function defaultDueDate(): string {
+  return new Date(Date.now() + 7 * 86_400_000).toISOString().split("T")[0];
+}
 
-async function mockExtract(_prompt: string): Promise<InvoiceFormValues> {
-  return new Promise((resolve) =>
-    setTimeout(() => resolve(MOCK_EXTRACTED), 2000)
-  );
+function mapExtractedToForm(ext: ExtractedInvoice | null): InvoiceFormValues {
+  const items = (ext?.line_items ?? []).map((li) => ({
+    description: li.description,
+    quantity: Math.max(1, Math.round(li.quantity || 1)),
+    unitPrice: li.unit_price || 0,
+  }));
+  return {
+    merchant: ext?.customer || ext?.vendor || "",
+    currency: ext?.currency || "KES",
+    dueDate: (ext?.due_date || "").split("T")[0] || defaultDueDate(),
+    items: items.length > 0 ? items : [{ description: "", quantity: 1, unitPrice: 0 }],
+    notes: "",
+  };
 }
 
 // ── State types ───────────────────────────────────────────────────────────────
@@ -83,6 +92,7 @@ export function InvoiceGenerator() {
   const [prompt, setPrompt] = useState("");
   const [state, setState] = useState<ExtractionState>("idle");
   const [saved, setSaved] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const {
     register,
@@ -108,27 +118,51 @@ export function InvoiceGenerator() {
   // ── Handlers ──────────────────────────────────────────────────────────────
   async function handleExtract() {
     if (!prompt.trim() || state === "extracting") return;
+    setErrorMsg(null);
     setState("extracting");
     try {
-      const extracted = await mockExtract(prompt);
-      reset(extracted);
+      const extracted = await extractInvoice(prompt);
+      reset(mapExtractedToForm(extracted));
       setState("ready");
     } catch {
-      setState("idle");
+      setErrorMsg(
+        "Agent A could not process that description. You can still fill the invoice in manually."
+      );
+      reset(mapExtractedToForm(null));
+      setState("ready");
     }
   }
 
   async function onSave(values: InvoiceFormValues) {
-    // TODO: await httpClient.post(ENDPOINTS.FINANCE.INVOICES, values)
-    void values;
-    await new Promise((r) => setTimeout(r, 800)); // simulate network
-    setSaved(true);
+    setErrorMsg(null);
+    try {
+      const customerId = await resolveCustomerId(values.merchant);
+      const subtotalAmount = values.items.reduce(
+        (sum, item) => sum + Number(item.quantity) * Number(item.unitPrice),
+        0
+      );
+      await createInvoice({
+        customer_id: customerId,
+        invoice_number: `INV-${Date.now()}`,
+        subtotal: subtotalAmount,
+        tax: 0,
+        currency: values.currency,
+        due_date: new Date(values.dueDate).toISOString(),
+        notes: values.notes || null,
+      });
+      setSaved(true);
+    } catch {
+      setErrorMsg(
+        "Could not save the invoice. Check your permissions and that the client details are valid."
+      );
+    }
   }
 
   function handleReset() {
     setState("idle");
     setPrompt("");
     setSaved(false);
+    setErrorMsg(null);
     reset({ currency: "KES", items: [] });
   }
 
@@ -253,6 +287,15 @@ export function InvoiceGenerator() {
               Extracted by Agent A — review and edit before sending
             </span>
           </div>
+
+          {errorMsg && (
+            <div
+              role="alert"
+              className="rounded-xl border border-lf-error/30 bg-lf-error-container/20 px-4 py-3 text-sm text-lf-error"
+            >
+              {errorMsg}
+            </div>
+          )}
 
           {/* Merchant + Currency + Due Date */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

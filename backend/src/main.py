@@ -22,12 +22,11 @@ from src.domains.finance.router import router as finance_router
 from src.domains.identity.router import limiter
 from src.domains.identity.router import router as identity_router
 from src.domains.intelligence.router import router as intelligence_router
+from src.domains.intelligence.security.vc_issuer import ensure_trust_log_ttl_index
 from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
 from src.infrastructure.database.postgres import close_db, init_db
-from src.domains.intelligence.security.vc_issuer import ensure_trust_log_ttl_index
 from src.infrastructure.message_bus.rabbitmq_publisher import close_rabbitmq, init_rabbitmq
-
 
 _metrics_bearer = HTTPBearer(auto_error=False)
 
@@ -128,8 +127,44 @@ app.include_router(intelligence_router, prefix="/api/v1/intelligence", tags=["in
 
 
 @app.get("/health")
+@app.get("/health/live")
 async def health() -> dict[str, str]:
+    """Liveness — the process is up. Cheap, dependency-free."""
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready() -> Response:
+    """Readiness — core dependencies are reachable. Used by the deploy smoke
+    test and orchestrator readiness probes before routing traffic."""
+    from sqlalchemy import text
+
+    from src.infrastructure.cache.redis import get_redis
+    from src.infrastructure.database.postgres import engine
+
+    checks: dict[str, str] = {}
+    ok = True
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        checks["postgres"] = "ok"
+    except Exception as exc:  # noqa: BLE001 — report, don't crash the probe
+        checks["postgres"] = f"error: {type(exc).__name__}"
+        ok = False
+    try:
+        await get_redis().ping()
+        checks["redis"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        checks["redis"] = f"error: {type(exc).__name__}"
+        ok = False
+
+    import json
+
+    return Response(
+        content=json.dumps({"status": "ready" if ok else "degraded", "checks": checks}),
+        media_type="application/json",
+        status_code=200 if ok else 503,
+    )
 
 
 @app.get("/metrics", include_in_schema=False)

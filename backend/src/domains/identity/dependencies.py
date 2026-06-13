@@ -8,15 +8,17 @@ directly.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from collections.abc import Callable, Coroutine
+from typing import Annotated, Any
 
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.exceptions import UnauthorizedError
+from src.core.exceptions import ForbiddenError, UnauthorizedError
 from src.core.security import decode_token
 from src.domains.identity.models import User
+from src.domains.identity.permissions import Permission, has_permission
 from src.domains.identity.repository import UserRepository
 from src.infrastructure.cache.redis import get_auth_redis
 from src.infrastructure.database.postgres import get_db
@@ -39,9 +41,8 @@ async def get_current_user(
     # Tokens issued before the jti claim was introduced have no jti and bypass this
     # check — they expire naturally via their exp claim.
     jti: str | None = payload.get("jti")
-    if jti is not None:
-        if await get_auth_redis().exists(f"blacklist:{jti}"):
-            raise UnauthorizedError("Token has been revoked")
+    if jti is not None and await get_auth_redis().exists(f"blacklist:{jti}"):
+        raise UnauthorizedError("Token has been revoked")
 
     user = await UserRepository(db).get_by_id(uuid.UUID(raw_id))
     if not user or not user.is_active:
@@ -50,3 +51,51 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def require_permission(
+    *required: Permission,
+) -> Callable[[User], Coroutine[Any, Any, User]]:
+    """
+    Build a dependency that authorizes the current user against *required*
+    permissions (all must be granted by the user's role) and returns the user.
+
+    Default-deny: if the user's role does not grant every requested permission a
+    403 is raised.  Authentication (a valid, non-revoked token for an active
+    user) is still enforced first via ``get_current_user``.
+
+    Usage::
+
+        @router.post("/ledger")
+        async def post_ledger_entry(
+            data: LedgerEntryCreate,
+            db: DBSession,
+            user: Annotated[User, Depends(require_permission(Permission.FINANCE_WRITE))],
+        ): ...
+    """
+
+    async def _dependency(user: CurrentUser) -> User:
+        missing = [p for p in required if not has_permission(user.role, p)]
+        if missing:
+            raise ForbiddenError(
+                "Insufficient permissions: "
+                + ", ".join(sorted(p.value for p in missing))
+            )
+        return user
+
+    return _dependency
+
+
+# Ready-made annotated dependencies for routers.  Each resolves to the
+# authenticated User after enforcing the named permission.
+RequireFinanceRead = Annotated[User, Depends(require_permission(Permission.FINANCE_READ))]
+RequireFinanceWrite = Annotated[User, Depends(require_permission(Permission.FINANCE_WRITE))]
+RequireCrmRead = Annotated[User, Depends(require_permission(Permission.CRM_READ))]
+RequireCrmWrite = Annotated[User, Depends(require_permission(Permission.CRM_WRITE))]
+RequireIntelligenceRead = Annotated[
+    User, Depends(require_permission(Permission.INTELLIGENCE_READ))
+]
+RequireIntelligenceAct = Annotated[
+    User, Depends(require_permission(Permission.INTELLIGENCE_ACT))
+]
+RequireUserManage = Annotated[User, Depends(require_permission(Permission.USER_MANAGE))]
