@@ -44,8 +44,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
       - name: Create test database
-        # conftest derives the test DB by replacing /finguard -> /finguard_test,
-        # so DATABASE_URL must use the base name and finguard_test must exist.
+        # conftest derives the test DB by swapping only the database name
+        # (.../finguard -> .../finguard_test); tests still connect as the
+        # POSTGRES_USER (finguard), so only the database must pre-exist here.
         run: PGPASSWORD=finguard psql -h localhost -U finguard -d finguard -c "CREATE DATABASE finguard_test;"
       - name: Lint
         run: uv run ruff check src tests

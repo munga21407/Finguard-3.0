@@ -16,7 +16,12 @@ from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.postgres import Base, get_db
 from src.main import app
 
-TEST_DATABASE_URL = settings.DATABASE_URL.replace("/finguard", "/finguard_test")
+# Derive the test DB by swapping ONLY the database name (the path after the
+# last "/"). A naive str.replace("/finguard", ...) would also rewrite the
+# username in "//finguard:..." → "//finguard_test:...", making tests connect as
+# a non-existent role (the CI failure mode when POSTGRES_USER == DB name).
+_base_url, _, _ = settings.DATABASE_URL.rpartition("/")
+TEST_DATABASE_URL = f"{_base_url}/finguard_test"
 
 # NullPool so no asyncpg connection is reused across tests.  pytest-asyncio runs
 # each test in a fresh event loop; a pooled connection created in one loop and

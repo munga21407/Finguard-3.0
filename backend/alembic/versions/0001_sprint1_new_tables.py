@@ -7,8 +7,9 @@ Create Date: 2026-06-03 00:00:00.000000
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0001_sprint1"
@@ -42,8 +43,12 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column(
+            # Reuse the ENUM object created above (create_type=False) so the
+            # CREATE TABLE does NOT emit a second `CREATE TYPE agentrunstatus`.
+            # A fresh sa.Enum(name=...) here defaults to create_type=True and
+            # re-creates the type → DuplicateObjectError on a fresh DB.
             "status",
-            sa.Enum("pending", "running", "completed", "failed", name="agentrunstatus"),
+            agentrunstatus,
             nullable=False,
             server_default="pending",
         ),
