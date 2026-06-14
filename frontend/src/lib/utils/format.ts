@@ -1,0 +1,33 @@
+// ─── Display formatting helpers ─────────────────────────────────────────────────
+// Convert raw backend values (Decimal-as-string|number, ISO datetimes, enum
+// statuses) into the shapes the dashboard widgets render.
+
+/** Format a money amount (string or number from the API) as "KES 1,250.00". */
+export function formatMoney(amount: string | number, currency = "KES"): string {
+  const n = typeof amount === "string" ? Number(amount) : amount;
+  if (Number.isNaN(n)) return `${currency} 0.00`;
+  return `${currency} ${n.toLocaleString("en-KE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/** Format an ISO date/datetime as "Oct 24, 2023" (null-safe → "—"). */
+export function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+  });
+}
+
+/** Clamp a utilisation percentage to a 0–100 integer. */
+export function utilisationPct(spent: string | number, allocated: string | number): number {
+  const s = typeof spent === "string" ? Number(spent) : spent;
+  const a = typeof allocated === "string" ? Number(allocated) : allocated;
+  if (!a || Number.isNaN(a) || Number.isNaN(s)) return 0;
+  return Math.max(0, Math.min(100, Math.round((s / a) * 100)));
+}

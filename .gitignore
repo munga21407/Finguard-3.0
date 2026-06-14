@@ -12,6 +12,8 @@ Thumbs.db
 .env.*
 !.env.example
 !.env.*.example
+# TLS certificates for the prod nginx overlay — never commit real keys.
+infrastructure/nginx/certs/
 
 # ─── Frontend (Next.js) ─────────────────────────────────────────────────────
 frontend/node_modules/
@@ -24,6 +26,11 @@ frontend/build/
 frontend/coverage/
 frontend/.eslintcache
 frontend/*.tsbuildinfo
+# Transient OpenAPI document used by the sync-types:check-file CI gate
+frontend/openapi.json
+# Playwright E2E artifacts
+frontend/test-results/
+frontend/playwright-report/
 
 # ─── Backend (Python / FastAPI) ─────────────────────────────────────────────
 __pycache__/

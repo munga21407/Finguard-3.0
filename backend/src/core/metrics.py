@@ -25,8 +25,8 @@ Sprint 6 additions:
 from __future__ import annotations
 
 import time
-from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from prometheus_client import Counter, Gauge, Histogram
 
@@ -123,7 +123,8 @@ HUB_WRITE_ERRORS = Counter(
 # Alert rule: rate(finguard_gemini_timeouts_total[5m]) > 0.1
 GEMINI_TIMEOUT_COUNTER = Counter(
     "finguard_gemini_timeouts_total",
-    "Total Gemini API calls that exceeded the 30-second hard timeout and tripped the circuit breaker",
+    "Total Gemini API calls that exceeded the 30-second hard timeout and "
+    "tripped the circuit breaker",
 )
 
 # ── Helper: LLM call timer ─────────────────────────────────────────────────────

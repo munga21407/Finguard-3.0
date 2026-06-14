@@ -37,16 +37,19 @@ class TokenRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
+    """Internal service return type — carries both tokens so the router can set
+    the refresh token as an HttpOnly cookie and return only the access token."""
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
 
 
-class RefreshRequest(BaseModel):
-    refresh_token: str
+class AccessTokenResponse(BaseModel):
+    """HTTP response body for POST /token and POST /token/refresh.
 
-
-class LogoutRequest(BaseModel):
-    # Optional: when supplied, the refresh token's jti is also blacklisted so a
-    # stolen refresh token cannot outlive the logout.
-    refresh_token: str | None = None
+    The refresh token is delivered as an HttpOnly, SameSite=Strict cookie by
+    the router — it is intentionally absent from this body so it cannot be
+    exfiltrated via XSS.
+    """
+    access_token: str
+    token_type: str = "bearer"

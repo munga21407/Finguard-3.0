@@ -2,12 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-
-const clients = [
-  { id: "1", name: "TechFlow Solutions",    email: "contact@techflow.io" },
-  { id: "2", name: "Global Industries Inc.", email: "billing@globalind.com" },
-  { id: "3", name: "Acme Corp",              email: "accounts@acmecorp.com" },
-];
+import { CustomerPicker } from "@/components/dashboard/invoices/CustomerPicker";
+import { createInvoice } from "@/lib/api/finance";
 
 const taxOptions = [
   { label: "VAT 16%", value: "vat_16", rate: 0.16 },
@@ -24,28 +20,56 @@ interface LineItem {
 let nextId = 2;
 
 export default function GenerateInvoicePage() {
-  const [selectedClientId, setSelectedClientId] = useState<string>("1");
-  const [clientSearch, setClientSearch] = useState("");
-  const [invoiceNumber] = useState("INV-2024-042");
-  const [issueDate, setIssueDate] = useState("2024-10-24");
-  const [dueDate, setDueDate] = useState("2024-11-23");
+  const [customerId, setCustomerId] = useState<string | null>(null);
+  const [customerName, setCustomerName] = useState("");
+  const [invoiceNumber] = useState(`INV-${Date.now()}`);
+  const [issueDate, setIssueDate] = useState(
+    () => new Date().toISOString().split("T")[0]
+  );
+  const [dueDate, setDueDate] = useState(
+    () => new Date(Date.now() + 30 * 86_400_000).toISOString().split("T")[0]
+  );
   const [lineItems, setLineItems] = useState<LineItem[]>([
-    { id: 1, description: "Software Development Services", qty: 1, rate: 10000 },
+    { id: 1, description: "", qty: 1, rate: 0 },
   ]);
   const [taxKey, setTaxKey] = useState("vat_16");
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const selectedClient = clients.find((c) => c.id === selectedClientId);
   const taxRate = taxOptions.find((t) => t.value === taxKey)?.rate ?? 0;
   const subtotal = lineItems.reduce((sum, i) => sum + i.qty * i.rate, 0);
   const taxAmount = subtotal * taxRate;
   const total = subtotal + taxAmount;
 
-  const filteredClients = clients.filter(
-    (c) =>
-      c.name.toLowerCase().includes(clientSearch.toLowerCase()) ||
-      c.email.toLowerCase().includes(clientSearch.toLowerCase())
-  );
+  async function handleSubmit() {
+    setErrorMsg(null);
+    if (!customerId) {
+      setErrorMsg("Select or create a client for this invoice.");
+      return;
+    }
+    if (subtotal <= 0) {
+      setErrorMsg("Add at least one line item with a positive amount.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await createInvoice({
+        customer_id: customerId,
+        invoice_number: invoiceNumber,
+        subtotal,
+        tax: taxAmount,
+        currency: "USD",
+        due_date: new Date(dueDate).toISOString(),
+        notes: null,
+      });
+      setSubmitted(true);
+    } catch {
+      setErrorMsg("Could not create the invoice. Check your permissions and try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   function addRow() {
     setLineItems((prev) => [...prev, { id: nextId++, description: "", qty: 1, rate: 0 }]);
@@ -74,9 +98,9 @@ export default function GenerateInvoicePage() {
           </svg>
         </div>
         <div>
-          <h2 className="text-2xl font-bold text-lf-on-surface">{invoiceNumber} Sent</h2>
+          <h2 className="text-2xl font-bold text-lf-on-surface">{invoiceNumber} Created</h2>
           <p className="text-lf-on-surface-variant mt-1">
-            Invoice sent to <strong>{selectedClient?.name}</strong> at {selectedClient?.email}.
+            Invoice created for <strong>{customerName || "the selected client"}</strong>.
           </p>
         </div>
         <Link href="/dashboard/invoices" className="px-6 py-2.5 bg-lf-primary text-lf-on-primary rounded-lg text-sm font-bold hover:opacity-90 transition-all">
@@ -114,43 +138,15 @@ export default function GenerateInvoicePage() {
         <div className="lg:col-span-2 flex flex-col gap-5">
           {/* Client selection */}
           <div className="bg-lf-surface-container-lowest rounded-xl p-6 border border-lf-outline-variant/10 shadow-[0_4px_20px_rgba(0,0,0,0.03)] flex flex-col gap-4">
-            <div className="flex justify-between items-center">
-              <h3 className="text-base font-semibold text-lf-on-surface">Client Selection</h3>
-              <button className="text-xs font-semibold text-lf-primary hover:underline">+ Add New Client</button>
-            </div>
-            <input
-              type="text"
-              placeholder="Search clients…"
-              value={clientSearch}
-              onChange={(e) => setClientSearch(e.target.value)}
-              className="w-full bg-lf-surface-container-low rounded-lg px-3 py-2 text-sm border border-lf-outline-variant/30 focus:outline-none focus:border-lf-primary text-lf-on-surface placeholder:text-lf-on-surface-variant/50"
+            <h3 className="text-base font-semibold text-lf-on-surface">Client Selection</h3>
+            <CustomerPicker
+              value={customerId}
+              onChange={(id, name) => {
+                setCustomerId(id);
+                setCustomerName(name);
+                if (id) setErrorMsg(null);
+              }}
             />
-            <div className="flex flex-col gap-2">
-              {filteredClients.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => setSelectedClientId(c.id)}
-                  className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-all ${
-                    selectedClientId === c.id
-                      ? "border-lf-primary bg-lf-primary-fixed/10"
-                      : "border-lf-outline-variant/20 hover:border-lf-primary/30 hover:bg-lf-surface-container-low"
-                  }`}
-                >
-                  <div className="w-8 h-8 rounded-full bg-lf-secondary-fixed flex items-center justify-center text-lf-on-secondary-fixed font-bold text-xs shrink-0">
-                    {c.name[0]}
-                  </div>
-                  <div>
-                    <div className="text-sm font-semibold text-lf-on-surface">{c.name}</div>
-                    <div className="text-xs text-lf-on-surface-variant">{c.email}</div>
-                  </div>
-                  {selectedClientId === c.id && (
-                    <svg className="ml-auto text-lf-primary" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12"/>
-                    </svg>
-                  )}
-                </button>
-              ))}
-            </div>
           </div>
 
           {/* Invoice metadata */}
@@ -298,15 +294,22 @@ export default function GenerateInvoicePage() {
 
             <div className="flex flex-col gap-3">
               <div className="bg-lf-surface rounded-lg p-3 border border-lf-outline-variant/20">
-                <p className="text-xs font-semibold text-lf-on-surface-variant mb-1">Suggested Payment Terms</p>
+                <p className="text-xs font-semibold text-lf-on-surface-variant mb-1">Default Payment Terms</p>
                 <p className="text-sm font-bold text-lf-on-surface">Net-30</p>
-                <p className="text-xs text-lf-on-surface-variant mt-1">Based on {selectedClient?.name ?? "client"} payment history (avg 28 days).</p>
-                <button className="mt-2 text-xs font-semibold text-lf-primary hover:underline">Apply Suggestion</button>
+                <p className="text-xs text-lf-on-surface-variant mt-1">
+                  Due date defaults to 30 days from issue. Adjust it on the left.
+                </p>
               </div>
 
               <div className="bg-lf-surface rounded-lg p-3 border border-lf-outline-variant/20">
-                <p className="text-xs font-semibold text-lf-on-surface-variant mb-1">Rate Verification</p>
-                <p className="text-xs text-lf-on-surface-variant leading-relaxed">Current rates match last invoice for this client. No discrepancies detected.</p>
+                <p className="text-xs font-semibold text-lf-on-surface-variant mb-1">Need AI extraction?</p>
+                <p className="text-xs text-lf-on-surface-variant leading-relaxed">
+                  Use{" "}
+                  <Link href="/dashboard/invoices" className="text-lf-primary font-semibold hover:underline">
+                    Agent A
+                  </Link>{" "}
+                  to draft an invoice from a plain-language description.
+                </p>
               </div>
             </div>
           </div>
@@ -317,7 +320,7 @@ export default function GenerateInvoicePage() {
             <div className="flex flex-col gap-2 text-xs text-lf-on-surface-variant">
               <div className="flex justify-between">
                 <span>Client</span>
-                <span className="font-semibold text-lf-on-surface">{selectedClient?.name ?? "—"}</span>
+                <span className="font-semibold text-lf-on-surface">{customerName || "—"}</span>
               </div>
               <div className="flex justify-between">
                 <span>Invoice #</span>
@@ -336,14 +339,20 @@ export default function GenerateInvoicePage() {
 
           {/* Action buttons */}
           <div className="flex flex-col gap-3">
+            {errorMsg && (
+              <p role="alert" className="text-xs text-lf-error rounded-lg border border-lf-error/30 bg-lf-error-container/20 px-3 py-2">
+                {errorMsg}
+              </p>
+            )}
             <button
-              onClick={() => setSubmitted(true)}
-              className="w-full py-3 bg-lf-primary text-lf-on-primary rounded-xl text-sm font-bold hover:opacity-90 transition-all shadow-sm flex items-center justify-center gap-2"
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="w-full py-3 bg-lf-primary text-lf-on-primary rounded-xl text-sm font-bold hover:opacity-90 transition-all shadow-sm flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
               </svg>
-              Generate &amp; Send Invoice
+              {submitting ? "Creating…" : "Generate & Save Invoice"}
             </button>
             <button className="w-full py-2.5 border border-lf-outline-variant text-lf-on-surface-variant rounded-xl text-sm font-semibold hover:bg-lf-surface-container-low transition-colors flex items-center justify-center gap-2">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

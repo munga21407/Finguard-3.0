@@ -2,20 +2,20 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
+from src.core.csrf import CSRF_COOKIE_NAME, generate_csrf_token, require_csrf_token
+from src.core.exceptions import UnauthorizedError
 from src.core.security import decode_token
 from src.domains.identity.dependencies import CurrentUser, RequireUserManage
 from src.domains.identity.schemas import (
-    LogoutRequest,
-    RefreshRequest,
+    AccessTokenResponse,
     TokenRequest,
-    TokenResponse,
     UserCreate,
     UserResponse,
     UserUpdate,
@@ -31,6 +31,57 @@ router = APIRouter()
 
 DBSession = Annotated[AsyncSession, Depends(get_db)]
 
+# ── Cookie configuration ───────────────────────────────────────────────────────
+_REFRESH_COOKIE = "fg_refresh_token"
+_REFRESH_COOKIE_PATH = "/api/v1/identity"   # only sent to auth endpoints
+_COOKIE_MAX_AGE = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86_400
+# secure=True requires HTTPS — safe to enable only in production.
+# Never set secure=True behind HTTP in development or tests; the browser
+# silently drops the cookie.
+_COOKIE_SECURE = settings.ENVIRONMENT == "production"
+
+
+def _set_auth_cookies(response: Response, refresh_token: str, csrf_token: str) -> None:
+    """Attach the HttpOnly refresh-token cookie and the JS-readable CSRF cookie."""
+    response.set_cookie(
+        key=_REFRESH_COOKIE,
+        value=refresh_token,
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite="strict",
+        path=_REFRESH_COOKIE_PATH,
+        max_age=_COOKIE_MAX_AGE,
+    )
+    # The CSRF cookie is intentionally NOT HttpOnly — the frontend reads it and
+    # echoes it back as the X-CSRF-Token header (double-submit pattern).
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=csrf_token,
+        httponly=False,
+        secure=_COOKIE_SECURE,
+        samesite="strict",
+        path="/",
+        max_age=_COOKIE_MAX_AGE,
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    """Expire both auth cookies (forces the browser to delete them on receipt)."""
+    response.delete_cookie(
+        key=_REFRESH_COOKIE,
+        path=_REFRESH_COOKIE_PATH,
+        samesite="strict",
+        secure=_COOKIE_SECURE,
+    )
+    response.delete_cookie(
+        key=CSRF_COOKIE_NAME,
+        path="/",
+        samesite="strict",
+        secure=_COOKIE_SECURE,
+    )
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/register", response_model=UserResponse, status_code=201)
 async def register(data: UserCreate, db: DBSession) -> UserResponse:
@@ -38,15 +89,46 @@ async def register(data: UserCreate, db: DBSession) -> UserResponse:
     return UserResponse.model_validate(user)
 
 
-@router.post("/token", response_model=TokenResponse)
+@router.post("/token", response_model=AccessTokenResponse)
 @limiter.limit("5/minute")
-async def login(request: Request, data: TokenRequest, db: DBSession) -> TokenResponse:
-    return await IdentityService(db).login(data.email, data.password)
+async def login(
+    request: Request,
+    response: Response,
+    data: TokenRequest,
+    db: DBSession,
+) -> AccessTokenResponse:
+    """Authenticate and issue tokens.
+
+    The access token is returned in the JSON body.  The refresh token is set as
+    an HttpOnly, SameSite=Strict cookie so it is invisible to JavaScript and
+    therefore safe from XSS exfiltration.  A non-HttpOnly CSRF cookie is also
+    set for use by the double-submit CSRF pattern on /token/refresh.
+    """
+    result = await IdentityService(db).login(data.email, data.password)
+    _set_auth_cookies(response, result.refresh_token, generate_csrf_token())
+    return AccessTokenResponse(access_token=result.access_token)
 
 
-@router.post("/token/refresh", response_model=TokenResponse)
-async def refresh(data: RefreshRequest, db: DBSession) -> TokenResponse:
-    return await IdentityService(db).refresh(data.refresh_token)
+@router.post("/token/refresh", response_model=AccessTokenResponse)
+async def refresh(
+    request: Request,
+    response: Response,
+    db: DBSession,
+    _csrf: Annotated[None, Depends(require_csrf_token)],
+) -> AccessTokenResponse:
+    """Rotate the refresh token.
+
+    Reads the refresh token from the HttpOnly ``fg_refresh_token`` cookie (sent
+    automatically by the browser).  Validates the double-submit CSRF token.
+    On success: issues a new access token (body) and rotates the refresh cookie.
+    On replay detection: revokes the entire token family before rejecting.
+    """
+    refresh_cookie = request.cookies.get(_REFRESH_COOKIE)
+    if not refresh_cookie:
+        raise UnauthorizedError("No refresh token cookie present")
+    result = await IdentityService(db).refresh(refresh_cookie)
+    _set_auth_cookies(response, result.refresh_token, generate_csrf_token())
+    return AccessTokenResponse(access_token=result.access_token)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -54,6 +136,31 @@ async def me(current_user: CurrentUser) -> UserResponse:
     """Return the authenticated user — the frontend hydrates session state from
     this rather than decoding (partial) claims out of the access token."""
     return UserResponse.model_validate(current_user)
+
+
+@router.post("/logout", status_code=204)
+async def logout(
+    request: Request,
+    response: Response,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> None:
+    """Revoke the current session.
+
+    Blacklists the access token's JTI (via Authorization header) and the
+    refresh token's JTI (via cookie) in Redis so neither can be reused.
+    Always returns 204 — missing or already-expired tokens are silently ignored
+    so the client can always clear its local session.
+    Clears both auth cookies so the browser drops them immediately.
+    """
+    if credentials is not None:
+        await _blacklist_token(credentials.credentials, fallback_ttl=900)
+    refresh_cookie = request.cookies.get(_REFRESH_COOKIE)
+    if refresh_cookie:
+        await _blacklist_token(
+            refresh_cookie,
+            fallback_ttl=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86_400,
+        )
+    _clear_auth_cookies(response)
 
 
 # ── User administration (requires user:manage) ─────────────────────────────────
@@ -81,6 +188,8 @@ async def update_user(
     return UserResponse.model_validate(user)
 
 
+# ── Internal helper ────────────────────────────────────────────────────────────
+
 async def _blacklist_token(token: str, fallback_ttl: int) -> None:
     """Blacklist a JWT's jti until its natural expiry. Best-effort / never raises."""
     try:
@@ -94,23 +203,3 @@ async def _blacklist_token(token: str, fallback_ttl: int) -> None:
     now_ts = int(datetime.now(UTC).timestamp())
     ttl = max(1, exp - now_ts) if exp else fallback_ttl
     await get_auth_redis().setex(f"blacklist:{jti}", ttl, "1")
-
-
-@router.post("/logout", status_code=204)
-async def logout(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-    data: LogoutRequest | None = None,
-) -> None:
-    """
-    Blacklist the access token's JTI (and, when supplied, the refresh token's
-    JTI) in Redis (DB 1) so they are immediately rejected on subsequent
-    requests.  Returns 204 regardless — missing or already-expired tokens are
-    silently ignored so the client can always clear its local session.
-    """
-    if credentials is not None:
-        await _blacklist_token(credentials.credentials, fallback_ttl=900)
-    if data is not None and data.refresh_token:
-        await _blacklist_token(
-            data.refresh_token,
-            fallback_ttl=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86_400,
-        )

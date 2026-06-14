@@ -18,7 +18,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from langgraph.errors import GraphRecursionError  # noqa: F401 — re-exported for callers
+from langgraph.errors import (
+    GraphRecursionError as GraphRecursionError,  # explicit re-export for callers
+)
 from langgraph.graph import END, START, StateGraph
 
 from src.domains.intelligence.agents.a_generator import make_a_generator_node
@@ -32,6 +34,10 @@ from src.domains.intelligence.agents.h_advisor import make_h_advisor_node
 from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
 from src.domains.intelligence.agents.i_integrator import make_i_integrator_node
 from src.domains.intelligence.agents.j_summarizer import make_j_summarizer_node
+from src.domains.intelligence.agents.receipt_scanner import (
+    make_receipt_classifier_node,
+    make_receipt_ocr_node,
+)
 from src.domains.intelligence.agents.supervisor import make_supervisor_node
 from src.domains.intelligence.schemas import OrchestratorState
 
@@ -66,6 +72,27 @@ def build_invoice_graph() -> Any:
     workflow.add_edge(START, "a_generator")
     workflow.add_edge("a_generator", "hub_writer")
     workflow.add_edge("hub_writer", END)
+    return workflow.compile()
+
+
+def build_receipt_graph() -> Any:
+    """
+    Receipt-scanning graph for the /receipts/scan endpoint — decoupled from the
+    invoice graph (Agent A).
+
+    Topology: START → receipt_ocr → receipt_classifier → END
+
+    receipt_ocr runs Gemini vision over the uploaded image; receipt_classifier
+    suggests an expense category from the extracted fields.  Each node degrades
+    gracefully so a Gemini hiccup yields an empty/low-confidence form for the
+    user to complete rather than an HTTP 500.
+    """
+    workflow = StateGraph(OrchestratorState)
+    workflow.add_node("receipt_ocr", make_receipt_ocr_node())
+    workflow.add_node("receipt_classifier", make_receipt_classifier_node())
+    workflow.add_edge(START, "receipt_ocr")
+    workflow.add_edge("receipt_ocr", "receipt_classifier")
+    workflow.add_edge("receipt_classifier", END)
     return workflow.compile()
 
 

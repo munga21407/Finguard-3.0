@@ -25,12 +25,12 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import aio_pika
 from aio_pika import ExchangeType
 from google.genai import types
-from sqlalchemy import text
+from sqlalchemy import CursorResult, text
 
 from src.core.config import settings
 from src.core.logging import logger
@@ -45,6 +45,9 @@ from src.workers.tasks.celery_app import celery_app
 _BATCH_SIZE = 50
 _EVENT_EXCHANGE = "finguard.events"
 _EVENT_ROUTING_KEY = "finance.transactions.classified"
+# Max rows the weekly data-retention sweep deletes per Celery invocation —
+# bounded so the DELETE never takes a long table lock in production.
+_RETENTION_BATCH_SIZE = 10_000
 
 
 async def _write_to_hub(context: dict[str, Any]) -> str | None:
@@ -390,8 +393,6 @@ async def _run_data_retention_async() -> dict[str, Any]:
     Returns:
         {"status": "ok" | "no_work", "deleted_rows": int}
     """
-    _RETENTION_BATCH_SIZE = 10_000
-
     sql = text(f"""
         DELETE FROM ledger_entries
         WHERE id IN (
@@ -405,7 +406,8 @@ async def _run_data_retention_async() -> dict[str, Any]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(sql)
         await session.commit()
-        deleted: int = result.rowcount
+        # A DELETE returns a CursorResult; .rowcount is the deleted row count.
+        deleted: int = cast("CursorResult[Any]", result).rowcount
 
     if deleted == 0:
         logger.info("Data retention: no rows eligible for deletion")

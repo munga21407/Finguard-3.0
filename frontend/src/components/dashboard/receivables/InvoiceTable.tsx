@@ -1,31 +1,37 @@
+"use client";
+
 import Link from "next/link";
+import { useMemo } from "react";
 import { StatusBadge } from "../StatusBadge";
+import { useCustomers, useInvoices } from "@/lib/hooks/useFinanceData";
+import { formatDate, formatMoney } from "@/lib/utils/format";
+import type { ApiInvoiceStatus } from "@/types/api";
 
-type InvoiceStatus = "sent" | "paid" | "overdue" | "draft";
+// Map backend invoice status → StatusBadge variant + label.
+const STATUS_MAP: Record<ApiInvoiceStatus, { variant: "paid" | "sent" | "overdue" | "draft" | "processing"; label?: string }> = {
+  draft: { variant: "draft" },
+  sent: { variant: "sent" },
+  paid: { variant: "paid" },
+  partially_paid: { variant: "processing", label: "Partial" },
+  overdue: { variant: "overdue" },
+  cancelled: { variant: "draft", label: "Cancelled" },
+};
 
-interface Invoice {
-  id: string;
-  number: string;
-  client: string;
-  amount: string;
-  dueDate: string;
-  status: InvoiceStatus;
-  overdue?: boolean;
-}
+const MAX_ROWS = 5;
 
-const defaultInvoices: Invoice[] = [
-  { id: "1", number: "INV-2023-089", client: "TechFlow Solutions",   amount: "$12,450.00",  dueDate: "Oct 24, 2023", status: "sent" },
-  { id: "2", number: "INV-2023-088", client: "Global Industries Inc.",amount: "$45,000.00",  dueDate: "Oct 22, 2023", status: "paid" },
-  { id: "3", number: "INV-2023-087", client: "Acme Corp",            amount: "$8,900.00",   dueDate: "Oct 15, 2023", status: "overdue", overdue: true },
-  { id: "4", number: "INV-2023-086", client: "Nexus Dynamics",       amount: "$105,200.00", dueDate: "Oct 28, 2023", status: "sent" },
-  { id: "5", number: "INV-2023-085", client: "Stark Enterprises",    amount: "$22,000.00",  dueDate: "Nov 02, 2023", status: "draft" },
-];
+export function InvoiceTable() {
+  const { data: invoices, isLoading, isError } = useInvoices();
+  const { data: customers } = useCustomers();
 
-interface InvoiceTableProps {
-  invoices?: Invoice[];
-}
+  // customer_id → name lookup so the table shows a human name, not a UUID.
+  const customerName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of customers ?? []) map.set(c.id, c.name);
+    return map;
+  }, [customers]);
 
-export function InvoiceTable({ invoices = defaultInvoices }: InvoiceTableProps) {
+  const rows = (invoices ?? []).slice(0, MAX_ROWS);
+
   return (
     <div className="bg-lf-surface-container-lowest rounded-xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/30 flex flex-col">
       <div className="flex justify-between items-center mb-6">
@@ -44,27 +50,44 @@ export function InvoiceTable({ invoices = defaultInvoices }: InvoiceTableProps) 
               <th className="py-3 px-4 rounded-tr-lg text-right">Status</th>
             </tr>
           </thead>
-          <tbody className="text-sm">
-            {invoices.map((inv, i) => (
-              <tr
-                key={inv.id}
-                className={`hover:bg-lf-surface-container-low/30 transition-colors ${
-                  i < invoices.length - 1 ? "border-b border-lf-outline-variant/20" : ""
-                }`}
-              >
-                <td className="py-4 px-4 font-bold text-lf-primary cursor-pointer hover:underline">
-                  {inv.number}
-                </td>
-                <td className="py-4 px-4 text-lf-on-surface">{inv.client}</td>
-                <td className="py-4 px-4 font-medium text-lf-on-surface">{inv.amount}</td>
-                <td className={`py-4 px-4 ${inv.overdue ? "text-lf-error font-medium" : "text-lf-on-surface-variant"}`}>
-                  {inv.dueDate}
-                </td>
-                <td className="py-4 px-4 text-right">
-                  <StatusBadge status={inv.status} />
-                </td>
-              </tr>
-            ))}
+          <tbody className="text-sm" data-testid="invoice-table-body">
+            {isLoading && (
+              <tr><td colSpan={5} className="py-8 px-4 text-center text-lf-on-surface-variant">Loading invoices…</td></tr>
+            )}
+            {isError && !isLoading && (
+              <tr><td colSpan={5} className="py-8 px-4 text-center text-lf-error">Couldn&apos;t load invoices.</td></tr>
+            )}
+            {!isLoading && !isError && rows.length === 0 && (
+              <tr><td colSpan={5} className="py-8 px-4 text-center text-lf-on-surface-variant">No invoices yet.</td></tr>
+            )}
+            {rows.map((inv, i) => {
+              const badge = STATUS_MAP[inv.status] ?? { variant: "draft" as const };
+              const overdue = inv.status === "overdue";
+              return (
+                <tr
+                  key={inv.id}
+                  className={`hover:bg-lf-surface-container-low/30 transition-colors ${
+                    i < rows.length - 1 ? "border-b border-lf-outline-variant/20" : ""
+                  }`}
+                >
+                  <td className="py-4 px-4 font-bold text-lf-primary cursor-pointer hover:underline">
+                    {inv.invoice_number}
+                  </td>
+                  <td className="py-4 px-4 text-lf-on-surface">
+                    {customerName.get(inv.customer_id) ?? "—"}
+                  </td>
+                  <td className="py-4 px-4 font-medium text-lf-on-surface">
+                    {formatMoney(inv.total, inv.currency)}
+                  </td>
+                  <td className={`py-4 px-4 ${overdue ? "text-lf-error font-medium" : "text-lf-on-surface-variant"}`}>
+                    {formatDate(inv.due_date)}
+                  </td>
+                  <td className="py-4 px-4 text-right">
+                    <StatusBadge status={badge.variant} label={badge.label} />
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

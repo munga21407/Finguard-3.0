@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -78,6 +79,71 @@ async def init_db() -> None:
     """
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
+
+
+def _expected_head_revision() -> str | None:
+    """Best-effort: the latest Alembic head revision from the versions/ tree.
+
+    Returns None if alembic or the script directory can't be located — the
+    caller degrades to the weaker "is there *any* version" check rather than
+    failing on an environment quirk.
+    """
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        # postgres.py → database → infrastructure → src → <app root>
+        app_root = Path(__file__).resolve().parents[3]
+        script_location = app_root / "alembic"
+        if not (script_location / "versions").is_dir():
+            return None
+        cfg = Config()
+        cfg.set_main_option("script_location", str(script_location))
+        return ScriptDirectory.from_config(cfg).get_current_head()
+    except Exception:  # noqa: BLE001 — head detection is advisory, never fatal
+        return None
+
+
+async def verify_schema_migrated() -> None:
+    """Refuse to serve traffic against an unmigrated / drifted schema.
+
+    Enforces the migrations-on-deploy contract: the app must run *after*
+    ``alembic upgrade head`` (the compose ``migrate`` service or the deploy
+    pipeline). In production a missing/behind ``alembic_version`` is fatal; in
+    dev it's a loud warning so local non-compose workflows stay frictionless —
+    the same fail-in-prod / warn-in-dev pattern as the read-only engine guard.
+    """
+    async with engine.connect() as conn:
+        try:
+            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            current = result.scalar_one_or_none()
+        except Exception:  # noqa: BLE001 — table absent ⇒ never migrated
+            current = None
+
+    is_prod = settings.ENVIRONMENT == "production"
+
+    if current is None:
+        msg = (
+            "Database has not been migrated (no alembic_version row). Run "
+            "`alembic -c alembic/alembic.ini upgrade head` before starting the app."
+        )
+        if is_prod:
+            raise RuntimeError(msg)
+        _logger.warning("%s — allowed outside production.", msg)
+        return
+
+    head = _expected_head_revision()
+    if head is not None and current != head:
+        msg = (
+            f"Database schema is at revision {current!r} but the code expects "
+            f"{head!r}. Run `alembic upgrade head` to apply pending migrations."
+        )
+        if is_prod:
+            raise RuntimeError(msg)
+        _logger.warning("%s — allowed outside production.", msg)
+        return
+
+    _logger.info("Schema migration check passed (alembic head=%s).", current)
 
 
 async def close_db() -> None:

@@ -9,6 +9,8 @@
     "lint": "next lint",
     "sync-types": "openapi-typescript ${OPENAPI_URL:-http://localhost:8000}/openapi.json -o src/lib/api/generated/schema.d.ts",
     "sync-types:check": "npm run sync-types && git diff --exit-code src/lib/api/generated/",
+    "sync-types:file": "openapi-typescript ${OPENAPI_JSON:-./openapi.json} -o src/lib/api/generated/schema.d.ts",
+    "sync-types:check-file": "npm run sync-types:file && git diff --exit-code src/lib/api/generated/",
     "test:e2e": "playwright test"
   },
   "dependencies": {

@@ -28,7 +28,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import JWTError, jwt
+from jose import jwt
 
 from src.core.config import settings
 from src.core.logging import logger

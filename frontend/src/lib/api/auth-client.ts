@@ -1,7 +1,6 @@
 import {
   LoginRequest,
   RegisterRequest,
-  RefreshRequest,
   AuthTokens,
   User,
   RateLimitError,
@@ -9,18 +8,17 @@ import {
 import { tokenManager } from "@/lib/auth/token-manager";
 import { ENDPOINTS } from "@/lib/api/endpoints";
 
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
 class AuthAPIClient {
-  private baseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  // ── Register ───────────────────────────────────────────────────────────────
 
   async register(data: RegisterRequest): Promise<User> {
-    const response = await fetch(
-      `${this.baseUrl}${ENDPOINTS.AUTH.REGISTER}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      }
-    );
+    const response = await fetch(`${BASE_URL}${ENDPOINTS.AUTH.REGISTER}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
 
     const responseData = await response.json();
 
@@ -32,9 +30,14 @@ class AuthAPIClient {
     return responseData;
   }
 
+  // ── Login ──────────────────────────────────────────────────────────────────
+  // credentials: "include" is required so the browser stores the HttpOnly
+  // fg_refresh_token and fg_csrf cookies that the backend sets in the response.
+
   async login(data: LoginRequest): Promise<AuthTokens> {
-    const response = await fetch(`${this.baseUrl}${ENDPOINTS.AUTH.LOGIN}`, {
+    const response = await fetch(`${BASE_URL}${ENDPOINTS.AUTH.LOGIN}`, {
       method: "POST",
+      credentials: "include",   // receive HttpOnly refresh + CSRF cookies
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
@@ -53,14 +56,11 @@ class AuthAPIClient {
     return responseData;
   }
 
-  /**
-   * Fetch the authenticated user from the backend source of truth.
-   * The access token only carries `sub`/`role`, so email/full_name/verification
-   * status must come from GET /me rather than being decoded from the JWT.
-   */
+  // ── Get authenticated user ─────────────────────────────────────────────────
+
   async getMe(): Promise<User> {
     const token = tokenManager.getAccessToken();
-    const response = await fetch(`${this.baseUrl}${ENDPOINTS.AUTH.ME}`, {
+    const response = await fetch(`${BASE_URL}${ENDPOINTS.AUTH.ME}`, {
       headers: { Authorization: `Bearer ${token ?? ""}` },
     });
 
@@ -77,17 +77,26 @@ class AuthAPIClient {
     };
   }
 
-  async refreshToken(refreshToken: string): Promise<AuthTokens> {
-    const data: RefreshRequest = { refresh_token: refreshToken };
+  // ── Refresh ────────────────────────────────────────────────────────────────
+  // The refresh token lives in an HttpOnly cookie — we never read or send it
+  // explicitly.  The browser includes it automatically because of
+  // credentials: "include".  The CSRF token is read from the fg_csrf cookie
+  // (non-HttpOnly) and echoed in the X-CSRF-Token header.
 
-    const response = await fetch(
-      `${this.baseUrl}${ENDPOINTS.AUTH.REFRESH}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      }
-    );
+  async refreshToken(): Promise<AuthTokens> {
+    const csrf = tokenManager.getCsrfToken();
+    if (!csrf) {
+      throw new Error("No CSRF token — cannot refresh");
+    }
+
+    const response = await fetch(`${BASE_URL}${ENDPOINTS.AUTH.REFRESH}`, {
+      method: "POST",
+      credentials: "include",   // send HttpOnly refresh cookie + receive rotated cookies
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrf,
+      },
+    });
 
     const responseData = await response.json();
 
@@ -96,30 +105,26 @@ class AuthAPIClient {
     return responseData;
   }
 
-  /**
-   * Sends the current access token to the backend to be added to the Redis
-   * JTI blacklist. This is best-effort — network failures are intentionally
-   * swallowed so the caller always proceeds to clear local state.
-   */
+  // ── Logout ─────────────────────────────────────────────────────────────────
+  // credentials: "include" sends the HttpOnly refresh cookie so the backend
+  // can blacklist it.  Always swallows errors so the caller always proceeds
+  // to clear local state.
+
   async logout(): Promise<void> {
     const token = tokenManager.getAccessToken();
-    const refreshToken = tokenManager.getRefreshToken();
-    if (!token && !refreshToken) return;
+    if (!token) return;
 
     try {
-      await fetch(`${this.baseUrl}${ENDPOINTS.AUTH.LOGOUT}`, {
+      await fetch(`${BASE_URL}${ENDPOINTS.AUTH.LOGOUT}`, {
         method: "POST",
+        credentials: "include",   // send refresh cookie so backend can blacklist it
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        // Send the refresh token so the backend blacklists it too — otherwise a
-        // stolen refresh token would outlive logout until its 7-day expiry.
-        body: JSON.stringify({ refresh_token: refreshToken }),
       });
     } catch {
-      // Network errors are swallowed — the caller clears local tokens
-      // regardless. The backend JTIs expire naturally via their exp claim.
+      // Network errors are swallowed — local tokens are cleared regardless.
     }
   }
 }

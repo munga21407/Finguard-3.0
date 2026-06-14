@@ -471,7 +471,7 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
         updated_context["budget_watchdog_result"] = analysis.model_dump()
 
         # ── CompositeGenUIPayload ─────────────────────────────────────────
-        candidate: dict = state["context"].get("candidate_invoice", {})
+        candidate: dict[str, Any] = state["context"].get("candidate_invoice", {})
         composite = CompositeGenUIPayload(
             component_id="BudgetWatchdogMeter",
             props={

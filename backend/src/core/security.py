@@ -43,10 +43,18 @@ def create_access_token(subject: str | int, extra: dict[str, Any] | None = None)
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def create_refresh_token(subject: str | int) -> str:
+def create_refresh_token(subject: str | int, family_id: str | None = None) -> str:
+    """Create a signed refresh token.
+
+    ``family_id`` links every token in a rotation chain so that replaying a
+    consumed token (theft indicator) can invalidate the entire chain.  When not
+    supplied a fresh UUID is generated — this happens on the initial login.
+    Subsequent refresh rotations pass the existing ``family_id`` forward.
+    """
     payload: dict[str, Any] = {
         "sub": str(subject),
-        "jti": str(uuid.uuid4()),   # unique ID — enables rotation + blacklist revocation
+        "jti": str(uuid.uuid4()),       # unique per rotation — drives the blacklist
+        "family_id": family_id or str(uuid.uuid4()),  # shared across the chain
         "exp": datetime.now(UTC) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
         "type": "refresh",
     }

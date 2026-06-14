@@ -21,9 +21,12 @@ from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.schemas import ExtractedInvoice, ReceiptExtraction
+from src.domains.intelligence.tools.vision_ocr import extract_receipt
 from src.workers.tasks.celery_app import celery_app
 
 # ── Extraction prompts ────────────────────────────────────────────────────────
+# NOTE: the receipt prompt now lives in intelligence/tools/vision_ocr.py as the
+# single source of truth — this task delegates receipt OCR to extract_receipt().
 
 _DOCUMENT_TEXT_PROMPT = """\
 Extract all readable text from this document image for Finguard, a Kenyan SME platform.
@@ -31,21 +34,6 @@ Extract all readable text from this document image for Finguard, a Kenyan SME pl
 Return the text exactly as it appears, preserving layout structure where possible.
 Include all numbers, dates, names, and monetary amounts.
 If the document is not readable, return an empty string.
-"""
-
-_RECEIPT_PROMPT = """\
-Extract structured data from this receipt image for Finguard, a Kenyan SME platform.
-
-Focus on:
-  - merchant_name: the business name printed on the receipt
-  - date: transaction date (ISO-8601 preferred, null if unreadable)
-  - total_amount: the final payable amount as a float
-  - currency: 3-letter ISO code — default KES if not shown
-  - kra_pin: the KRA (Kenya Revenue Authority) PIN if printed (e.g. P051234567X)
-  - line_items: list of item/service description strings
-
-Return null for any field not clearly legible. Set confidence = 1.0 only when
-all core fields are unambiguous.
 """
 
 _INVOICE_IMAGE_PROMPT = """\
@@ -85,30 +73,15 @@ async def _run_document_text_extraction(image_bytes: bytes, mime_type: str) -> s
     client = get_gemini_client()
     response = await client.aio.models.generate_content(
         model=settings.GEMINI_MODEL,
-        contents=[
+        # google-genai stubs type `contents` with an invariant list union, so a
+        # plain list[Part] is rejected even though it is valid at runtime.
+        contents=[  # type: ignore[arg-type]
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            types.Part.from_text(_DOCUMENT_TEXT_PROMPT),
+            types.Part.from_text(text=_DOCUMENT_TEXT_PROMPT),
         ],
         config=types.GenerateContentConfig(temperature=0.0),
     )
     return (response.text or "").strip()
-
-
-async def _run_receipt_extraction(image_bytes: bytes, mime_type: str) -> ReceiptExtraction:
-    client = get_gemini_client()
-    response = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        contents=[
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            types.Part.from_text(_RECEIPT_PROMPT),
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ReceiptExtraction,
-            temperature=0.0,
-        ),
-    )
-    return ReceiptExtraction.model_validate_json(response.text or "{}")
 
 
 async def _run_invoice_image_extraction(
@@ -118,9 +91,11 @@ async def _run_invoice_image_extraction(
     client = get_gemini_client()
     response = await client.aio.models.generate_content(
         model=settings.GEMINI_MODEL,
-        contents=[
+        # google-genai stubs type `contents` with an invariant list union, so a
+        # plain list[Part] is rejected even though it is valid at runtime.
+        contents=[  # type: ignore[arg-type]
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            types.Part.from_text(_INVOICE_IMAGE_PROMPT),
+            types.Part.from_text(text=_INVOICE_IMAGE_PROMPT),
         ],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -160,7 +135,12 @@ def process_document_ocr(self: Any, document_id: str, storage_path: str) -> dict
                 document_id=document_id,
                 path=storage_path,
             )
-            return {"document_id": document_id, "status": "file_not_found", "text": "", "confidence": 0.0}
+            return {
+                "document_id": document_id,
+                "status": "file_not_found",
+                "text": "",
+                "confidence": 0.0,
+            }
 
         image_bytes = path.read_bytes()
         mime = _mime_type(storage_path)
@@ -206,17 +186,8 @@ def process_receipt_ocr(self: Any, receipt_id: str, image_bytes_b64: str) -> dic
     try:
         image_bytes = base64.b64decode(image_bytes_b64)
 
-        # Detect MIME from the raw header bytes (JPEG: FF D8; PNG: 89 50 4E 47)
-        if image_bytes[:2] == b"\xff\xd8":
-            mime = "image/jpeg"
-        elif image_bytes[:4] == b"\x89PNG":
-            mime = "image/png"
-        else:
-            mime = "image/jpeg"  # safe default for most phone receipt scans
-
-        extraction: ReceiptExtraction = asyncio.run(
-            _run_receipt_extraction(image_bytes, mime)
-        )
+        # MIME is sniffed from the magic bytes inside extract_receipt().
+        extraction: ReceiptExtraction = asyncio.run(extract_receipt(image_bytes))
         return {
             "receipt_id": receipt_id,
             "status": "processed",
@@ -225,7 +196,9 @@ def process_receipt_ocr(self: Any, receipt_id: str, image_bytes_b64: str) -> dic
 
     except (ValueError, UnicodeDecodeError) as exc:
         # Corrupt / non-image payload — do not retry
-        logger.warning("Receipt OCR: unreadable image payload", receipt_id=receipt_id, error=str(exc))
+        logger.warning(
+            "Receipt OCR: unreadable image payload", receipt_id=receipt_id, error=str(exc)
+        )
         return {
             "receipt_id": receipt_id,
             "status": "unreadable",

@@ -1,8 +1,10 @@
 "use client";
 
 // ─── ReceiptScanner ───────────────────────────────────────────────────────────
-// Agent B UI: drag/drop or click-to-upload a receipt image → 3-second mock OCR
-// → structured form auto-populated for user review → confirm saves to ledger.
+// Receipt OCR UI: drag/drop or click-to-upload a receipt image → backend
+// multimodal OCR (POST /intelligence/receipts/scan) → structured form
+// auto-populated for user review → confirm persists the expense
+// (POST /finance/receipts).
 //
 // State machine: 'idle' → 'scanning' → 'ready' → ('confirmed')
 // File logic is kept in the left panel; form state lives in the right panel.
@@ -22,6 +24,9 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
+import { scanReceipt, type ReceiptScanResult } from "@/lib/api/intelligence";
+import { createReceiptExpense } from "@/lib/api/finance";
+import type { ApiReceiptExpenseCreate } from "@/types/api";
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 // Mirrors the PydanticAI ReceiptExtraction model on the backend.
@@ -46,16 +51,35 @@ const receiptSchema = z.object({
 
 export type ReceiptFormValues = z.infer<typeof receiptSchema>;
 
-// ── Mock OCR result ───────────────────────────────────────────────────────────
-// Replace with: httpClient.post(ENDPOINTS.INTELLIGENCE.INTENT, { image_base64 })
-const MOCK_OCR: ReceiptFormValues = {
-  merchantName: "Nairobi Hardware Ltd",
-  date: "2024-10-22",
-  totalAmount: 3750,
-  kraPin: "A123456789B",
-  category: "supplies",
-  reference: "RCP-00291",
-};
+const VALID_CATEGORIES = [
+  "supplies",
+  "services",
+  "utilities",
+  "travel",
+  "other",
+] as const;
+
+type ReceiptCategory = (typeof VALID_CATEGORIES)[number];
+
+function toCategory(value: string): ReceiptCategory {
+  return (VALID_CATEGORIES as readonly string[]).includes(value)
+    ? (value as ReceiptCategory)
+    : "other";
+}
+
+/** Map the backend scan result into the editable form's shape. */
+function mapScanToForm(result: ReceiptScanResult): ReceiptFormValues {
+  const ext = result.extraction;
+  return {
+    merchantName: ext.merchant_name ?? "",
+    // The form's <input type="date"> needs YYYY-MM-DD; trim any time component.
+    date: ext.date ? ext.date.slice(0, 10) : "",
+    totalAmount: ext.total_amount ?? 0,
+    kraPin: ext.kra_pin ?? "",
+    category: toCategory(result.suggested_category),
+    reference: "",
+  };
+}
 
 type ScanState = "idle" | "scanning" | "ready" | "confirmed";
 
@@ -80,7 +104,7 @@ export function ReceiptScanner() {
 
   // ── File handling ─────────────────────────────────────────────────────────
   const processFile = useCallback(
-    (file: File) => {
+    async (file: File) => {
       setFileError(null);
 
       if (!ACCEPTED_TYPES.includes(file.type)) {
@@ -97,12 +121,20 @@ export function ReceiptScanner() {
       setPreviewUrl(URL.createObjectURL(file));
       setScanState("scanning");
 
-      // Mock 3-second OCR delay
-      // In production: const base64 = await toBase64(file); then call API
-      setTimeout(() => {
-        reset(MOCK_OCR);
+      try {
+        const result = await scanReceipt(file);
+        reset(mapScanToForm(result));
+        // A soft OCR failure still returns a (blank) form to complete by hand.
+        if (result.error) {
+          setFileError(
+            "Couldn't read the receipt automatically — please fill the fields below."
+          );
+        }
         setScanState("ready");
-      }, 3000);
+      } catch {
+        setFileError("Receipt scan failed. Check your connection and try again.");
+        setScanState("idle");
+      }
     },
     [previewUrl, reset]
   );
@@ -135,10 +167,21 @@ export function ReceiptScanner() {
 
   // ── Form submission ───────────────────────────────────────────────────────
   async function onConfirm(values: ReceiptFormValues) {
-    // TODO: await httpClient.post(ENDPOINTS.FINANCE.LEDGER, { ...values, type: "expense" })
-    void values;
-    await new Promise((r) => setTimeout(r, 800));
-    setScanState("confirmed");
+    const body: ApiReceiptExpenseCreate = {
+      merchant_name: values.merchantName,
+      category: values.category,
+      amount: values.totalAmount,
+      vault: "CASH",
+      kra_pin: values.kraPin ? values.kraPin : null,
+      receipt_date: values.date ? new Date(values.date).toISOString() : null,
+      description: values.reference ? values.reference : null,
+    };
+    try {
+      await createReceiptExpense(body);
+      setScanState("confirmed");
+    } catch {
+      setFileError("Could not save the expense. Please try again.");
+    }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────

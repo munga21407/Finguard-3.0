@@ -50,11 +50,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Scan the built backend image; fail on fixable CRITICAL vulnerabilities.
+      # Scan both built images; fail on fixable CRITICAL vulnerabilities.
       - name: Trivy image scan (backend)
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ghcr.io/${{ env.REPO_LC }}/backend:${{ github.sha }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Trivy image scan (frontend)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ env.REPO_LC }}/frontend:${{ github.sha }}
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: "1"

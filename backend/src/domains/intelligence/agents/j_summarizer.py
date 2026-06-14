@@ -71,9 +71,13 @@ def _collect_sections(ctx: dict[str, Any]) -> dict[str, Any]:
             sections[key] = val
     # Include any additional agent output keys not in the standard list
     for key, val in ctx.items():
-        if key not in sections and key not in _SKIP_KEYS and val:
-            if isinstance(val, (dict, list)) and val:
-                sections[key] = val
+        if (
+            key not in sections
+            and key not in _SKIP_KEYS
+            and isinstance(val, (dict, list))
+            and val
+        ):
+            sections[key] = val
     return sections
 
 
@@ -102,7 +106,8 @@ def make_j_summarizer_node(llm: Any = None) -> Any:  # llm kept for signature co
                 "Preserve all KES monetary figures, percentages, and scores as numerals."
             )
 
-        prompt = f"""You are a financial briefing specialist preparing a C-suite executive summary for a Kenyan SME.
+        prompt = f"""\
+You are a financial briefing specialist preparing a C-suite executive summary for a Kenyan SME.
 
 ## Agent Intelligence Outputs
 {context_payload}
@@ -112,7 +117,8 @@ Distil ALL findings above into EXACTLY 3-5 executive bullet points.
 
 Rules:
 - Start every bullet with "•"
-- Each bullet begins with a bold label: **Budget Health:**, **Cash Flow:**, **Credit Risk:**, **Tax Compliance:**, or **Advisory:**
+- Each bullet begins with a bold label:
+  **Budget Health:**, **Cash Flow:**, **Credit Risk:**, **Tax Compliance:**, or **Advisory:**
 - Reference specific KES figures, scores, or flags from the data where available
 - Plain language only — no jargon, no sub-bullets, no markdown beyond bold labels
 - Output bullet points ONLY — no preamble, no headings, no closing remarks{locale_note}
@@ -141,7 +147,8 @@ Rules:
             cr = sections.get("credit_strategy_result") or {}
             if cr:
                 lines.append(
-                    f"• **Credit Risk:** Bankability score {cr.get('bankability_score', 'N/A')}/100 "
+                    f"• **Credit Risk:** Bankability score "
+                    f"{cr.get('bankability_score', 'N/A')}/100 "
                     f"({cr.get('risk_tier', 'N/A')} tier)."
                 )
 

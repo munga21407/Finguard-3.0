@@ -34,7 +34,12 @@ from sqlalchemy import text
 from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.llm_client import get_gemini_client
-from src.domains.intelligence.schemas import AgentGOutput, CompositeGenUIPayload, KeyFinding, OrchestratorState
+from src.domains.intelligence.schemas import (
+    AgentGOutput,
+    CompositeGenUIPayload,
+    KeyFinding,
+    OrchestratorState,
+)
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
 # ── Forecasting ───────────────────────────────────────────────────────────────
@@ -61,7 +66,7 @@ def _forecast_series(historical: list[float], periods: int = 12) -> list[float]:
         return [max(0.0, round(mean + slope * (i + 1), 2)) for i in range(periods)]
 
     try:
-        from statsmodels.tsa.holtwinters import ExponentialSmoothing  # type: ignore[import-untyped]
+        from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
         model = ExponentialSmoothing(
             arr,
@@ -307,7 +312,8 @@ def _generate_pdf_report(
         story += [
             Spacer(1, 0.5 * cm),
             Paragraph(
-                "All numerical figures are deterministically computed from double-entry ledger data. "
+                "All numerical figures are deterministically computed from "
+                "double-entry ledger data. "
                 "This report was generated automatically by Finguard 3.0 AI agents.",
                 styles["Italic"],
             ),
@@ -489,7 +495,10 @@ Write a strategic_narrative (3-5 sentences) that:
         findings: list[KeyFinding] = [
             KeyFinding(metric="Score", value=f"{bankability_score}/100"),
             KeyFinding(metric="Risk Tier", value=risk_tier),
-            KeyFinding(metric="Q1 Revenue", value=f"KES {q_revenue[0]:,.0f}" if q_revenue else "N/A"),
+            KeyFinding(
+                metric="Q1 Revenue",
+                value=f"KES {q_revenue[0]:,.0f}" if q_revenue else "N/A",
+            ),
             KeyFinding(metric="Q1 OpEx", value=f"KES {q_opex[0]:,.0f}" if q_opex else "N/A"),
         ]
         composite = CompositeGenUIPayload(

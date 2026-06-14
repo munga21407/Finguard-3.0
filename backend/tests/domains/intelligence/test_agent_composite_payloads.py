@@ -18,6 +18,7 @@ from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from src.domains.intelligence.schemas import (
     CompositeGenUIPayload,
@@ -25,7 +26,6 @@ from src.domains.intelligence.schemas import (
     KeyFinding,
     RegimeAnalysis,
 )
-
 
 # ── Shared test helpers ────────────────────────────────────────────────────────
 
@@ -117,15 +117,15 @@ class TestCompositeGenUIPayload:
         assert composite.to_gen_ui_payload().props["findings"] == []
 
     def test_key_finding_rejects_empty_metric(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             KeyFinding(metric="", value="some value")
 
     def test_key_finding_rejects_empty_value(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             KeyFinding(metric="Runway", value="")
 
     def test_composite_rejects_whitespace_component_id(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             CompositeGenUIPayload(
                 component_id=" CashFlowChart",
                 props={},

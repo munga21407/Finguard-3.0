@@ -144,6 +144,14 @@ class Expense(Base):
     invoice_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoices.id"), index=True
     )
+    # ── Receipt-scan provenance (nullable; populated by POST /finance/receipts) ──
+    # merchant_name + kra_pin preserve the OCR audit trail; kra_pin feeds Agent F
+    # (tax compliance).  receipt_date is the printed transaction date, which may
+    # differ from created_at (when the row was inserted).
+    merchant_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    kra_pin: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    receipt_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

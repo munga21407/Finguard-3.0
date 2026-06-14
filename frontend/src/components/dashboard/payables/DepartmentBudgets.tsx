@@ -1,13 +1,8 @@
-interface BudgetItem {
-  department: string;
-  utilized: number;
-}
+"use client";
 
-const defaultBudgets: BudgetItem[] = [
-  { department: "Research & Dev",  utilized: 75 },
-  { department: "Marketing",       utilized: 42 },
-  { department: "Operations",      utilized: 92 },
-];
+import Link from "next/link";
+import { useBudgets } from "@/lib/hooks/useFinanceData";
+import { utilisationPct } from "@/lib/utils/format";
 
 function barColor(pct: number) {
   if (pct >= 90) return "bg-lf-error";
@@ -19,32 +14,45 @@ function labelColor(pct: number) {
   return pct >= 90 ? "text-lf-error" : "text-lf-on-surface-variant";
 }
 
-interface DepartmentBudgetsProps {
-  items?: BudgetItem[];
-}
+const MAX_ROWS = 6;
 
-export function DepartmentBudgets({ items = defaultBudgets }: DepartmentBudgetsProps) {
+export function DepartmentBudgets() {
+  const { data: budgets, isLoading, isError } = useBudgets();
+  const rows = (budgets ?? []).slice(0, MAX_ROWS);
+
   return (
     <div className="bg-lf-surface-container-lowest rounded-xl p-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-lf-surface-variant/50 h-full flex flex-col gap-5">
-      {items.map((item) => (
-        <div key={item.department} className="flex flex-col gap-2">
-          <div className="flex justify-between items-end">
-            <span className="text-sm font-medium text-lf-on-surface">{item.department}</span>
-            <span className={`text-xs font-semibold tracking-widest uppercase ${labelColor(item.utilized)}`}>
-              {item.utilized}% Utilized
-            </span>
+      {isLoading && (
+        <p className="text-sm text-lf-on-surface-variant">Loading budgets…</p>
+      )}
+      {isError && !isLoading && (
+        <p className="text-sm text-lf-error">Couldn&apos;t load budgets.</p>
+      )}
+      {!isLoading && !isError && rows.length === 0 && (
+        <p className="text-sm text-lf-on-surface-variant">No budgets configured yet.</p>
+      )}
+      {rows.map((budget) => {
+        const pct = utilisationPct(budget.spent, budget.amount);
+        return (
+          <div key={budget.id} className="flex flex-col gap-2">
+            <div className="flex justify-between items-end">
+              <span className="text-sm font-medium text-lf-on-surface">{budget.name}</span>
+              <span className={`text-xs font-semibold tracking-widest uppercase ${labelColor(pct)}`}>
+                {pct}% Utilized
+              </span>
+            </div>
+            <div className="w-full bg-lf-surface-variant h-2 rounded-full overflow-hidden">
+              <div
+                className={`${barColor(pct)} h-full rounded-full transition-all`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
           </div>
-          <div className="w-full bg-lf-surface-variant h-2 rounded-full overflow-hidden">
-            <div
-              className={`${barColor(item.utilized)} h-full rounded-full transition-all`}
-              style={{ width: `${item.utilized}%` }}
-            />
-          </div>
-        </div>
-      ))}
-      <button className="mt-auto text-lf-primary text-xs font-semibold text-left hover:underline w-fit">
+        );
+      })}
+      <Link href="/dashboard/budgets" className="mt-auto text-lf-primary text-xs font-semibold text-left hover:underline w-fit">
         View all budgets →
-      </button>
+      </Link>
     </div>
   );
 }

@@ -14,9 +14,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from google.genai import types
 from langchain_core.messages import AIMessage
 from sqlalchemy import text
 
+from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.prompts.b_classifier import CLASSIFIER_SYSTEM, TRANSACTION_TAXONOMY
@@ -26,9 +28,6 @@ from src.domains.intelligence.schemas import (
     TransactionClassification,
 )
 from src.infrastructure.database.postgres import AsyncSessionLocal
-
-from google.genai import types
-from src.core.config import settings
 
 _BATCH_SIZE = 50
 
@@ -155,7 +154,9 @@ def make_b_classifier_node(llm: Any = None) -> Any:  # llm kept for signature co
         # writes and event publishing so this node stays side-effect-free.
         if mode == "actions":
             try:
-                from src.workers.tasks.batch import classify_unclassified_ledger_entries  # noqa: PLC0415
+                from src.workers.tasks.batch import (
+                    classify_unclassified_ledger_entries,  # noqa: PLC0415
+                )
                 classify_unclassified_ledger_entries.delay()
                 logger.info(
                     "b_classifier: dispatched classify_unclassified_ledger_entries task",

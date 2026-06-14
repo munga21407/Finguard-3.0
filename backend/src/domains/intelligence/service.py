@@ -37,7 +37,9 @@ class IntelligenceService:
 
         response = await client.aio.models.generate_content(
             model=settings.GEMINI_MODEL,
-            contents=contents,
+            # google-genai stubs type `contents` with an invariant list union,
+            # so a plain list[Content] is rejected though valid at runtime.
+            contents=contents,  # type: ignore[arg-type]
             config=config,
         )
 

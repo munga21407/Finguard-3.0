@@ -1,0 +1,27 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FinGuard 3.0 — Production overlay
+#
+# Layers TLS termination on top of the (already production-shaped) base file.
+# The base already runs non-root images, gates on the `migrate` one-shot, keeps
+# datastores off the host, and routes external traffic only through nginx.
+# This overlay swaps nginx into TLS mode.
+#
+# Usage:
+#   1. Put real certs at ./nginx/certs/{fullchain.pem,privkey.pem}
+#      (Let's Encrypt / cert-manager / mounted secret).
+#   2. Populate infrastructure/.env with the production secrets the config
+#      fail-fast validator requires: SECRET_KEY (strong), DATABASE_READONLY_URL,
+#      METRICS_AUTH_SECRET, non-wildcard ALLOWED_ORIGINS.
+#   3. docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# (ENVIRONMENT defaults to "production" in the base file, so the prod config
+#  validation is already active.)
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+  nginx:
+    volumes:
+      # TLS-terminating config (listens on 443, redirects 80→443, sends HSTS).
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      # Certificates expected at /etc/nginx/certs/{fullchain,privkey}.pem.
+      - ./nginx/certs:/etc/nginx/certs:ro

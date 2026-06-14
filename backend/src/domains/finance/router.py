@@ -22,6 +22,7 @@ from src.domains.finance.schemas import (
     MpesaCallbackPayload,
     PaymentCreate,
     PaymentResponse,
+    ReceiptExpenseCreate,
 )
 from src.domains.finance.service import FinanceService
 from src.domains.identity.dependencies import RequireFinanceRead, RequireFinanceWrite
@@ -146,6 +147,21 @@ async def list_expenses(
 ) -> list[ExpenseResponse]:
     expenses = await FinanceService(db).list_expenses(limit=limit, offset=offset)
     return [ExpenseResponse.model_validate(e) for e in expenses]
+
+
+@router.post("/receipts", response_model=ExpenseResponse, status_code=201)
+async def create_receipt_expense(
+    data: ReceiptExpenseCreate, db: DBSession, _: RequireFinanceWrite
+) -> ExpenseResponse:
+    """Persist a reviewed receipt scan as an expense.
+
+    The OCR + categorisation happens in the intelligence domain
+    (POST /intelligence/receipts/scan); this endpoint takes the user-verified
+    fields and writes the expense (with budget burn-down + ``expenses.created``
+    event) in a single transaction.
+    """
+    expense = await FinanceService(db).create_receipt_expense(data)
+    return ExpenseResponse.model_validate(expense)
 
 
 # ── M-Pesa ────────────────────────────────────────────────────────────────────

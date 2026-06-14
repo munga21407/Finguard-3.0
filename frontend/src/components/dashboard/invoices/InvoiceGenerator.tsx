@@ -27,7 +27,8 @@ import {
   extractInvoice,
   type ExtractedInvoice,
 } from "@/lib/api/intelligence";
-import { createInvoice, resolveCustomerId } from "@/lib/api/finance";
+import { createInvoice } from "@/lib/api/finance";
+import { CustomerPicker } from "@/components/dashboard/invoices/CustomerPicker";
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 // Mirrors the PydanticAI InvoiceExtraction model on the backend.
@@ -46,7 +47,8 @@ const lineItemSchema = z.object({
 });
 
 const invoiceSchema = z.object({
-  merchant: z.string().min(1, "Merchant is required"),
+  // The client is chosen via <CustomerPicker> (a real customer id), not a free
+  // text field — so it lives in component state, not the RHF schema.
   currency: z
     .string()
     .length(3, "3-letter currency code required")
@@ -76,12 +78,16 @@ function mapExtractedToForm(ext: ExtractedInvoice | null): InvoiceFormValues {
     unitPrice: li.unit_price || 0,
   }));
   return {
-    merchant: ext?.customer || ext?.vendor || "",
     currency: ext?.currency || "KES",
     dueDate: (ext?.due_date || "").split("T")[0] || defaultDueDate(),
     items: items.length > 0 ? items : [{ description: "", quantity: 1, unitPrice: 0 }],
     notes: "",
   };
+}
+
+/** The client name Agent A extracted, used to prefill the CustomerPicker. */
+function extractedClientName(ext: ExtractedInvoice | null): string {
+  return ext?.customer || ext?.vendor || "";
 }
 
 // ── State types ───────────────────────────────────────────────────────────────
@@ -93,6 +99,12 @@ export function InvoiceGenerator() {
   const [state, setState] = useState<ExtractionState>("idle");
   const [saved, setSaved] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Client selection lives outside RHF — it's a real customer id from the picker.
+  const [customerId, setCustomerId] = useState<string | null>(null);
+  const [, setCustomerName] = useState("");
+  const [prefillName, setPrefillName] = useState("");
+  const [customerError, setCustomerError] = useState<string | null>(null);
 
   const {
     register,
@@ -123,6 +135,7 @@ export function InvoiceGenerator() {
     try {
       const extracted = await extractInvoice(prompt);
       reset(mapExtractedToForm(extracted));
+      setPrefillName(extractedClientName(extracted));
       setState("ready");
     } catch {
       setErrorMsg(
@@ -135,8 +148,13 @@ export function InvoiceGenerator() {
 
   async function onSave(values: InvoiceFormValues) {
     setErrorMsg(null);
+    // The client must be an explicit, real customer — no silent auto-creation.
+    if (!customerId) {
+      setCustomerError("Select or create a client for this invoice.");
+      return;
+    }
+    setCustomerError(null);
     try {
-      const customerId = await resolveCustomerId(values.merchant);
       const subtotalAmount = values.items.reduce(
         (sum, item) => sum + Number(item.quantity) * Number(item.unitPrice),
         0
@@ -158,11 +176,21 @@ export function InvoiceGenerator() {
     }
   }
 
+  function handleCustomerChange(id: string | null, name: string) {
+    setCustomerId(id);
+    setCustomerName(name);
+    if (id) setCustomerError(null);
+  }
+
   function handleReset() {
     setState("idle");
     setPrompt("");
     setSaved(false);
     setErrorMsg(null);
+    setCustomerId(null);
+    setCustomerName("");
+    setPrefillName("");
+    setCustomerError(null);
     reset({ currency: "KES", items: [] });
   }
 
@@ -300,14 +328,15 @@ export function InvoiceGenerator() {
           {/* Merchant + Currency + Due Date */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Field
-              label="Merchant / Client"
-              error={errors.merchant?.message}
+              label="Client"
+              error={customerError ?? undefined}
               className="sm:col-span-1"
             >
-              <input
-                {...register("merchant")}
-                placeholder="Client or company name"
-                className={fieldInput(!!errors.merchant)}
+              <CustomerPicker
+                value={customerId}
+                onChange={handleCustomerChange}
+                prefillName={prefillName}
+                error={customerError ?? undefined}
               />
             </Field>
             <Field label="Currency" error={errors.currency?.message}>

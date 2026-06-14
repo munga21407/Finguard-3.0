@@ -26,12 +26,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
+from google.genai import types
 from langchain_core.messages import AIMessage
 from rapidfuzz import fuzz
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from google.genai import types
 
 from src.core.config import settings
 from src.domains.intelligence.llm_client import get_gemini_client
@@ -388,7 +387,7 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
                     raise  # propagates to session.begin() → full batch ROLLBACK
         else:
             exact_matches = []
-            matched_txn_ids: set[str] = set()
+            matched_txn_ids = set()
             all_matches = []
 
         # session.begin() commits here on clean exit.

@@ -36,6 +36,7 @@ from src.domains.finance.schemas import (
     MpesaStkCallback,
     MpesaTransactionResponse,
     PaymentCreate,
+    ReceiptExpenseCreate,
 )
 from src.domains.finance.types import VaultType
 from src.domains.identity.models import User
@@ -108,11 +109,45 @@ class FinanceService:
     async def create_expense(self, data: ExpenseCreate) -> Expense:
         expense = Expense(**data.model_dump())
         expense = await self._expense_repo.create(expense)
+        await self._apply_expense_side_effects(expense, source="database.expenses")
+        await self._session.commit()
+        return expense
 
+    async def create_receipt_expense(self, data: ReceiptExpenseCreate) -> Expense:
+        """Persist an expense from a reviewed receipt scan.
+
+        Same transactional guarantees as ``create_expense`` (budget burn-down +
+        outbox event in one transaction), but additionally stores the OCR audit
+        trail (merchant, KRA PIN, printed date, note).  The ``expenses.created``
+        event still fires, so Agent E's watchdog evaluates receipt expenses
+        exactly like API-created ones.
+        """
+        expense = Expense(
+            expense_ref=data.expense_ref,
+            customer_id=data.customer_id,
+            category=data.category,
+            amount=data.amount,
+            vault=data.vault,
+            merchant_name=data.merchant_name,
+            kra_pin=data.kra_pin,
+            description=data.description,
+            receipt_date=data.receipt_date,
+        )
+        expense = await self._expense_repo.create(expense)
+        await self._apply_expense_side_effects(expense, source="receipt.scan")
+        await self._session.commit()
+        return expense
+
+    async def _apply_expense_side_effects(self, expense: Expense, *, source: str) -> None:
+        """Budget burn-down + outbox event for a freshly-flushed expense.
+
+        Shared by ``create_expense`` and ``create_receipt_expense``.  Does NOT
+        commit — the caller owns the transaction boundary so the expense INSERT,
+        budget UPDATE, and outbox INSERT all succeed or fail together.
+        """
         # Increment the spent counter on every budget whose category and active
-        # period match this expense.  Executed inside the same transaction as the
-        # expense INSERT so Agent E's watchdog always reads a consistent burn rate.
-        # If no budget row matches the UPDATE is a safe no-op (0 rows affected).
+        # period match this expense, so Agent E's watchdog always reads a
+        # consistent burn rate.  No matching budget → safe no-op (0 rows).
         await self._session.execute(
             text("""
                 UPDATE budgets
@@ -128,11 +163,9 @@ class FinanceService:
             },
         )
 
-        # Emit via the transactional outbox — written in the SAME transaction as
-        # the expense INSERT and budget UPDATE.  Previously this published to
-        # RabbitMQ *after* commit, so a broker outage silently dropped the event
-        # while the database row persisted.  The projector now delivers it with
-        # at-least-once semantics.
+        # Emit via the transactional outbox so a broker outage cannot silently
+        # drop the event while the database row persists — the projector
+        # delivers it with at-least-once semantics.
         self._session.add(
             OutboxEvent(
                 exchange="finguard.events",
@@ -146,13 +179,11 @@ class FinanceService:
                         "category": expense.category,
                         "vault": expense.vault.value,
                         "occurred_at": expense.created_at.isoformat(),
-                        "source": "database.expenses",
+                        "source": source,
                     },
                 },
             )
         )
-        await self._session.commit()
-        return expense
 
     async def list_expenses(self, limit: int = 100, offset: int = 0) -> list[Expense]:
         return await self._expense_repo.list_all(limit=limit, offset=offset)

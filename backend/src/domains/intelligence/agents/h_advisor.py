@@ -26,7 +26,6 @@ from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.schemas import OrchestratorState
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
-
 # ── Private Gemini output schemas ─────────────────────────────────────────────
 
 class _FinancialRecommendation(BaseModel):
@@ -165,7 +164,8 @@ def make_h_advisor_node(llm: Any = None) -> Any:  # llm kept for signature compa
                 "(T-bills, CBK repo rate, SACCOs, KCB SME loans)\n"
                 "  - Compliance remediation steps referencing specific KRA obligations\n"
                 "  - Credit improvement milestones with measurable bankability score targets\n"
-                "  Priority: HIGH = act within 30 days | MEDIUM = 31-90 days | LOW = strategic (>90 days)"
+                "  Priority: HIGH = act within 30 days | MEDIUM = 31-90 days | "
+                "LOW = strategic (>90 days)"
             )
             advice_tier = "ACTIONABLE"
         else:
@@ -174,7 +174,8 @@ def make_h_advisor_node(llm: Any = None) -> Any:  # llm kept for signature compa
                 "  - Use directional language without specific instrument names or percentages\n"
                 "  - Focus on general financial health observations "
                 "(e.g., 'consider reviewing operational costs')\n"
-                "  - Do NOT disclose specific tax liabilities, reallocation targets, or KES amounts\n"
+                "  - Do NOT disclose specific tax liabilities, reallocation "
+                "targets, or KES amounts\n"
                 "  Priority: HIGH = urgent | MEDIUM = moderate | LOW = informational"
             )
             advice_tier = "SUMMARY"
@@ -194,7 +195,7 @@ For each recommendation provide:
 
 Also provide:
   - advice_tier: "{advice_tier}"
-  - overall_outlook: 1-2 sentences framing the business's current financial trajectory in KES context
+  - overall_outlook: 1-2 sentences framing the business's financial trajectory in KES context
 
 Return JSON with fields: recommendations (array), advice_tier (string), overall_outlook (string).
 """
@@ -216,9 +217,13 @@ Return JSON with fields: recommendations (array), advice_tier (string), overall_
             advisor_out = _AdvisorOutput(
                 recommendations=[
                     _FinancialRecommendation(
-                        recommendation="Review current budget allocation against actuals and identify variance drivers.",
+                        recommendation=(
+                            "Review current budget allocation against actuals "
+                            "and identify variance drivers."
+                        ),
                         rationale=(
-                            f"Budget watchdog reports a '{watchdog.get('current_state', 'UNKNOWN')}' "
+                            f"Budget watchdog reports a "
+                            f"'{watchdog.get('current_state', 'UNKNOWN')}' "
                             f"state with anomaly score {watchdog.get('anomaly_score', 0):.2f}."
                         ),
                         priority="HIGH",

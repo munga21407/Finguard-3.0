@@ -38,15 +38,11 @@ export interface LoginRequest {
   password: string;
 }
 
-// POST /api/v1/identity/token/refresh
-export interface RefreshRequest {
-  refresh_token: string;
-}
-
-// Token pair returned by login and refresh endpoints
+// Response body from /token and /token/refresh.
+// The refresh token is now an HttpOnly cookie — it is intentionally absent
+// from this type.  Reading it from the response body is not possible.
 export interface AuthTokens {
   access_token: string;
-  refresh_token: string;
   token_type: string;
 }
 

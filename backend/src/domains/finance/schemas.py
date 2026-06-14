@@ -80,6 +80,25 @@ class ExpenseCreate(BaseModel):
     invoice_id: uuid.UUID | None = None
 
 
+class ReceiptExpenseCreate(BaseModel):
+    """Reviewed receipt-scan fields submitted to POST /finance/receipts.
+
+    Produced by the frontend after the user verifies the OCR output from
+    POST /intelligence/receipts/scan.  ``vault`` defaults to CASH because a
+    scanned paper receipt is overwhelmingly a cash purchase; the user can
+    override it.
+    """
+    merchant_name: str | None = None
+    category: str = Field(min_length=1, max_length=100)
+    amount: Decimal = Field(gt=0)
+    vault: VaultType = VaultType.CASH
+    kra_pin: str | None = Field(default=None, max_length=20)
+    receipt_date: datetime | None = None
+    description: str | None = None
+    expense_ref: str | None = Field(default=None, max_length=50)
+    customer_id: uuid.UUID | None = None
+
+
 class ExpenseResponse(BaseModel):
     id: uuid.UUID
     expense_ref: str | None
@@ -89,6 +108,10 @@ class ExpenseResponse(BaseModel):
     vault: VaultType
     mpesa_trans_id: uuid.UUID | None
     invoice_id: uuid.UUID | None
+    merchant_name: str | None = None
+    kra_pin: str | None = None
+    description: str | None = None
+    receipt_date: datetime | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

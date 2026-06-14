@@ -143,7 +143,7 @@ async def generate_structured_content[T: BaseModel](prompt: str, response_schema
     client = get_gemini_client()
     try:
         return await _call_gemini(client, prompt, response_schema)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         GEMINI_TIMEOUT_COUNTER.inc()
         logger.error(
             "Gemini structured call timed out — circuit breaker tripped",
@@ -197,7 +197,7 @@ async def generate_text_content(prompt: str) -> str:
     client = get_gemini_client()
     try:
         return await _call_gemini_text(client, prompt)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         GEMINI_TIMEOUT_COUNTER.inc()
         logger.error(
             "Gemini text call timed out — circuit breaker tripped",

@@ -66,7 +66,9 @@ export type { components as ApiComponents, paths as ApiPaths };
 export type ApiUserRole     = S["UserRole"];
 export type ApiUser         = S["UserResponse"];
 export type ApiUserCreate   = S["UserCreate"];
-export type ApiTokenResponse = S["TokenResponse"];
+// Login/refresh now return only the access token in the body; the refresh token
+// is delivered as an HttpOnly cookie (see auth-client.ts).
+export type ApiAccessTokenResponse = S["AccessTokenResponse"];
 
 // ── CRM ───────────────────────────────────────────────────────────────────────
 export type ApiCustomer       = S["CustomerResponse"];
@@ -86,6 +88,7 @@ export type ApiBudget            = S["BudgetResponse"];
 export type ApiBudgetCreate      = S["BudgetCreate"];
 export type ApiExpense           = S["ExpenseResponse"];
 export type ApiExpenseCreate     = S["ExpenseCreate"];
+export type ApiReceiptExpenseCreate = S["ReceiptExpenseCreate"];
 export type ApiPayment           = S["PaymentResponse"];
 export type ApiPaymentCreate     = S["PaymentCreate"];
 export type ApiTransactionType   = S["TransactionType"];
@@ -97,21 +100,20 @@ export type ApiActionRequest         = S["ActionRequest"];
 export type ApiOrchestrationResponse = S["OrchestrationResponse"];
 export type ApiIntentRequest         = S["IntentRequest"];
 export type ApiIntentResponse        = S["IntentResponse"];
+export type ApiReceiptScanResponse   = S["ReceiptScanResponse"];
+export type ApiReceiptExtraction     = S["ReceiptExtraction"];
 export type ApiConversationRequest   = S["ConversationRequest"];
 export type ApiConversationResponse  = S["ConversationResponse"];
 export type ApiTaskStatus            = S["TaskStatusResponse"];
-export type ApiAgentRunStatus        = S["AgentRunStatus"];
-export type ApiAgentRunResponse      = S["AgentRunResponse"];
 
-// ── Agent structured outputs ──────────────────────────────────────────────────
-export type ApiExtractedInvoice  = S["ExtractedInvoice"];
-export type ApiExtractedLineItem = S["ExtractedLineItem"];
-export type ApiWatchdogAnalysis  = S["WatchdogAnalysis"];
-export type ApiCashFlowForecast  = S["CashFlowForecast"];
-export type ApiRegimeAnalysis    = S["RegimeAnalysis"];
-export type ApiForecastDataPoint = S["ForecastDataPoint"];
-export type ApiAgentFOutput      = S["AgentFOutput"];
-export type ApiAgentGOutput      = S["AgentGOutput"];
+// NOTE: Agent structured-output models (ExtractedInvoice, WatchdogAnalysis,
+// CashFlowForecast, AgentF/G outputs, AgentRun*, etc.) are intentionally NOT
+// aliased here.  They are carried inside endpoint responses as `dict[str, Any]`
+// (e.g. IntentResponse.invoice_payload, TaskStatusResponse.gen_ui_payloads), so
+// FastAPI does not emit them as named OpenAPI components.  The frontend types
+// for those payloads live as hand-written interfaces in lib/api/intelligence.ts
+// (e.g. ExtractedInvoice, ReceiptExtraction) where they can be shaped to what
+// the UI actually consumes.
 
 // ── Validation errors ─────────────────────────────────────────────────────────
 export type ApiValidationError = S["HTTPValidationError"];

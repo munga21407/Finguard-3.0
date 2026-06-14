@@ -25,7 +25,7 @@ from src.domains.intelligence.router import router as intelligence_router
 from src.domains.intelligence.security.vc_issuer import ensure_trust_log_ttl_index
 from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
-from src.infrastructure.database.postgres import close_db, init_db
+from src.infrastructure.database.postgres import close_db, init_db, verify_schema_migrated
 from src.infrastructure.message_bus.rabbitmq_publisher import close_rabbitmq, init_rabbitmq
 
 _metrics_bearer = HTTPBearer(auto_error=False)
@@ -58,6 +58,9 @@ async def verify_metrics_token(
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     await init_db()
+    # Fail fast if the schema hasn't been migrated to head (prod) — never serve
+    # traffic against a drifted/empty schema.
+    await verify_schema_migrated()
     await init_mongo()
     await ensure_trust_log_ttl_index()
     await init_redis()

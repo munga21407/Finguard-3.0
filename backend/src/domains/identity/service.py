@@ -107,24 +107,35 @@ class IdentityService:
         if payload.get("type") != "refresh":
             raise UnauthorizedError("Invalid token type")
 
-        jti = payload.get("jti")
-        # Reuse detection: once a refresh token is used it is rotated and its jti
-        # is blacklisted.  A second presentation of the same token (e.g. a
-        # stolen copy) is therefore rejected.
+        jti: str | None = payload.get("jti")
+        family_id: str | None = payload.get("family_id")
+
+        # Family-level revocation check: a previous reuse in this chain has
+        # already invalidated every token that shares the same family_id.
+        if family_id and await redis.exists(f"revoked_family:{family_id}"):
+            raise UnauthorizedError("Session has been invalidated due to suspicious activity")
+
+        # Reuse detection: once a refresh token is rotated its jti is
+        # blacklisted.  A second presentation of the same jti means a consumed
+        # token is being replayed — a strong indicator of theft.  Revoke the
+        # entire family so even the legitimately issued successor is dead.
         if jti is not None and await redis.exists(f"blacklist:{jti}"):
-            raise UnauthorizedError("Refresh token has been revoked")
+            if family_id:
+                await self._revoke_family(redis, family_id)
+            raise UnauthorizedError("Refresh token has been revoked — session invalidated")
 
         user = await self._repo.get_by_id(uuid.UUID(str(payload["sub"])))
         if not user or not user.is_active:
             raise UnauthorizedError("User not found or disabled")
 
-        # Rotate: blacklist the just-consumed refresh token so it cannot be replayed.
+        # Rotate: blacklist the just-consumed jti; issue a new token that
+        # carries the same family_id so future replay detection works.
         if jti is not None:
             await self._blacklist_jti(redis, jti, payload.get("exp"))
 
         return TokenResponse(
             access_token=create_access_token(str(user.id), {"role": user.role}),
-            refresh_token=create_refresh_token(str(user.id)),
+            refresh_token=create_refresh_token(str(user.id), family_id=family_id),
         )
 
     @staticmethod
@@ -133,3 +144,15 @@ class IdentityService:
         now_ts = int(datetime.now(UTC).timestamp())
         ttl = max(1, exp - now_ts) if exp else settings.REFRESH_TOKEN_EXPIRE_DAYS * 86_400
         await redis.setex(f"blacklist:{jti}", ttl, "1")
+
+    @staticmethod
+    async def _revoke_family(redis: Any, family_id: str) -> None:
+        """Revoke all tokens in a refresh-token family.
+
+        Called on reuse detection.  Any token sharing this ``family_id`` will be
+        rejected on the next refresh attempt regardless of its individual jti
+        blacklist status.  TTL matches the maximum refresh token lifetime so the
+        key expires automatically once no valid token in the family could exist.
+        """
+        ttl = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86_400
+        await redis.setex(f"revoked_family:{family_id}", ttl, "1")

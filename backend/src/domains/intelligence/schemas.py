@@ -75,7 +75,10 @@ class KeyFinding(BaseModel):
     """A single key metric distilled from agent analysis for GenUI metric badges."""
 
     metric: str = Field(..., min_length=1, description="Short label (e.g. 'Runway', 'Regime')")
-    value: str = Field(..., min_length=1, description="Formatted display value (e.g. '4 Months', 'KES 1.2M')")
+    value: str = Field(
+        ..., min_length=1,
+        description="Formatted display value (e.g. '4 Months', 'KES 1.2M')",
+    )
 
 
 class CompositeGenUIPayload(BaseModel):
@@ -99,7 +102,7 @@ class CompositeGenUIPayload(BaseModel):
             raise ValueError("component_id must not have leading or trailing whitespace")
         return v
 
-    def to_gen_ui_payload(self) -> "GenUIPayload":
+    def to_gen_ui_payload(self) -> GenUIPayload:
         """Downcast to GenUIPayload, merging findings into props for the state accumulator."""
         return GenUIPayload(
             component_id=self.component_id,
@@ -461,6 +464,19 @@ class IntentResponse(BaseModel):
     intent: str
     invoice_payload: dict[str, Any] | None = None
     hub_artifact_id: str | None = None
+
+
+class ReceiptScanResponse(BaseModel):
+    """Returned by POST /intelligence/receipts/scan.
+
+    Carries the OCR'd receipt fields and a suggested expense category for the
+    user to review.  No persistence happens here — the reviewed values are sent
+    to POST /finance/receipts to create the expense.
+    """
+    session_id: str
+    extraction: ReceiptExtraction
+    suggested_category: str
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------

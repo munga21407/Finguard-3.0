@@ -2,7 +2,13 @@
 
 // ─── Auth Context ─────────────────────────────────────────────────────────────
 // Wraps the entire app. Provides: user, isAuthenticated, login, register, logout.
-// On mount: reads stored token, decodes user payload, validates expiry.
+//
+// Bootstrap strategy (HttpOnly cookie era):
+//   The refresh token now lives in an HttpOnly cookie — we cannot read it from
+//   JS.  Instead, tokenManager.hasSession() checks for the non-HttpOnly fg_csrf
+//   cookie (set by the backend on login/refresh, cleared on logout) OR the
+//   presence of an access token in localStorage.  If either signal is present
+//   we try to hydrate; otherwise we skip the network round-trip entirely.
 
 import {
   createContext,
@@ -24,33 +30,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // ── Bootstrap: hydrate the user from the backend on mount ─────────────────
-  // The access token only carries `sub`/`role`, so the authoritative user
-  // (email, full_name, role) comes from GET /me rather than being decoded from
-  // the JWT. If the access token is missing/expired but a refresh token exists,
-  // refresh first so an active session is recovered transparently.
+  // ── Bootstrap ─────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
-    const accessToken = tokenManager.getAccessToken();
-    const refreshToken = tokenManager.getRefreshToken();
 
-    if (!accessToken && !refreshToken) {
+    // Fast-exit: neither an access token nor a session indicator exists → the
+    // user is definitely not logged in; skip the network round-trip.
+    if (!tokenManager.hasSession()) {
       setIsLoading(false);
       return;
     }
 
     async function hydrate() {
       try {
-        if (
-          (!accessToken || tokenManager.isTokenExpired(accessToken)) &&
-          refreshToken
-        ) {
-          const tokens = await authClient.refreshToken(refreshToken);
-          tokenManager.setTokens(tokens.access_token, tokens.refresh_token);
+        const accessToken = tokenManager.getAccessToken();
+        if (!accessToken || tokenManager.isTokenExpired(accessToken)) {
+          // Try a silent refresh via the HttpOnly cookie.  The backend reads
+          // the cookie automatically; we just need the CSRF header.
+          const tokens = await authClient.refreshToken();
+          tokenManager.setTokens(tokens.access_token);
         }
         const me = await authClient.getMe();
         if (!cancelled) setUser(me);
       } catch {
+        // Refresh failed or /me failed — treat as logged out.
         if (!cancelled) tokenManager.clearTokens();
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -67,8 +70,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(
     async (email: string, password: string) => {
       const tokens = await authClient.login({ email, password });
-      tokenManager.setTokens(tokens.access_token, tokens.refresh_token);
-      // Hydrate the full user from the backend rather than the (partial) JWT.
+      // Store the access token; the refresh + CSRF cookies are set by the
+      // backend response and managed by the browser automatically.
+      tokenManager.setTokens(tokens.access_token);
       setUser(await authClient.getMe());
       router.push("/dashboard");
     },
@@ -79,16 +83,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = useCallback(
     async (email: string, password: string, fullName: string) => {
       await authClient.register({ email, password, full_name: fullName });
-      // Auto-login after successful registration
       await login(email, password);
     },
     [login]
   );
 
   // ── Logout ────────────────────────────────────────────────────────────────
-  // Order matters: blacklist the JTI on the backend first so the token cannot
-  // be reused in the window between client-side clearance and expiry, then
-  // wipe local state. authClient.logout() is best-effort and never throws.
+  // Order: backend blacklists both JTIs first (best-effort), then local state
+  // is cleared.  authClient.logout() never throws.
   const logout = useCallback(async () => {
     await authClient.logout();
     tokenManager.clearTokens();

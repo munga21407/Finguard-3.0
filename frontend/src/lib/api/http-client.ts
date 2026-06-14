@@ -1,8 +1,19 @@
 // ─── Axios HTTP Client ────────────────────────────────────────────────────────
-// Singleton Axios instance.
-// - Injects Authorization header on every request
-// - Intercepts 401s, attempts token refresh, retries original request once
-// - On refresh failure, clears tokens and redirects to /login
+// Singleton Axios instance used for all non-auth API calls.
+//
+// withCredentials: true — needed so the browser sends the fg_csrf cookie on
+// cross-origin requests (frontend :3000 → backend :8000).  The fg_refresh_token
+// HttpOnly cookie is path-scoped to /api/v1/identity and only sent there.
+//
+// Request interceptor:
+//   - Injects Authorization: Bearer header from localStorage
+//   - Injects Idempotency-Key for /ai-insights and /ai-actions only
+//
+// Response interceptor:
+//   - On 401: reads the fg_csrf cookie, sends X-CSRF-Token header, calls
+//     /token/refresh (which reads the HttpOnly refresh cookie automatically),
+//     updates the stored access token, and retries the original request once.
+//   - On refresh failure: clears local state and redirects to /login.
 
 import axios, {
   type AxiosInstance,
@@ -19,20 +30,19 @@ const httpClient: AxiosInstance = axios.create({
   baseURL: BASE_URL,
   headers: { "Content-Type": "application/json" },
   timeout: 30_000,
+  withCredentials: true,  // send cookies cross-origin (CORS allow_credentials: true on server)
 });
 
-// ── Request interceptor — attach access token + idempotency key ───────────────
+// ── Request interceptor — Bearer token + idempotency key ─────────────────────
 httpClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // Inject Bearer token on every request
     const token = tokenManager.getAccessToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
 
-    // Only /ai-insights and /ai-actions require an Idempotency-Key (they may
-    // trigger side-effecting agent runs / payments). /intent and /conversation
-    // do not, so we scope the header to the endpoints that actually need it.
+    // Only /ai-insights and /ai-actions need Idempotency-Key — they may
+    // trigger side-effecting agent runs.  /intent and /conversation do not.
     const url = config.url ?? "";
     const needsIdempotencyKey =
       config.method?.toLowerCase() === "post" &&
@@ -48,7 +58,7 @@ httpClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// ── Response interceptor — handle 401 with silent refresh ────────────────────
+// ── Response interceptor — silent refresh on 401 ─────────────────────────────
 let isRefreshing = false;
 let pendingQueue: Array<{
   resolve: (token: string) => void;
@@ -74,7 +84,7 @@ httpClient.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    // Don't retry the refresh endpoint itself
+    // Don't retry the refresh endpoint itself to avoid infinite loops
     if (originalRequest.url?.includes(ENDPOINTS.AUTH.REFRESH)) {
       tokenManager.clearTokens();
       if (typeof window !== "undefined") window.location.href = "/login";
@@ -94,16 +104,24 @@ httpClient.interceptors.response.use(
     isRefreshing = true;
 
     try {
-      const refreshToken = tokenManager.getRefreshToken();
-      if (!refreshToken) throw new Error("No refresh token");
+      const csrf = tokenManager.getCsrfToken();
+      if (!csrf) throw new Error("No CSRF token available for refresh");
 
+      // POST without body — the HttpOnly refresh cookie is sent automatically
+      // by the browser because withCredentials: true is set on this client.
       const { data } = await axios.post(
         `${BASE_URL}${ENDPOINTS.AUTH.REFRESH}`,
-        { refresh_token: refreshToken },
-        { headers: { "Content-Type": "application/json" } }
+        null,
+        {
+          withCredentials: true,
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Token": csrf,
+          },
+        }
       );
 
-      tokenManager.setTokens(data.access_token, data.refresh_token);
+      tokenManager.setTokens(data.access_token);
       processPendingQueue(null, data.access_token);
       originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
       return httpClient(originalRequest);

@@ -15,7 +15,7 @@ Your job is to produce a structured JSON assessment for the account manager.
   "anomaly_detected": <true|false>,
   "summary": "<2-3 sentence human-readable assessment summarising the overall finding>",
   "findings": [
-    {"metric": "<short label, e.g. Anomaly Reason>", "value": "<concise explanation, max 100 chars>"},
+    {"metric": "<short label, e.g. Anomaly>", "value": "<concise explanation, max 100 chars>"},
     ...
   ]
 }

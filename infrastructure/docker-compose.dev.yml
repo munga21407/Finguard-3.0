@@ -1,4 +1,14 @@
 services:
+  # Run migrations under the dev image + dev config so local `compose up` doesn't
+  # trip the production config validation (which requires DATABASE_READONLY_URL,
+  # METRICS_AUTH_SECRET, etc.). Migrations themselves are environment-agnostic.
+  migrate:
+    build:
+      context: ../backend
+      target: dev
+    environment:
+      ENVIRONMENT: development
+
   postgres:
     ports:
       - "5432:5432"
@@ -21,6 +31,10 @@ services:
       context: ../backend
       target: dev
     command: uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    # Expose directly to the host for local debugging (the base file only routes
+    # through nginx). Dev runs without the prod config validation.
+    ports:
+      - "8000:8000"
     volumes:
       - ../backend:/app
     environment:
@@ -32,6 +46,8 @@ services:
       context: ../frontend
       target: dev
     command: npm run dev
+    ports:
+      - "3000:3000"
     volumes:
       - ../frontend:/app
       - /app/node_modules

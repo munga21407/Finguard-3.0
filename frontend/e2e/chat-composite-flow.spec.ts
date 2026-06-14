@@ -65,11 +65,36 @@ async function setupAuth(page: Page, context: BrowserContext) {
       path: "/",
       sameSite: "Lax",
     },
+    // fg_csrf is the non-HttpOnly session marker read by tokenManager.hasSession()
+    // after the HttpOnly-cookie migration.
+    {
+      name: "fg_csrf",
+      value: "e2e-csrf-token",
+      domain: "localhost",
+      path: "/",
+      sameSite: "Strict",
+    },
   ]);
   await page.addInitScript((token: string) => {
     localStorage.setItem("fg_access_token", token);
-    localStorage.setItem("fg_refresh_token", "fake-refresh-token");
   }, FAKE_TOKEN);
+
+  // The auth context hydrates the user from GET /me on mount; must resolve.
+  await page.route("**/api/v1/identity/me", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "user-e2e",
+        email: "manager@finguard.io",
+        full_name: "E2E Manager",
+        role: "manager",
+        is_active: true,
+        is_verified: true,
+        created_at: "2026-01-01T00:00:00Z",
+      }),
+    })
+  );
 }
 
 // ── Route helpers ────────────────────────────────────────────────────────────

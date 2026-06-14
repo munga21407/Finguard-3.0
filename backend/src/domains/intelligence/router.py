@@ -10,14 +10,23 @@ Endpoints:
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    Header,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from langchain_core.messages import HumanMessage
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field, ValidationError
@@ -29,6 +38,7 @@ from src.domains.identity.dependencies import (
 from src.domains.intelligence.orchestrator import (
     GraphRecursionError,
     build_invoice_graph,
+    build_receipt_graph,
     run_graph,
 )
 from src.domains.intelligence.schemas import (
@@ -40,6 +50,8 @@ from src.domains.intelligence.schemas import (
     IntentResponse,
     OrchestrationResponse,
     OrchestratorState,
+    ReceiptExtraction,
+    ReceiptScanResponse,
 )
 from src.infrastructure.cache.redis import get_redis
 from src.infrastructure.database.mongodb import get_mongo_db
@@ -48,6 +60,17 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 _TASK_STATUS_TTL = 3600  # seconds — 1 hour
+
+# Receipt upload limits — mirror the nginx client_max_body_size and the
+# frontend's accepted-types list so rejections are consistent across layers.
+_RECEIPT_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+_RECEIPT_ALLOWED_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "application/pdf",
+}
 
 # ---------------------------------------------------------------------------
 # Incremental GenUI block parser
@@ -139,7 +162,9 @@ async def _check_idempotency_cache(
                                 currently in-flight.
     """
     redis_client = get_redis()
-    raw: str | None = await redis_client.get(f"{_IDEM_PREFIX}{idempotency_key}")
+    raw: str | None = await redis_client.get(  # type: ignore[assignment]
+        f"{_IDEM_PREFIX}{idempotency_key}"
+    )
 
     if raw is None:
         return None
@@ -221,7 +246,7 @@ async def _run_orchestrator(
     try:
         final_state = await run_graph(initial_state)
 
-    except GraphRecursionError:
+    except GraphRecursionError as exc:
         logger.warning(
             "orchestrator: recursion limit exceeded",
             session_id=session_id,
@@ -233,7 +258,7 @@ async def _run_orchestrator(
                 "The AI workflow exceeded its maximum recursion limit. "
                 "Please simplify your request or try again."
             ),
-        )
+        ) from exc
 
     except ValidationError as exc:
         logger.error(
@@ -249,7 +274,7 @@ async def _run_orchestrator(
                 f"({exc.error_count()} error(s)). "
                 "The request can be retried — this is usually a transient LLM issue."
             ),
-        )
+        ) from exc
 
     agents_invoked = list({
         m.name
@@ -690,6 +715,73 @@ async def invoke_intent(
         intent=request.intent,
         invoice_payload=context.get("extracted_invoice"),
         hub_artifact_id=context.get("hub_artifact_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Receipt Scanner — multimodal OCR (decoupled from Agent A invoice flow)
+# ---------------------------------------------------------------------------
+
+@router.post("/receipts/scan", response_model=ReceiptScanResponse)
+async def scan_receipt(
+    current_user: RequireIntelligenceRead,
+    file: Annotated[UploadFile, File()],
+) -> ReceiptScanResponse:
+    """
+    OCR a receipt image and suggest an expense category.
+
+    Pipeline (LangGraph): receipt_ocr → receipt_classifier.  This endpoint does
+    NOT persist anything — it returns the extracted fields for the user to
+    review/edit, after which the frontend posts the confirmed values to
+    ``POST /api/v1/finance/receipts`` to create the expense.
+
+    Validation: the upload must be an allowed image/PDF MIME type and under
+    10 MB.  On a Gemini failure the graph degrades to an empty extraction plus
+    an ``error`` message so the user can still fill the form by hand.
+    """
+    if file.content_type not in _RECEIPT_ALLOWED_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=(
+                f"Unsupported file type '{file.content_type}'. "
+                "Upload a JPG, PNG, WEBP, GIF, or PDF receipt."
+            ),
+        )
+
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(image_bytes) > _RECEIPT_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Receipt image must be under 10 MB.",
+        )
+
+    session_id = str(uuid.uuid4())
+    initial_state: dict[str, Any] = {
+        "messages": [HumanMessage(content="Scan receipt")],
+        "next": "receipt_ocr",
+        "context": {
+            "image_bytes_b64": base64.b64encode(image_bytes).decode("ascii"),
+            "mime_type": file.content_type,
+        },
+        "session_id": session_id,
+        "user_id": str(current_user.id),
+        "mode": "insights",
+    }
+
+    graph = build_receipt_graph()
+    final_state = await graph.ainvoke(initial_state)
+    context = final_state.get("context", {})
+
+    raw_extraction = context.get("receipt_extraction") or {}
+    errors = final_state.get("error_messages") or []
+
+    return ReceiptScanResponse(
+        session_id=session_id,
+        extraction=ReceiptExtraction.model_validate(raw_extraction),
+        suggested_category=context.get("suggested_category", "other"),
+        error=errors[0] if errors else None,
     )
 
 

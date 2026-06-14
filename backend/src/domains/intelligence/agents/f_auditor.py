@@ -28,7 +28,12 @@ from sqlalchemy import text
 from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.llm_client import get_gemini_client
-from src.domains.intelligence.schemas import AgentFOutput, CompositeGenUIPayload, KeyFinding, OrchestratorState
+from src.domains.intelligence.schemas import (
+    AgentFOutput,
+    CompositeGenUIPayload,
+    KeyFinding,
+    OrchestratorState,
+)
 from src.domains.intelligence.services.tax_rag_service import get_relevant_tax_rules
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
@@ -150,7 +155,9 @@ def make_f_auditor_node(llm: Any = None) -> Any:  # llm kept for signature compa
             revenue, opex, tax_regime, period_days
         )
         _annual_rev = revenue * (365.0 / max(period_days, 1))
-        vat_component = round(revenue * 0.16, 2) if _annual_rev >= _VAT_THRESHOLD_ANNUAL_KES else 0.0
+        vat_component = (
+            round(revenue * 0.16, 2) if _annual_rev >= _VAT_THRESHOLD_ANNUAL_KES else 0.0
+        )
         cit_component = round(max(revenue - opex, 0.0) * 0.30, 2)
         if tax_regime.upper() == "VAT":
             vat_component, cit_component = tax_liability, 0.0
@@ -257,7 +264,11 @@ Return a JSON object with exactly these fields:
                 )
             analysis = _ComplianceAnalysis(
                 compliance_flags=fallback_flags,
-                kra_references=rag_citations[:3] if rag_citations else ["Kenya VAT Act S.2", "Income Tax Act S.7"],
+                kra_references=(
+                    rag_citations[:3]
+                    if rag_citations
+                    else ["Kenya VAT Act S.2", "Income Tax Act S.7"]
+                ),
                 audit_summary=(
                     f"Automated {tax_type} audit for {period_days}-day period. "
                     f"Estimated tax liability: KES {tax_liability:,.2f} "
@@ -271,9 +282,9 @@ Return a JSON object with exactly these fields:
         # We enforce it here unconditionally so the compliance_flags list always
         # reflects the machine-verified threshold check — never silently absent.
         if max_single_tx >= _AML_REPORTING_THRESHOLD:
-            _AML_FLAG = "AML_REPORTING_REQUIRED"
-            if not any(_AML_FLAG in flag for flag in analysis.compliance_flags):
-                analysis.compliance_flags.append(_AML_FLAG)
+            aml_flag_label = "AML_REPORTING_REQUIRED"
+            if not any(aml_flag_label in flag for flag in analysis.compliance_flags):
+                analysis.compliance_flags.append(aml_flag_label)
                 logger.info(
                     "Agent F: AML_REPORTING_REQUIRED flag injected",
                     max_single_tx=max_single_tx,
@@ -310,7 +321,11 @@ Return a JSON object with exactly these fields:
         ]
         composite = CompositeGenUIPayload(
             component_id="TaxLiabilityDonut",
-            props={**output.model_dump(), "vat_component": vat_component, "cit_component": cit_component},
+            props={
+                **output.model_dump(),
+                "vat_component": vat_component,
+                "cit_component": cit_component,
+            },
             findings=findings,
             fallback_text=(
                 f"Tax audit: {tax_type} | liability KES {tax_liability:,.2f} | "

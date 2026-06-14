@@ -21,7 +21,8 @@
 13. [Environment Variables](#13-environment-variables)
 14. [Design Patterns](#14-design-patterns)
 15. [Celery Tasks](#15-celery-tasks)
-16. [Quick Start](#16-quick-start)
+16. [CI/CD Pipelines](#16-cicd-pipelines)
+17. [Quick Start](#17-quick-start)
 
 ---
 
@@ -41,11 +42,19 @@ Finguard 3.0 is a full-stack, AI-powered financial operations platform for small
 
 ```
 Finguard-3.0/
+├── Makefile                           # One-command dev bootstrap (install, test, lint, typecheck, up/down)
 ├── backend/                           # FastAPI / Python application
 │   ├── pyproject.toml                 # Dependencies (uv-managed, Python 3.12)
+│   ├── Dockerfile                     # Multi-stage build; non-root appuser (uid 10001);
+│   │                                  # HEALTHCHECK polls /health/live; 4 uvicorn workers
 │   ├── alembic/                       # SQLAlchemy migration tooling
 │   │   ├── env.py
 │   │   └── versions/
+│   │       ├── 0001_..._initial.py
+│   │       ├── 0002_..._
+│   │       ├── ...
+│   │       ├── 0007_sprint1_mpesa_raw_payload.py   # Adds raw_payload JSONB to mpesa_transactions
+│   │       └── 0008_sprint2_verify_existing_users.py # Backfills is_verified=true for active users
 │   ├── scripts/
 │   │   ├── ingest_kra_docs.py         # Seeds knowledge_base with KRA docs via pgvector
 │   │   └── kra_docs/                  # Source KRA regulation documents
@@ -53,40 +62,42 @@ Finguard-3.0/
 │   │       ├── sme_compliance_guide.txt
 │   │       └── vat_act.txt
 │   └── src/
-│       ├── main.py                    # FastAPI app, lifespan, router registration
+│       ├── main.py                    # FastAPI app, lifespan, router registration;
+│       │                              # /health/live (liveness), /health/ready (readiness, 503 on degraded)
 │       ├── core/
-│       │   ├── config.py              # Pydantic Settings (env vars)
+│       │   ├── config.py              # Pydantic Settings; production fail-fast model_validator
 │       │   ├── exceptions.py          # Custom exception classes + handlers
 │       │   ├── logging.py             # structlog configuration
 │       │   ├── metrics.py             # Prometheus custom collectors
-│       │   └── security.py            # Shared JWT encode/decode + bcrypt helpers
+│       │   └── security.py            # JWT encode/decode + direct bcrypt helpers (no passlib)
 │       ├── domains/
-│       │   ├── identity/              # Auth domain (register, login, token refresh)
-│       │   │   ├── models.py          # User, UserRole ORM
-│       │   │   ├── router.py          # /api/v1/identity endpoints
-│       │   │   ├── service.py
+│       │   ├── identity/              # Auth domain
+│       │   │   ├── models.py          # User, UserRole ORM (+ is_verified field)
+│       │   │   ├── router.py          # /api/v1/identity endpoints (register, token, refresh, logout, me, users)
+│       │   │   ├── service.py         # Bootstrap first-user as OWNER; Redis login lockout; jti refresh rotation
 │       │   │   ├── repository.py
 │       │   │   ├── schemas.py
-│       │   │   ├── security.py        # JWT encode/decode, bcrypt hashing
-│       │   │   └── dependencies.py    # get_current_user FastAPI dependency
+│       │   │   ├── permissions.py     # Permission enum + role→permission matrix + has_permission()
+│       │   │   └── dependencies.py    # get_current_user + require_permission() factory + RBAC aliases
 │       │   ├── crm/                   # Customer management domain
 │       │   │   ├── models.py          # Customer, CustomerStatus, CustomerType ORM
-│       │   │   ├── router.py          # /api/v1/crm endpoints
+│       │   │   ├── router.py          # /api/v1/crm endpoints (RBAC: RequireCrmRead/Write)
 │       │   │   ├── service.py
 │       │   │   ├── repository.py
 │       │   │   └── schemas.py
 │       │   ├── finance/               # Finance domain
 │       │   │   ├── models.py          # LedgerEntry, Invoice, Budget, MpesaTransaction,
 │       │   │   │                      # Expense, Payment, OutboxEvent ORM
-│       │   │   ├── router.py          # /api/v1/finance endpoints
-│       │   │   ├── service.py
+│       │   │   ├── router.py          # /api/v1/finance endpoints (RBAC: RequireFinanceRead/Write)
+│       │   │   ├── service.py         # Outbox-first event publishing; M-Pesa strict validation;
+│       │   │   │                      # balance_due settlement; row-lock cash payments
 │       │   │   ├── repository.py
 │       │   │   ├── schemas.py
 │       │   │   └── types.py
 │       │   └── intelligence/          # AI/ML domain
 │       │       ├── llm_client.py      # Gemini singleton + generate_structured_content
 │       │       ├── orchestrator.py    # LangGraph StateGraph builder
-│       │       ├── router.py          # /api/v1/intelligence endpoints
+│       │       ├── router.py          # /api/v1/intelligence endpoints (RBAC + IDOR owner check)
 │       │       ├── service.py         # Gemini streaming chat service
 │       │       ├── schemas.py         # OrchestratorState, all agent output models
 │       │       ├── models.py          # AgentRun, KnowledgeBase (pgvector) ORM
@@ -97,20 +108,20 @@ Finguard-3.0/
 │       │       │   ├── a_generator.py # Invoice extractor ✅
 │       │       │   ├── b_classifier.py# Transaction classifier ✅
 │       │       │   ├── c_reconciler.py# Ledger ↔ bank reconciler ✅
-│       │       │   ├── d_forecaster.py# Cash-flow forecaster ✅
-│       │       │   ├── e_watchdog.py  # Budget HMM watchdog ✅
+│       │       │   ├── d_forecaster.py# Cash-flow forecaster (execute_readonly_sql) ✅
+│       │       │   ├── e_watchdog.py  # Budget HMM watchdog (execute_readonly_sql) ✅
 │       │       │   ├── f_auditor.py   # Tax compliance auditor ✅
 │       │       │   ├── g_reporter.py  # Credit strategist ✅
 │       │       │   ├── h_advisor.py   # Financial advisor ✅
 │       │       │   ├── i_integrator.py# External API integrator ✅
 │       │       │   └── j_summarizer.py# Executive summarizer ✅
 │       │       ├── prompts/
-│       │       │   ├── a_generator.py # Invoice extraction system prompt + few-shot
-│       │       │   ├── b_classifier.py# Transaction taxonomy + zero-shot classification prompt
-│       │       │   ├── c_reconciler.py# Reconciliation pass-2 fuzzy-match prompt
-│       │       │   ├── d_forecaster.py# CoVe SQL-drafting + regime-detection + narrative prompt (schema-masked)
-│       │       │   ├── e_watchdog.py  # Anomaly narrative prompt
-│       │       │   └── supervisor.py  # Routing logic with agent table
+│       │       │   ├── a_generator.py
+│       │       │   ├── b_classifier.py
+│       │       │   ├── c_reconciler.py
+│       │       │   ├── d_forecaster.py
+│       │       │   ├── e_watchdog.py
+│       │       │   └── supervisor.py
 │       │       ├── security/
 │       │       │   ├── vc_issuer.py   # JWT-signed Verifiable Credentials (SOC-2 audit)
 │       │       │   ├── agent_cards.py # Agent identity metadata
@@ -118,45 +129,46 @@ Finguard-3.0/
 │       │       ├── services/
 │       │       │   └── tax_rag_service.py # pgvector semantic search (Agent F)
 │       │       └── tools/
-│       │           ├── sql_executor.py    # Read-only SELECT tool + get_masked_schema() + sqlglot AST validation
+│       │           ├── sql_executor.py    # execute_readonly_sql; get_masked_schema(); sqlglot AST validation
 │       │           ├── event_publisher.py # RabbitMQ publish tool
-│       │           ├── http_caller.py     # Resilient httpx tool (tenacity retry, Agent I)
+│       │           ├── http_caller.py     # httpx tool; SSRF guard (_assert_public_url); no redirects
 │       │           └── mongo_reader.py    # MongoDB read tool
 │       ├── infrastructure/
 │       │   ├── database/
-│       │   │   ├── postgres.py        # AsyncSessionLocal, Base, init_db/close_db
+│       │   │   ├── postgres.py        # AsyncSessionLocal, Base, init_db (SELECT 1 only — no create_all);
+│       │   │   │                      # _resolve_readonly_url (fail-closed in production)
 │       │   │   └── mongodb.py         # Motor async client, init_mongo/close_mongo
 │       │   ├── cache/
 │       │   │   └── redis.py           # Redis client, init_redis/close_redis
 │       │   └── message_bus/
-│       │       └── rabbitmq_publisher.py # aio-pika publisher, init/close
+│       │       └── rabbitmq_publisher.py # aio-pika publisher; raises BrokerUnavailableError on missing connection
 │       └── workers/
 │           ├── consumers/
 │           │   └── watchdog_consumer.py  # RabbitMQ consumer → Agent E trigger
 │           ├── outbox/
 │           │   └── projector.py          # Outbox → MongoDB projector
 │           └── tasks/
-│               ├── celery_app.py         # Celery app factory (broker: RabbitMQ, backend: Redis) + beat_schedule
-│               ├── ocr.py                # Gemini multimodal OCR: process_document_ocr, process_receipt_ocr, process_invoice_image
-│               ├── batch.py              # classify_unclassified_ledger_entries, run_batch_reconciliation, enforce_data_retention
-│               ├── dlq_tasks.py          # drain_watchdog_dlq — DLQ republish with poison-message discard
-│               └── reporting_tasks.py    # generate_monthly_intelligence_report (Agent F + G)
+│               ├── celery_app.py
+│               ├── ocr.py
+│               ├── batch.py
+│               ├── dlq_tasks.py
+│               └── reporting_tasks.py
 ├── frontend/                          # Next.js 15 application
 │   ├── package.json
-│   ├── playwright.config.ts           # Playwright E2E config (Chromium, reuses dev server)
+│   ├── playwright.config.ts
 │   ├── e2e/
-│   │   └── chat-composite-flow.spec.ts # E2E tests: skeleton → composite render, fallback, network error
+│   │   └── chat-composite-flow.spec.ts
 │   └── src/
-│       ├── app/                       # Next.js App Router pages
+│       ├── app/
 │       │   ├── layout.tsx
 │       │   ├── globals.css
-│       │   ├── page.tsx               # Root redirect → /dashboard
+│       │   ├── page.tsx
 │       │   ├── login/page.tsx
 │       │   ├── register/page.tsx
-│       │   ├── settings/page.tsx
+│       │   ├── settings/page.tsx      # Real profile page (name/email/role from /me) + server-revoking logout
 │       │   └── dashboard/
 │       │       ├── layout.tsx
-│       │       ├── page.tsx           # Dashboard root
+│       │       ├── page.tsx
 │       │       ├── overview/page.tsx
 │       │       ├── intelligence/page.tsx
 │       │       ├── invoices/page.tsx
@@ -167,7 +179,7 @@ Finguard-3.0/
 │       │           ├── page.tsx
 │       │           └── alerts/page.tsx
 │       ├── components/
-│       │   ├── auth/                  # LoginPage, SignUpPage, LoginForm, etc.
+│       │   ├── auth/
 │       │   ├── dashboard/
 │       │   │   ├── DashboardLayout.tsx
 │       │   │   ├── Sidebar.tsx
@@ -176,57 +188,72 @@ Finguard-3.0/
 │       │   │   ├── StatusBadge.tsx
 │       │   │   ├── command-center/
 │       │   │   │   ├── AiActionCenter.tsx
-│       │   │   │   ├── CashFlowChart.tsx        # Recharts ComposedChart; GenUI component_id "CashFlowChart"
+│       │   │   │   ├── CashFlowChart.tsx
 │       │   │   │   ├── IntelligenceInsights.tsx
-│       │   │   │   └── BudgetWatchdogMeter.tsx  # Recharts RadialBarChart half-gauge; component_id "BudgetWatchdogMeter"
+│       │   │   │   └── BudgetWatchdogMeter.tsx
 │       │   │   ├── intelligence/
-│       │   │   │   ├── AgentChatWindow.tsx       # Chat UI: dispatch → CoVe → polling → composite render
-│       │   │   │   ├── CoveTimeline.tsx          # CoVe stepper animation
-│       │   │   │   ├── GenUiRegistry.tsx         # next/dynamic registry: component_id → React component
-│       │   │   │   ├── CompositeInsightBlock.tsx # Layout wrapper: findings badges (left) + viz (right)
-│       │   │   │   ├── CompositeInsightSkeleton.tsx # Animate-pulse skeleton matching composite layout
-│       │   │   │   ├── GenUiBoundary.tsx         # React Error Boundary (class component) for chart crashes
+│       │   │   │   ├── AgentChatWindow.tsx
+│       │   │   │   ├── CoveTimeline.tsx
+│       │   │   │   ├── GenUiRegistry.tsx
+│       │   │   │   ├── CompositeInsightBlock.tsx
+│       │   │   │   ├── CompositeInsightSkeleton.tsx
+│       │   │   │   ├── GenUiBoundary.tsx
 │       │   │   │   ├── AuditorInsights.tsx
 │       │   │   │   ├── ComplianceChecklist.tsx
 │       │   │   │   ├── CoreReports.tsx
 │       │   │   │   ├── StrategicForecast.tsx
-│       │   │   │   ├── CreditStrategy.tsx        # Legacy Agent G card (kept for cached payloads)
-│       │   │   │   ├── TaxLiabilityDonut.tsx     # Recharts PieChart donut; component_id "TaxLiabilityDonut"
-│       │   │   │   └── BankabilityScoreRadar.tsx # Recharts RadarChart; component_id "BankabilityScoreRadar"
-│       │   │   ├── alerts/            # AlertKpiCards, DuplicateInvoiceAlert, VendorActivityAlert
-│       │   │   ├── payables/          # AgentIntegrations, DepartmentBudgets, RecentOutgoing
-│       │   │   └── receivables/       # AgentStatus, InvoiceTable
-│       │   ├── forms/                 # LoginForm, RegisterForm
-│       │   ├── layouts/               # DashboardLayout, Providers (TanStack Query)
+│       │   │   │   ├── CreditStrategy.tsx
+│       │   │   │   ├── TaxLiabilityDonut.tsx
+│       │   │   │   └── BankabilityScoreRadar.tsx
+│       │   │   ├── invoices/
+│       │   │   │   └── InvoiceGenerator.tsx   # Wired to real backend (Agent A extraction + CRM + finance API)
+│       │   │   ├── alerts/
+│       │   │   ├── payables/
+│       │   │   └── receivables/
+│       │   ├── forms/
+│       │   ├── layouts/
 │       │   └── ui/
 │       ├── lib/
 │       │   ├── api/
-│       │   │   ├── http-client.ts     # Axios singleton: Bearer injection, 401 silent refresh, idempotency key
-│       │   │   ├── endpoints.ts       # Typed endpoint constants (INTELLIGENCE, IDENTITY, etc.)
-│       │   │   └── intelligence.ts    # dispatchConversation, checkConversationStatus; KeyFinding + GenUIPayload types
+│       │   │   ├── http-client.ts     # Axios; Bearer injection; 401 silent refresh;
+│       │   │   │                      # idempotency key scoped to /ai-insights + /ai-actions only
+│       │   │   ├── endpoints.ts       # Typed URL constants
+│       │   │   ├── finance.ts         # listCustomers, createCustomer, createInvoice, resolveCustomerId
+│       │   │   ├── intelligence.ts    # dispatchConversation, checkConversationStatus, extractInvoice;
+│       │   │   │                      # KeyFinding, GenUIPayload, ExtractedInvoice interfaces
+│       │   │   └── auth-client.ts     # login, logout (revokes refresh token), getMe()
 │       │   ├── auth/
-│       │   │   ├── auth-context.tsx   # React context: user, isAuthenticated, login, logout
-│       │   │   └── token-manager.ts   # localStorage access/refresh token CRUD + isTokenExpired + fg_session cookie
+│       │   │   ├── auth-context.tsx   # Hydrates user via GET /me (not JWT decode); proactive refresh
+│       │   │   └── token-manager.ts   # localStorage token CRUD + fg_session cookie
 │       │   ├── hooks/
-│       │   │   ├── useAuth.ts         # Re-export of useAuthContext
-│       │   │   └── useRole.ts         # hasRole(minRole) RBAC helper based on role hierarchy
-│       │   └── utils/cn.ts            # clsx + tailwind-merge class name helper
+│       │   │   ├── useAuth.ts
+│       │   │   └── useRole.ts
+│       │   └── utils/cn.ts
 │       └── types/
 │           ├── index.ts
-│           └── auth.ts                # UserRole type (OWNER | ADMIN | MANAGER | ACCOUNTANT | VIEWER)
+│           └── auth.ts
 ├── infrastructure/
-│   ├── docker-compose.yml             # Production Docker Compose
-│   ├── docker-compose.dev.yml         # Dev overrides
-│   ├── nginx/nginx.conf               # Reverse proxy (ports 80/443)
-│   ├── grafana/datasources.yml        # Grafana provisioning
-│   ├── prometheus/                    # Prometheus scrape config
-│   └── db_security.sql               # finguard_readonly role for Text-to-SQL (Agent D)
+│   ├── docker-compose.yml
+│   ├── docker-compose.dev.yml
+│   ├── nginx/
+│   │   ├── nginx.conf                 # Dev: rate limiting, security headers, fixed proxy_pass (no trailing slash)
+│   │   └── nginx.prod.conf            # Prod: TLS on 443, HTTP→HTTPS redirect, HSTS, HTTP/2
+│   ├── scripts/
+│   │   ├── backup.sh                  # pg_dump + mongodump with timestamps
+│   │   └── restore.sh                 # Restore (guarded by CONFIRM=yes)
+│   ├── grafana/datasources.yml
+│   ├── prometheus/
+│   └── db_security.sql
 ├── monitoring/
-│   ├── prometheus.yml                 # Scrape targets
+│   ├── prometheus.yml
 │   └── dashboards/
-│       ├── dashboards.yml             # Grafana dashboard provider config
-│       └── finguard_ai_overview.json  # Grafana D3 AI overview dashboard
-└── .github/workflows/                 # CI/CD pipelines
+│       ├── dashboards.yml
+│       └── finguard_ai_overview.json
+├── docs/
+│   └── OPERATIONS.md                  # Runbook: config, migrations, deploy/rollback, backups, TLS, observability
+└── .github/workflows/
+    ├── ci.yml                         # pgvector image; migration-check job; security-scan (gitleaks, pip-audit, bandit, npm audit)
+    └── deploy.yml                     # SHA-tagged builds; Trivy image scan; gated deploy job (migrate → deploy → smoke-test)
 ```
 
 ---
@@ -254,7 +281,7 @@ Finguard-3.0/
 | Vector DB | pgvector | ≥0.3.0 |
 | Message Queue | aio-pika (RabbitMQ client) | ≥9.4.0 |
 | Task Queue | Celery (broker: RabbitMQ, backend: Redis) | ≥5.4.0 |
-| Auth | python-jose (JWT) + passlib/bcrypt | ≥3.3.0 |
+| Auth | python-jose (JWT) + bcrypt (direct — no passlib) | ≥3.3.0 / ≥4.0.0 |
 | Crypto (CA) | cryptography (Ed25519) | ≥43.0.0 |
 | Rate Limiting | slowapi | ≥0.1.9 |
 | HTTP Client | httpx | ≥0.27.0 |
@@ -304,17 +331,18 @@ All services are defined in `infrastructure/docker-compose.yml`. Background work
 - Schema namespace: `finguard`
 - Extensions: `pgvector` (768-dim embeddings for KRA knowledge base, Agent F)
 - Managed with Alembic migrations
+- Read-only role `finguard_readonly` provisioned via `infrastructure/db_security.sql` for Text-to-SQL (Agent D)
 
 #### MongoDB (port 27017)
 - Read-model cache for AI agent outputs (`intelligence_hub` collection)
 - Also stores: `trust_log` (Verifiable Credentials), and outbox projector targets
-- Accessed via Motor async driver
 
 #### Redis (port 6379)
-- DB 0: Celery result backend
-- DB 1: JWT blacklist + email verification tokens (auto-derived if `AUTH_REDIS_URL` not set)
+- DB 0: Celery result backend + Agent E idempotency keys
+- DB 1: JWT blacklist + login lockout counters (auto-derived if `AUTH_REDIS_URL` not set)
 - DB 2: Per-IP rate-limit counters via slowapi (auto-derived if `RATE_LIMIT_REDIS_URL` not set)
-- Agent E: Idempotency keys for expense event deduplication (24h TTL)
+- Intelligence: `task_status:{session_id}`, `task_owner:{session_id}` — IDOR-safe conversation state
+- Auth: `login_attempts:{email}` — login lockout counter; `blacklist:{jti}` — token revocation
 
 #### RabbitMQ (port 5672, management UI 15672)
 - Exchange: `finguard.events` (TOPIC, durable)
@@ -323,25 +351,27 @@ All services are defined in `infrastructure/docker-compose.yml`. Background work
 
 #### FastAPI Backend (port 8000)
 - Entry point: `src/main.py`
-- Health check: `GET /health`
-- API docs: `GET /docs` (only when `DEBUG=true`)
-- Prometheus metrics: `GET /metrics`
+- `GET /health` — basic liveness + dependency check
+- `GET /health/live` — liveness probe alias (dependency-free, always fast)
+- `GET /health/ready` — readiness probe; checks Postgres + Redis; returns `503` with degraded status if either fails
+- `GET /metrics` — Prometheus metrics (guarded by `METRICS_AUTH_SECRET` Bearer token)
+- `GET /docs` — Swagger UI (only when `DEBUG=true`)
 - Lifespan: startup (DB init, MongoDB indexes, Redis init, RabbitMQ publisher init, optional background tasks), shutdown (task cancellation, connection cleanup)
 
 #### Next.js Frontend (port 3000)
 - API calls proxied to `NEXT_PUBLIC_API_URL` (default: `http://localhost:8000`)
 
-#### Nginx (ports 80/443)
-- Routes `/api/*` → `backend:8000`, `/*` → `frontend:3000`
-- SSL termination
+#### Nginx
+- Dev (`nginx.conf`): HTTP on port 80; routes `/api/*` → `backend:8000`, `/*` → `frontend:3000`; rate limiting; security headers (X-Content-Type-Options, X-Frame-Options, CSP, Referrer-Policy)
+- Prod (`nginx.prod.conf`): TLS on 443; HTTP→HTTPS redirect on 80; HSTS; HTTP/2; same rate limiting and headers
 
 ### Worker Services (`--profile workers`)
 
 | Service | Purpose |
 |---|---|
-| **celery-worker** | Queues: `ocr_processing`, `batch_processing`, `watchdog`. Concurrency: 2. Also runs RabbitMQ consumer and outbox projector when enabled. Task modules: `ocr` (Gemini multimodal invoice/receipt extraction), `batch` (ledger classification, reconciliation), `reporting_tasks` (monthly Agent F+G intelligence report). |
+| **celery-worker** | Queues: `ocr_processing`, `batch_processing`, `watchdog`. Concurrency: 2. Also runs RabbitMQ consumer and outbox projector when enabled. |
 | **celery-beat** | Periodic tasks; schedule persisted via `celerybeat_schedule` volume |
-| **flower** | Celery monitoring UI (port 5555), exposes `/metrics` for Prometheus |
+| **flower** | Celery monitoring UI (port 5555) |
 
 ### Monitoring Services (`--profile monitoring`)
 
@@ -359,15 +389,18 @@ All services are defined in `infrastructure/docker-compose.yml`. Background work
 
 ```
 finguard.users (
-  id            UUID PK,
-  email         VARCHAR UNIQUE,
-  full_name     VARCHAR,
+  id              UUID PK,
+  email           VARCHAR UNIQUE,
+  full_name       VARCHAR,
   hashed_password VARCHAR,
-  role          UserRole ENUM (owner | admin | manager | accountant | viewer),
-  is_active     BOOLEAN DEFAULT true,
-  created_at    TIMESTAMPTZ
+  role            UserRole ENUM (owner | admin | manager | accountant | viewer),
+  is_active       BOOLEAN DEFAULT true,
+  is_verified     BOOLEAN DEFAULT false,  -- first-user bootstrap sets true; admin sets for subsequent users
+  created_at      TIMESTAMPTZ
 )
 ```
+
+**Bootstrap behaviour**: The first user registered becomes `role=OWNER, is_verified=true` automatically. All subsequent self-registrations are `role=VIEWER, is_verified=false` and are blocked from login until an admin/owner verifies them.
 
 ### PostgreSQL — CRM Domain
 
@@ -379,7 +412,7 @@ finguard.customers (
   phone            VARCHAR,
   status           CustomerStatus ENUM (active | inactive | suspended | prospect),
   customer_type    CustomerType ENUM (individual | business),
-  preferred_locale VARCHAR(50),      -- NULL = system default; used by Agent J for localised summaries
+  preferred_locale VARCHAR(50),
   created_at       TIMESTAMPTZ,
   updated_at       TIMESTAMPTZ
 )
@@ -402,7 +435,7 @@ finguard.invoices (
   id              UUID PK,
   invoice_number  VARCHAR UNIQUE,
   customer_id     UUID FK → customers,
-  status          InvoiceStatus ENUM (draft | sent | paid | overdue | cancelled),
+  status          InvoiceStatus ENUM (draft | sent | paid | overdue | cancelled | partially_paid),
   subtotal        NUMERIC(15,2),
   tax_total       NUMERIC(15,2),
   discount_total  NUMERIC(15,2),
@@ -431,6 +464,7 @@ finguard.mpesa_transactions (
   amount          NUMERIC(15,2),
   phone           VARCHAR,
   bill_ref        VARCHAR,
+  raw_payload     JSONB,             -- full Daraja callback JSON (added migration 0007)
   is_reconciled   BOOLEAN DEFAULT false,
   created_at      TIMESTAMPTZ
 )
@@ -495,7 +529,7 @@ finguard.knowledge_base (
   document_title  VARCHAR(512),
   section_key     VARCHAR(255) (indexed),
   content         TEXT,
-  vector_embeddings VECTOR(768),    -- pgvector, HNSW L2 index (m=16, ef_construction=64; replaces IVFFlat from migration 0004)
+  vector_embeddings VECTOR(768),    -- pgvector, HNSW L2 index (m=16, ef_construction=64)
   metadata_payload JSONB,
   created_at      TIMESTAMPTZ
 )
@@ -506,7 +540,7 @@ finguard.knowledge_base (
 | Collection | Purpose |
 |---|---|
 | `intelligence_hub` | InsightArtifact per agent invocation (TTL-cached, keyed `{agent_id}:{intent}`) |
-| `trust_log` | Verifiable Credentials — two types: **Audit VCs** (JWT TTL 365 days, issued per agent operation) and **Task-Scoped VCs** (JWT TTL 5 min, bound to a specific `transaction_id`). MongoDB 90-day TTL index on `created_at` (BSON Date) auto-expires documents. |
+| `trust_log` | Verifiable Credentials — Audit VCs (365-day JWT) and Task-Scoped VCs (5-min JWT). 90-day MongoDB TTL index on `created_at`. |
 
 ---
 
@@ -518,11 +552,11 @@ All agents are LangGraph nodes. They receive `OrchestratorState`, perform their 
 
 ### GenUI Payload Contract
 
-Agents D, E, F, and G each emit a `CompositeGenUIPayload` (defined in `schemas.py`) which is a superset of `GenUIPayload`. The composite type carries:
+Agents D, E, F, and G each emit a `CompositeGenUIPayload` carrying:
 - **`props`** — deterministic, numerically computed chart props
 - **`findings: list[KeyFinding]`** — LLM-generated `{metric, value}` badges
 
-`CompositeGenUIPayload.to_gen_ui_payload()` merges `findings` into `props["findings"]` before writing to `OrchestratorState.gen_ui_payloads`, so `hub_writer.py` and the existing router need no changes. The frontend uses the presence of a non-empty `props.findings` array to route the payload to `CompositeInsightBlock` instead of `GenUiBlock`.
+`CompositeGenUIPayload.to_gen_ui_payload()` merges findings into `props["findings"]` before writing to `OrchestratorState.gen_ui_payloads`.
 
 ```python
 class KeyFinding(BaseModel):
@@ -552,6 +586,7 @@ class CompositeGenUIPayload(BaseModel):
 | Output schema | `ExtractedInvoice` (vendor, customer, invoice_number, line_items, totals, confidence) |
 | Method | Gemini structured output (`response_schema=ExtractedInvoice`) via `generate_structured_content` |
 | Prompt | `prompts/a_generator.py` — system prompt + few-shot example |
+| Frontend integration | `extractInvoice()` in `lib/api/intelligence.ts` calls `/intent`; `InvoiceGenerator.tsx` maps result into editable form |
 | Hub TTL | 1 hour |
 
 ---
@@ -563,10 +598,10 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/b_classifier.py` |
 | Trigger | Supervisor routes here for transaction classification tasks |
 | Context key written | `classified_transactions` |
-| Prompt | `prompts/b_classifier.py` — taxonomy of 17 categories + zero-shot classification system prompt |
+| Prompt | `prompts/b_classifier.py` — taxonomy of 17 categories + zero-shot classification |
 | Output schemas | `TransactionClassification`, `BatchClassificationResult` |
-| Method | Fetches recent unclassified ledger entries, classifies via Gemini structured output, persists categories, publishes `finance.transactions.classified` event in actions mode |
-| Batch Celery task | `workers/tasks/batch.py::classify_unclassified_ledger_entries` — sweeps `ledger_entries WHERE category IS NULL` in batches of 50. Uses `SELECT … FOR UPDATE SKIP LOCKED` to prevent concurrent double-processing. |
+| Method | Fetches recent unclassified ledger entries, classifies via Gemini structured output, persists categories |
+| Batch Celery task | `workers/tasks/batch.py::classify_unclassified_ledger_entries` — batches of 50, `SELECT … FOR UPDATE SKIP LOCKED` |
 | Hub TTL | 1 hour |
 
 ---
@@ -578,10 +613,10 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/c_reconciler.py` |
 | Trigger | Supervisor routes here for reconciliation tasks |
 | Context key written | `reconciliation_report` |
-| Prompt | `prompts/c_reconciler.py` — pass-2 fuzzy matching rules prompt for M-Pesa ↔ invoice confirmation |
+| Prompt | `prompts/c_reconciler.py` — pass-2 fuzzy matching rules for M-Pesa ↔ invoice |
 | Output schemas | `ReconciliationCandidate`, `ReconciliationScoringResult`, `ReconciliationMatch`, `ReconciliationReport` |
-| Method | Pass-1 exact match (amount + reference), pass-2 Gemini semantic scoring via `_gemini_score_candidates`. All writes wrapped in a single transaction for atomicity (rolled back on failure). Publishes `finance.reconciliation.completed` in actions mode. |
-| Batch Celery task | `workers/tasks/batch.py::run_batch_reconciliation` — queries unreconciled M-Pesa transactions and open invoices (100 tx/batch). Uses `SELECT … FOR UPDATE SKIP LOCKED`. |
+| Method | Pass-1 exact match (amount + reference), pass-2 Gemini semantic scoring. All writes in a single atomic transaction. |
+| Batch Celery task | `workers/tasks/batch.py::run_batch_reconciliation` — 100 tx/batch, `SELECT … FOR UPDATE SKIP LOCKED` |
 | Hub TTL | 10 minutes |
 
 ---
@@ -593,12 +628,12 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/d_forecaster.py` |
 | Trigger | Supervisor routes here for forecasting tasks |
 | Context key written | `forecast` |
-| Prompts | `prompts/d_forecaster.py` — multi-phase: (1) CoVe SQL-drafting prompt (schema-masked), (2) regime-detection prompt, (3) narrative explainer prompt |
-| Schema masking | `tools/sql_executor.py::get_masked_schema("D")` — returns DDL only for `ledger_entries`, `invoices`, `budgets`, `expenses`; all SQL validated by sqlglot AST before execution |
+| SQL access | `execute_readonly_sql()` — routes through `finguard_readonly` PostgreSQL role; never receives a session parameter |
+| Prompts | `prompts/d_forecaster.py` — CoVe SQL-drafting, regime-detection, narrative explainer |
+| Schema masking | `get_masked_schema("D")` — DDL only for `ledger_entries`, `invoices`, `budgets`, `expenses` |
 | Output schemas | `ForecastDataPoint`, `CashFlowForecast`, `CoVeSQLQuery` |
-| GenUI payload | `CompositeGenUIPayload` → `component_id: "CashFlowChart"`. Props include `current_balance`, `data_points[]`, `regime`. Findings: `[{metric:"Regime",value:…}, {metric:"Runway",value:…}, {metric:"Confidence",value:…}]` |
-| Method | Fetches 12 months of daily net cash-flow via `_fetch_daily_cashflow`, fits Holt-Winters exponential smoothing (`_fit_holtwinters`), detects financial regime (growth/stable/stressed/declining) via `_detect_regime`, overlays upcoming invoice due-dates, Gemini narrative. Uses read-only `finguard_readonly` PostgreSQL role. |
-| Side effect | Publishes `finance.forecast.generated` in actions mode |
+| GenUI payload | `CompositeGenUIPayload` → `component_id: "CashFlowChart"` |
+| Method | 12 months daily net cash-flow via SQL → Holt-Winters → regime detection → invoice overlays → Gemini narrative |
 | Hub TTL | 1 hour |
 
 ---
@@ -608,16 +643,12 @@ class CompositeGenUIPayload(BaseModel):
 | Field | Value |
 |---|---|
 | File | `agents/e_watchdog.py` |
-| Trigger | RabbitMQ `expenses.created` event (via `watchdog_consumer.py`) or direct supervisor routing |
+| Trigger | RabbitMQ `expenses.created` event or direct supervisor routing |
 | Context key written | `watchdog_result` |
-| Output schema | `WatchdogAnalysis` (current_state, state_probabilities, anomaly_score, isolation_score, is_duplicate, vc_id, summary) |
-| GenUI payload | `CompositeGenUIPayload` → `component_id: "BudgetWatchdogMeter"`. Props include `anomaly_score`, `current_state`, `state_probabilities: {HEALTHY, STABLE, CRITICAL}` (uses constant `STATE_LABELS`, not per-step Viterbi labels), `anomaly_detected`, `is_duplicate`, `summary`. Findings: top-2 HMM state probabilities + anomaly index. |
-| Method | Hidden Markov Model (3 states: HEALTHY/STABLE/CRITICAL) + IsolationForest + rapidfuzz duplicate detection + Gemini narrative |
-| HMM | Forward algorithm for P(state\|observations), Viterbi for most-likely path |
-| Duplicate detection | rapidfuzz similarity on expense reference strings |
-| VC issued | Yes — written to MongoDB `trust_log` before result (SOC-2 audit trail) |
-| Event published | `finguard.agent_e.events` exchange in actions mode |
-| Prometheus metrics | `finguard_agent_e_hmm_anomaly_score`, `finguard_agent_e_state_probability`, `agent_llm_processing_seconds` |
+| SQL access | `execute_readonly_sql()` for recent amounts and invoices |
+| Output schema | `WatchdogAnalysis` |
+| GenUI payload | `CompositeGenUIPayload` → `component_id: "BudgetWatchdogMeter"` |
+| Method | HMM (3-state) + IsolationForest + rapidfuzz duplicate detection + Gemini narrative + VC issuance |
 | Hub TTL | 30 minutes |
 
 ---
@@ -629,11 +660,9 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/f_auditor.py` |
 | Trigger | Supervisor routes here for tax/compliance requests |
 | Context key written | `tax_audit_result` |
-| Output schema | `AgentFOutput` (tax_type, tax_liability, effective_tax_rate, compliance_flags, kra_references, audit_summary) |
-| GenUI payload | `CompositeGenUIPayload` → `component_id: "TaxLiabilityDonut"`. Props include all `AgentFOutput` fields plus `vat_component` and `cit_component` (computed post-`_calculate_tax_liability` from annualised revenue). Findings: ETR percentage + top compliance flag count. |
-| Method | Deterministic calculations (Kenya: 16% VAT threshold KES 8M annual, 30% CIT) + pgvector RAG against `knowledge_base` table (top-3 KRA excerpts via Gemini `text-embedding-004` 768-dim) + Gemini structured output |
-| VAT/CIT split | `vat_component = revenue × 0.16` when annualised revenue ≥ KES 8M; `cit_component = max(revenue − opex, 0) × 0.30`. Overridden by `tax_regime` field when explicitly "VAT" or "CIT". |
-| RAG service | `services/tax_rag_service.py` — embeds query, L2-distance search, returns excerpts |
+| Output schema | `AgentFOutput` |
+| GenUI payload | `CompositeGenUIPayload` → `component_id: "TaxLiabilityDonut"` |
+| Method | Deterministic Kenya tax calculations (16% VAT threshold KES 8M, 30% CIT) + pgvector RAG (top-3 KRA excerpts) + Gemini structured output |
 | Hub TTL | 1 day |
 
 ---
@@ -645,12 +674,11 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/g_reporter.py` |
 | Trigger | Supervisor routes here for credit/report requests |
 | Context key written | `credit_strategy_result`, `credit_forecast` |
-| Output schema | `AgentGOutput` (bankability_score 0-100, risk_tier, strategic_narrative) |
-| GenUI payload | `CompositeGenUIPayload` → `component_id: "BankabilityScoreRadar"`. Props include all `AgentGOutput` fields plus `trend_score`, `ratio_score`, `consistency_score`, `runway_score` sub-scores (the 4 bankability components exposed individually for radar axis rendering). Findings: overall score + risk tier + trend direction. |
-| Method | Holt-Winters exponential smoothing (statsmodels) for 12-month forecast → deterministic 4-component bankability score → Gemini narrative generation. `_compute_bankability_score` returns `tuple[int, str, dict[str, int]]` (score, tier, sub_scores). |
+| Output schema | `AgentGOutput` |
+| GenUI payload | `CompositeGenUIPayload` → `component_id: "BankabilityScoreRadar"` |
+| Method | Holt-Winters 12-month forecast → 4-component bankability score → Gemini narrative |
 | Bankability components | Revenue trend (30pts) + Expense ratio (30pts) + Cash-flow consistency CoV (20pts) + Forecast solvency (20pts) |
 | Risk tiers | LOW (≥75) / MEDIUM (45-74) / HIGH (<45) |
-| Fallback | Linear extrapolation (<4 data points) or last-value drift (statsmodels failure) |
 | Hub TTL | 1 day |
 
 ---
@@ -662,8 +690,7 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/h_advisor.py` |
 | Trigger | Supervisor routes here for advisory/recommendation requests |
 | Context key written | `advice` |
-| Method | Resolves user RBAC role via `_resolve_user_role`, fetches CRM customer profile via `_fetch_crm_profile`, aggregates watchdog state + forecast + tax audit from context, builds evidence-based prompt, Gemini multi-step reasoning. RBAC clip: VIEWERs get summaries; MANAGERs and above get full actionable recommendations. |
-| Output | List of `{recommendation, rationale, priority}` structured advice entries |
+| Method | RBAC role resolution → CRM profile → aggregated watchdog/forecast/tax context → Gemini multi-step reasoning. VIEWERs get summaries; MANAGERs+ get full actionable recommendations. |
 | Hub TTL | 1 hour |
 
 ---
@@ -675,9 +702,8 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/i_integrator.py` |
 | Trigger | Supervisor routes here when external data is needed |
 | Context key written | `external_data` |
-| Method | Calls `_fetch_mpesa_data`, `_fetch_cbk_fx`, `_fetch_metropol_score`, `_fetch_kra_status` via `http_caller` tool. Falls back to mock data (`_mock_mpesa`, `_mock_fx_rates`, etc.) when live endpoints are unavailable. Normalises all currency amounts to KES using `_normalise_to_kes`. |
-| Tool | `tools/http_caller.py::make_http_caller()` — `@tool`-decorated async function; tenacity retry (4 attempts, exp back-off+jitter on HTTP 429/5xx and network errors) |
-| Data sources | M-Pesa Daraja API, CBK FX rates, Metropol credit bureau, KRA e-Citizen |
+| Method | Calls M-Pesa Daraja, CBK FX, Metropol, KRA via `http_caller` tool (SSRF-guarded). Mock fallbacks when live endpoints unavailable. |
+| SSRF protection | `_assert_public_url()` in `http_caller.py` blocks private IPs, loopback, link-local; `follow_redirects=False` |
 | Hub TTL | 1 hour |
 
 ---
@@ -687,22 +713,20 @@ class CompositeGenUIPayload(BaseModel):
 | Field | Value |
 |---|---|
 | File | `agents/j_summarizer.py` |
-| Trigger | Always the last agent invoked before FINISH |
+| Trigger | Always the last agent before FINISH |
 | Context key written | `executive_summary` |
-| Method | `_collect_sections` enumerates populated context keys (skips `executive_summary` to avoid circularity), collates non-empty sections from agents A–I, builds Gemini prompt, returns ≤5-bullet plain text summary. Reads `preferred_locale` from customers (CRM) and requests locale-specific language output when set. |
+| Method | Collates non-empty context from agents A–I, Gemini ≤5-bullet summary, locale-aware output from CRM `preferred_locale` |
 | Hub TTL | 30 minutes |
 
 ---
 
-### Hub Writer (not an agent — internal node) ✅
+### Hub Writer ✅
 
 | Field | Value |
 |---|---|
 | File | `agents/hub_writer.py` |
-| Trigger | Called explicitly in `build_invoice_graph()` after Agent A; called after every agent node in the full graph |
-| Purpose | Upsert `InsightArtifact` document into MongoDB `intelligence_hub` collection |
-| Cache key | `{agent_id}:{intent}` compound key |
-| Per-agent TTLs | A: 1h, B: 1h, C: 10m, D: 1h, E: 30m, F: 1d, G: 1d, H: 1h, I: 1h, J: 30m |
+| Purpose | Upsert `InsightArtifact` to MongoDB `intelligence_hub` |
+| Cache key | `{agent_id}:{intent}` |
 
 ---
 
@@ -711,10 +735,7 @@ class CompositeGenUIPayload(BaseModel):
 | Field | Value |
 |---|---|
 | File | `agents/supervisor.py` |
-| Purpose | ReAct loop controller — decides which agent to invoke next |
-| Method | Gemini structured output (`_SupervisorDecision` schema) with routing table in system prompt |
-| Fallback | Routes to `FINISH` if decision parsing fails |
-| Prompt | `prompts/supervisor.py` |
+| Method | Gemini structured output (`_SupervisorDecision` schema); fallback to `FINISH` on parse failure |
 
 ---
 
@@ -726,10 +747,10 @@ class CompositeGenUIPayload(BaseModel):
 
 ```python
 class OrchestratorState(TypedDict):
-    messages: Annotated[list[BaseMessage], add_messages]  # LangGraph message accumulator
-    error_messages: Annotated[list[str], operator.add]    # Error accumulator
-    next: str           # Agent name the supervisor routes to next (or "FINISH")
-    context: dict[str, Any]  # Arbitrary data accumulated across nodes
+    messages: Annotated[list[BaseMessage], add_messages]
+    error_messages: Annotated[list[str], operator.add]
+    next: str           # Agent name or "FINISH"
+    context: dict[str, Any]
     session_id: str
     user_id: str | None
     mode: str           # "insights" (read-only) | "actions" (may publish events)
@@ -737,23 +758,15 @@ class OrchestratorState(TypedDict):
 
 ### Graph Topologies
 
-**Full Graph** (`build_graph()`) — used by `/ai-insights` and `/ai-actions`:
+**Full Graph** (`build_graph()`) — `/ai-insights` and `/ai-actions`:
 
 ```
-[START]
-   │
-   ▼
-[supervisor] ──── conditional edge (state["next"])
-   ▲                │
-   │     ┌──────────┴──────────┐
-   │     ▼                     │
-   └── [any agent node]        ▼ when next == "FINISH"
-         (unconditional      [END]
-          return to
-          supervisor)
+[START] → [supervisor] ──conditional──► [END] (when next == "FINISH")
+               ▲                │
+               └─── [any agent node] (unconditional return to supervisor)
 ```
 
-**Invoice Graph** (`build_invoice_graph()`) — used by `/intent`:
+**Invoice Graph** (`build_invoice_graph()`) — `/intent`:
 
 ```
 [START] → [a_generator] → [hub_writer] → [END]
@@ -763,93 +776,81 @@ class OrchestratorState(TypedDict):
 
 ```
 POST /conversation
-   │
    ├── Cache hit (fresh InsightArtifact in MongoDB)?
    │       └── Return cached result immediately (200 OK)
-   │
-   └── Cache miss or force_refresh=true
-           └── Claim Redis idempotency slot → dispatch _graph_background_task (asyncio task)
-                   │
-                   ├── On complete: store result in Redis task_status:{session_id} = "completed"
-                   └── Return 202 Accepted with session_id for polling
+   └── Cache miss / force_refresh=true
+           └── Claim Redis idempotency slot → store task_owner:{session_id}
+               → dispatch _graph_background_task (asyncio task)
+               → Return 202 with session_id
 
 GET /conversation/{session_id}/status
-   └── Read task_status:{session_id} from Redis → return status (pending | completed | failed)
-```
-
-### Agent Node Map
-
-```python
-AGENT_NODE_MAP = {
-    "a_generator":  "a_generator",
-    "b_classifier": "b_classifier",
-    "c_reconciler": "c_reconciler",
-    "d_forecaster": "d_forecaster",
-    "e_watchdog":   "e_watchdog",
-    "f_auditor":    "f_auditor",
-    "g_reporter":   "g_reporter",
-    "h_advisor":    "h_advisor",
-    "i_integrator": "i_integrator",
-    "j_summarizer": "j_summarizer",
-    "FINISH":       END,
-}
+   └── Verify task_owner:{session_id} == current_user.id (IDOR guard)
+       → Read task_status:{session_id} → return status
 ```
 
 ---
 
 ## 8. API Routes
 
-All routes are registered in `src/main.py` under `/api/v1/` prefix.
+All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_permission()` FastAPI dependency.
 
 ### Identity — `/api/v1/identity`
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/register` | Create user account |
-| POST | `/token` | Login (returns access + refresh tokens) |
-| POST | `/token/refresh` | Rotate tokens using refresh token |
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/register` | — | Create user (first → OWNER+verified; subsequent → VIEWER+unverified) |
+| POST | `/token` | — | Login; returns access + refresh tokens; enforces Redis lockout |
+| POST | `/token/refresh` | Refresh token | Rotate tokens (jti blacklisted on use; reuse detected) |
+| POST | `/logout` | Bearer | Revoke access token; optionally revoke refresh token via request body |
+| GET | `/me` | Bearer | Return authenticated user profile from backend (authoritative) |
+| GET | `/users` | Bearer + `user:manage` | List all users (admin/owner only) |
+| PATCH | `/users/{user_id}` | Bearer + `user:manage` | Update user role / verified status |
 
 ### CRM — `/api/v1/crm`
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/customers` | Create customer |
-| GET | `/customers` | List customers (paginated) |
-| GET | `/customers/{id}` | Get customer detail |
-| PATCH | `/customers/{id}` | Update customer |
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/customers` | `crm:write` | Create customer |
+| GET | `/customers` | `crm:read` | List customers (paginated) |
+| GET | `/customers/{id}` | `crm:read` | Get customer detail |
+| PATCH | `/customers/{id}` | `crm:write` | Update customer |
 
 ### Finance — `/api/v1/finance`
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/ledger` | Create ledger entry |
-| GET | `/invoices` | List invoices |
-| GET | `/invoices/{id}` | Get invoice |
-| POST | `/invoices` | Create invoice |
-| PATCH | `/invoices/{id}` | Update invoice |
-| POST | `/invoices/{id}/pay` | Record payment on invoice |
-| POST | `/expenses` | Create expense (publishes `expenses.created` event) |
-| GET | `/expenses` | List expenses |
-| POST | `/mpesa/callback` | M-Pesa Daraja STK push callback |
-| POST | `/payments/cash` | Record cash payment |
-| POST | `/budgets` | Create budget |
-| GET | `/budgets` | List budgets |
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/ledger` | `finance:write` | Create ledger entry |
+| GET | `/invoices` | `finance:read` | List invoices |
+| GET | `/invoices/{id}` | `finance:read` | Get invoice |
+| POST | `/invoices` | `finance:write` | Create invoice |
+| PATCH | `/invoices/{id}` | `finance:write` | Update invoice |
+| POST | `/invoices/{id}/pay` | `finance:write` | Record payment (settles balance_due) |
+| POST | `/expenses` | `finance:write` | Create expense (publishes via outbox) |
+| GET | `/expenses` | `finance:read` | List expenses |
+| POST | `/mpesa/callback` | — | M-Pesa Daraja STK callback (strict MpesaStkCallback validation; stores raw_payload) |
+| POST | `/payments/cash` | `finance:write` | Record cash payment (row-locked for UPDATE) |
+| POST | `/budgets` | `finance:write` | Create budget |
+| GET | `/budgets` | `finance:read` | List budgets |
 
 ### Intelligence — `/api/v1/intelligence`
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/ai-insights` | Run multi-agent orchestrator in read-only mode |
-| POST | `/ai-actions` | Run multi-agent orchestrator in actions mode (may publish events) |
-| POST | `/intent` | Focused invoice-generation graph (Agent A + hub writer only) |
-| POST | `/conversation` | Dual-path: return cached InsightArtifact on hit; dispatch background graph run on miss (returns 202 + session_id for polling) |
-| GET | `/conversation/{session_id}/status` | Poll background task status (`pending` \| `completed` \| `failed`) |
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/ai-insights` | `intelligence:read` | Multi-agent orchestrator, insights mode |
+| POST | `/ai-actions` | `intelligence:act` | Multi-agent orchestrator, actions mode |
+| POST | `/intent` | `intelligence:read` | Invoice graph only (Agent A + hub writer) |
+| POST | `/conversation` | `intelligence:read` | Dual-path; stores task_owner for IDOR guard |
+| GET | `/conversation/{session_id}/status` | `intelligence:read` | Owner-verified status poll |
 
-**Special endpoints** (registered directly on the FastAPI app):
-- `GET /health` → `{"status": "ok"}`
-- `GET /metrics` → Prometheus metrics
-- `GET /docs` → Swagger UI (only when `DEBUG=true`)
-- `GET /redoc` → ReDoc (only when `DEBUG=true`)
+### Special Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/health` | — | Basic liveness |
+| GET | `/health/live` | — | Liveness alias (dependency-free) |
+| GET | `/health/ready` | — | Readiness (checks Postgres + Redis; 503 on degraded) |
+| GET | `/metrics` | Bearer (`METRICS_AUTH_SECRET`) | Prometheus metrics |
+| GET | `/docs` | — | Swagger UI (DEBUG=true only) |
 
 ---
 
@@ -862,40 +863,42 @@ All routes are registered in `src/main.py` under `/api/v1/` prefix.
 | `/` | Root redirect → `/dashboard` |
 | `/login` | JWT login form |
 | `/register` | User registration |
-| `/settings` | User settings |
+| `/settings` | Account profile (name/email/role from `/me`) + server-revoking logout |
 | `/dashboard` | Root dashboard redirect |
 | `/dashboard/overview` | Main KPI overview |
-| `/dashboard/intelligence` | AI insights panel (AuditorInsights, ComplianceChecklist, CoreReports, StrategicForecast) |
-| `/dashboard/invoices` | Invoice list and management |
+| `/dashboard/intelligence` | AI chat (AgentChatWindow) + composite GenUI blocks |
+| `/dashboard/invoices` | Invoice list + InvoiceGenerator (wired to real backend) |
 | `/dashboard/budgets` | Budget management |
 | `/dashboard/transactions` | Transaction list |
-| `/dashboard/receivables` | Receivables / AR (InvoiceTable, AgentStatus) |
-| `/dashboard/payables` | Payables / AP (DepartmentBudgets, RecentOutgoing, AgentIntegrations) |
-| `/dashboard/payables/alerts` | Budget alerts (AlertKpiCards, DuplicateInvoiceAlert, VendorActivityAlert, RecentlyResolvedAlerts) |
+| `/dashboard/receivables` | AR: InvoiceTable, AgentStatus |
+| `/dashboard/payables` | AP: DepartmentBudgets, RecentOutgoing, AgentIntegrations |
+| `/dashboard/payables/alerts` | Budget alerts |
 
 ### Chat Pipeline (AgentChatWindow)
 
-`/dashboard/intelligence` hosts a live NL query interface. The pipeline is:
-
 ```
 User types query
-  → stage: "cove"   — optimistic CoVe stepper (3 × 1400ms phases) plays while
+  → stage: "cove"    — CoVe stepper animation (3 × 1400ms phases) plays while
                        dispatchConversation POST fires in parallel
   → stage: "polling" — useQuery polls GET /conversation/{id}/status every 2s
-                        AgentBubble renders <CompositeInsightSkeleton> during this phase
-  → stage: "idle"   — status "completed" → commitAgentMessage() attaches
-                       gen_ui_payloads to the ChatMessage; composite routing fires
+                       AgentBubble renders <CompositeInsightSkeleton> during this phase
+  → stage: "idle"    — status "completed" → commitAgentMessage() attaches gen_ui_payloads
 ```
 
-**Composite routing** (in `AgentBubble`): if `payload.props.findings` is a non-empty array → `CompositeInsightBlock`; otherwise → `GenUiBlock`.
+**Composite routing**: if `payload.props.findings` is non-empty → `CompositeInsightBlock`; otherwise → `GenUiBlock`.
 
-**Error handling**:
-- `GenUiBoundary` (React class Error Boundary) wraps every chart component; on render error it falls back to `fallback_text` + findings as plain text — chat window never blanks.
-- `isError` from polling `useQuery` is watched via `useEffect`; on network failure the error message is committed directly to the chat message slot.
+### Invoice Generator Flow
+
+```
+User types free-text description
+  → extractInvoice(prompt) → POST /intent → Agent A
+  → mapExtractedToForm(ExtractedInvoice | null) → editable form
+  → onSave():
+      resolveCustomerId(name) — find-by-name or create via /crm/customers
+      createInvoice(body)     — POST /finance/invoices
+```
 
 ### GenUI Registry
-
-`GenUiRegistry.tsx` maps `component_id` strings to lazily-loaded React components via `next/dynamic` (all `ssr: false`):
 
 | component_id | Component | Agent | Chart type |
 |---|---|---|---|
@@ -907,48 +910,18 @@ User types query
 | `AuditorInsights` | `intelligence/AuditorInsights.tsx` | F (legacy) | Insight card |
 | `CreditStrategy` | `intelligence/CreditStrategy.tsx` | G (legacy) | Score card |
 
-Legacy entries are kept so cached `InsightArtifact` documents with old `component_id` values continue to render correctly.
-
-### Key Components
-
-| Component | Purpose |
-|---|---|
-| `intelligence/AgentChatWindow.tsx` | Chat UI: query dispatch, CoVe animation, polling, composite/legacy routing |
-| `intelligence/CoveTimeline.tsx` | 3-phase CoVe verification stepper animation |
-| `intelligence/GenUiRegistry.tsx` | `next/dynamic` registry mapping `component_id` → React component |
-| `intelligence/CompositeInsightBlock.tsx` | Layout wrapper: findings badges left + chart right; prop validation + GenUiBoundary |
-| `intelligence/CompositeInsightSkeleton.tsx` | `animate-pulse` skeleton matching composite 2-panel layout; shown during polling |
-| `intelligence/GenUiBoundary.tsx` | React class Error Boundary; catches chart render crashes; shows fallback_text + findings |
-| `intelligence/TaxLiabilityDonut.tsx` | Agent F: concentric Recharts donut (VAT/CIT outer ring + ETR threshold inner ring) |
-| `command-center/BudgetWatchdogMeter.tsx` | Agent E: Recharts half-circle gauge + HMM state probability bars |
-| `intelligence/BankabilityScoreRadar.tsx` | Agent G: Recharts 4-axis radar; sub-scores normalised to 0-100 for equal axes |
-| `command-center/CashFlowChart.tsx` | Agent D: Recharts ComposedChart with actual/forecast areas and confidence bounds |
-| `command-center/AiActionCenter.tsx` | AI action approval/rejection panel |
-| `command-center/IntelligenceInsights.tsx` | Summary of latest agent outputs |
-| `intelligence/AuditorInsights.tsx` | Agent F tax audit results display (legacy card) |
-| `intelligence/ComplianceChecklist.tsx` | KRA compliance status list |
-| `intelligence/CoreReports.tsx` | Links to financial reports |
-| `intelligence/StrategicForecast.tsx` | Agent G bankability score + forecast chart |
-| `receivables/AgentStatus.tsx` | Real-time agent run status badges |
-| `receivables/InvoiceTable.tsx` | Sortable/filterable invoice list |
-| `payables/DepartmentBudgets.tsx` | Budget utilisation by department |
-| `alerts/DuplicateInvoiceAlert.tsx` | Agent E duplicate detection alert card (legacy) |
-| `dashboard/KpiCard.tsx` | Reusable KPI stat card |
-| `dashboard/Sidebar.tsx` | Navigation sidebar |
-| `dashboard/DashboardLayout.tsx` | Dashboard shell with sidebar + top nav |
-
 ### Utilities
 
 | File | Purpose |
 |---|---|
-| `lib/api/http-client.ts` | Axios singleton: Bearer token injection, 401 silent refresh, POST idempotency key |
-| `lib/api/endpoints.ts` | Typed URL constants (`INTELLIGENCE.CONVERSATION`, `INTELLIGENCE.CONVERSATION_STATUS`, etc.) |
-| `lib/api/intelligence.ts` | `dispatchConversation`, `checkConversationStatus`; `KeyFinding` + `GenUIPayload` interfaces |
-| `lib/auth/auth-context.tsx` | React auth context: `user`, `isAuthenticated`, `login`, `logout` |
+| `lib/api/http-client.ts` | Axios singleton: Bearer injection, 401 silent refresh, idempotency key (scoped to `/ai-insights` + `/ai-actions` only) |
+| `lib/api/endpoints.ts` | Typed URL constants |
+| `lib/api/finance.ts` | `listCustomers`, `createCustomer`, `createInvoice`, `resolveCustomerId` |
+| `lib/api/intelligence.ts` | `dispatchConversation`, `checkConversationStatus`, `extractInvoice`; `KeyFinding`, `GenUIPayload`, `ExtractedInvoice` types |
+| `lib/api/auth-client.ts` | `login`, `logout` (sends refresh token to revoke), `getMe()` |
+| `lib/auth/auth-context.tsx` | React context; hydrates `user` via `GET /me` (not JWT decode); proactive refresh on expiry |
 | `lib/auth/token-manager.ts` | localStorage token CRUD, `isTokenExpired`, `fg_session` cookie for Next.js middleware |
-| `lib/hooks/useRole.ts` | `hasRole(minRole)` RBAC helper using 5-tier role hierarchy |
-| `lib/utils/cn.ts` | `clsx` + `tailwind-merge` class name helper |
-| `components/layouts/Providers.tsx` | TanStack Query `QueryClientProvider` |
+| `lib/hooks/useRole.ts` | `hasRole(minRole)` RBAC helper using 5-tier hierarchy |
 
 ---
 
@@ -967,14 +940,9 @@ Connection:  connect_robust() — auto-reconnects on broker restart
 
 ```
 Exchange: finguard.events  (type=TOPIC, durable=true)
-    │
     └── routing key: expenses.created
-              │
-              ▼
-         Queue: finguard.agent_e.events  (durable=true)
-              │
-              ▼
-         Consumer: watchdog_consumer.py → triggers Agent E watchdog node
+              └── Queue: finguard.agent_e.events  (durable=true)
+                        └── watchdog_consumer.py → triggers Agent E
 ```
 
 ### Event Payload (`expenses.created`)
@@ -993,26 +961,9 @@ Exchange: finguard.events  (type=TOPIC, durable=true)
 }
 ```
 
-### Consumer Semantics (`watchdog_consumer.py`)
+### Outbox-to-Broker Integrity
 
-| Scenario | Behavior |
-|---|---|
-| Clean callback | `message.ack()` |
-| Redis idempotency hit | Skip silently, `message.ack()` |
-| Callback raises exception | `message.nack(requeue=False)`, log error, consumer continues |
-| Broker restart | `connect_robust()` reconnects automatically |
-
-### Celery Broker
-
-RabbitMQ is also the Celery task broker (`CELERY_BROKER_URL=amqp://...`). Celery uses Redis only as its **result backend** (`CELERY_RESULT_BACKEND=redis://...`).
-
-### Consumer Startup
-
-```python
-# src/main.py lifespan
-if settings.ENABLE_EXPENSE_EVENT_CONSUMER:
-    asyncio.create_task(run_watchdog_consumer())
-```
+`rabbitmq_publisher.publish()` raises `BrokerUnavailableError` when the connection is missing or closed. The outbox projector wraps publish inside `session.begin()`, so on `BrokerUnavailableError` the transaction rolls back and the event row stays `published=False` — **events are never silently dropped**.
 
 ---
 
@@ -1022,22 +973,20 @@ if settings.ENABLE_EXPENSE_EVENT_CONSUMER:
 
 | DB | Purpose | TTL |
 |---|---|---|
-| 0 | Celery result backend | 24h |
-| 1 | JWT blacklist + email verification tokens | Token expiry |
+| 0 | Celery result backend + Agent E idempotency keys | 24h |
+| 1 | JWT blacklist (`blacklist:{jti}`) + login lockout (`login_attempts:{email}`) | Token expiry / lockout duration |
 | 2 | Per-IP rate-limit counters (slowapi) | 1 minute |
-| 0 (also) | Agent E expense idempotency keys | 24h |
 
-`AUTH_REDIS_URL` and `RATE_LIMIT_REDIS_URL` are auto-derived from `REDIS_URL` if not explicitly set (DB suffix replaced with `/1` and `/2`).
+`AUTH_REDIS_URL` and `RATE_LIMIT_REDIS_URL` are auto-derived from `REDIS_URL` if not set (DB suffix `/1` and `/2`).
 
-### Usage by Layer
+### Intelligence State Keys
 
-**Celery (DB 0)** — result backend only (task outputs, 24h TTL). Broker is RabbitMQ, not Redis.
+| Key pattern | Value | TTL |
+|---|---|---|
+| `task_status:{session_id}` | `pending` / `completed` / `failed` | 1 hour |
+| `task_owner:{session_id}` | `user.id` (UUID string) | 1 hour |
 
-**Auth (DB 1)** — JWT blacklist on logout. Key: token hash. TTL: remaining token lifetime.
-
-**Rate Limiting (DB 2)** — Per-IP login rate limit via slowapi. Key: hash of method + path + IP.
-
-**Agent E (DB 0)** — Idempotency: Redis key `watchdog_consumer:{expense_id}` prevents duplicate processing of re-delivered RabbitMQ messages.
+`task_owner` is written on dispatch and checked in `conversation_status` to prevent IDOR (one user polling another's session).
 
 ---
 
@@ -1045,39 +994,67 @@ if settings.ENABLE_EXPENSE_EVENT_CONSUMER:
 
 ### Token Strategy
 
-| Token Type | Algorithm | Default Expiry | Storage |
+| Token Type | Algorithm | Default Expiry | Claims |
 |---|---|---|---|
-| Access token | HS256 | 30 minutes | Client-managed (e.g. localStorage) |
-| Refresh token | HS256 | 7 days | Client-managed |
+| Access token | HS256 | 30 minutes | `sub` (user UUID), `role`, `exp`, `jti` |
+| Refresh token | HS256 | 7 days | `sub`, `exp`, `jti` (for revocability) |
 
-### RBAC Roles
+Both tokens carry a `jti` (JWT ID). On logout or refresh rotation, the consumed `jti` is written to Redis `blacklist:{jti}` with TTL = remaining token lifetime. `get_current_user` checks the blacklist on every request.
 
-| Role | Access Level |
+### RBAC Permissions
+
+`domains/identity/permissions.py` defines a `Permission` enum and a role→permission matrix:
+
+```python
+class Permission(enum.StrEnum):
+    FINANCE_READ  = "finance:read"
+    FINANCE_WRITE = "finance:write"
+    CRM_READ      = "crm:read"
+    CRM_WRITE     = "crm:write"
+    INTELLIGENCE_READ = "intelligence:read"
+    INTELLIGENCE_ACT  = "intelligence:act"
+    USER_MANAGE   = "user:manage"
+```
+
+| Role | Permissions |
 |---|---|
-| `owner` | Full system access |
-| `admin` | All except destructive user operations |
-| `manager` | Invoices, payments, reports, budgets |
-| `accountant` | Read-only financial data |
-| `viewer` | Read-only dashboard and reports |
+| `viewer` | `finance:read`, `crm:read`, `intelligence:read` |
+| `accountant` | All read + `finance:write`, `crm:write`, `intelligence:act` |
+| `manager` | Same as accountant |
+| `admin` | All permissions |
+| `owner` | All permissions |
 
-In the AI layer: VIEWERs receive summary-only advice; MANAGERs receive actionable recommendations (enforced by Agent H when implemented).
+`require_permission(*required)` in `dependencies.py` returns an async FastAPI dependency that raises `ForbiddenError (403)` if the authenticated user lacks any required permission. Ready-made aliases: `RequireFinanceRead`, `RequireFinanceWrite`, `RequireCrmRead`, `RequireCrmWrite`, `RequireIntelligenceRead`, `RequireIntelligenceAct`, `RequireUserManage`.
+
+### Login Lockout
+
+After `MAX_LOGIN_ATTEMPTS` (default 5) consecutive failures for the same email, `TooManyRequestsError (429)` is raised and subsequent attempts are blocked for `LOCKOUT_DURATION_MINUTES` (default 30). Counter stored in Redis `login_attempts:{email}`. Cleared on successful login.
+
+### User Lifecycle
+
+1. **First registration** → `role=OWNER, is_verified=true` — avoids chicken-and-egg admin creation.
+2. **Subsequent registrations** → `role=VIEWER, is_verified=false` — login returns `403 Forbidden` until an owner/admin calls `PATCH /users/{id}` to verify.
+3. **User management** — `GET /users` and `PATCH /users/{id}` require `user:manage` permission (ADMIN/OWNER only).
 
 ### Security Features
 
 | Feature | Implementation |
 |---|---|
-| CORS | Origin whitelist via `ALLOWED_ORIGINS` setting |
-| Rate limiting | slowapi per-IP on login endpoint |
-| Account lockout | 5 failed attempts → 30 min lockout (`MAX_LOGIN_ATTEMPTS`, `LOCKOUT_DURATION_MINUTES`) |
-| JWT blacklist | Revoked tokens stored in Redis DB 1; JTI claim checked on every authenticated request via `get_current_user` |
-| Token revocation check | `domains/identity/dependencies.py` — checks Redis key `blacklist:{jti}` before allowing access; tokens without a `jti` claim (legacy) bypass this check |
-| Password policy | Min 8 chars, configurable via `PASSWORD_MIN_LENGTH` |
-| Verifiable Credentials | Two types: Audit VCs (365-day JWT, long-lived audit trail) and Task-Scoped VCs (5-min JWT, bound to a specific `transaction_id`). Both stored in MongoDB `trust_log` with 90-day MongoDB TTL index. |
-| Internal CA (Ed25519) | `security/key_manager.py` — Ed25519 key loaded from `FINGUARD_CA_PRIVATE_KEY_HEX` env var (production) or derived deterministically from `SECRET_KEY` via SHA-256 (dev fallback). Used to sign/verify agent identity cards before state passes between agents. |
-| Metrics endpoint auth | `GET /metrics` guarded by static Bearer token (`METRICS_AUTH_SECRET`). If empty, auth is skipped (development mode). |
-| Text-to-SQL role | `finguard_readonly` PostgreSQL role (`infrastructure/db_security.sql`) — SELECT-only on all tables in `finguard` schema. Used by Agent D (`DATABASE_READONLY_URL` config). |
-| SQL injection prevention | `tools/sql_executor.py` — two-stage: regex pre-filter + sqlglot AST validation. Rejects multi-statement queries, DDL, DML, and any forbidden AST node before execution. |
-| AML flag | Agent F auto-injects `AML_REPORTING_REQUIRED` into compliance flags when any single transaction exceeds the KRA anti-money-laundering reporting threshold. |
+| CORS | Origin whitelist via `ALLOWED_ORIGINS` |
+| Rate limiting | slowapi per-IP on login/register (nginx also enforces `limit_req_zone`) |
+| Account lockout | Redis `login_attempts:{email}` counter; 429 after N attempts |
+| JWT blacklist | `blacklist:{jti}` Redis key; checked in `get_current_user` |
+| Refresh rotation | Consumed `jti` blacklisted on every `/token/refresh`; reuse returns 401 |
+| Password hashing | Direct `bcrypt.hashpw` / `bcrypt.checkpw` — passlib not used (bcrypt ≥5.0 incompatibility) |
+| Verifiable Credentials | Audit VCs (365-day JWT) and Task-Scoped VCs (5-min JWT) in MongoDB `trust_log` |
+| Internal CA (Ed25519) | `security/key_manager.py` — production: `FINGUARD_CA_PRIVATE_KEY_HEX`; dev: derived from `SECRET_KEY` |
+| Metrics endpoint auth | `GET /metrics` guarded by `METRICS_AUTH_SECRET` Bearer token |
+| Text-to-SQL role | `finguard_readonly` PostgreSQL role; `DATABASE_READONLY_URL` fail-closed in production |
+| SQL injection prevention | Two-stage: regex pre-filter + sqlglot AST validation; 100-row `LIMIT` cap |
+| SSRF prevention | `_assert_public_url()` in `http_caller.py`: DNS resolution + private/loopback/link-local IP block; `follow_redirects=False` |
+| IDOR prevention | `task_owner:{session_id}` Redis key; `conversation_status` returns 404 on owner mismatch |
+| Production fail-fast | `config.py` `model_validator`: enforces `DEBUG=False`, strong `SECRET_KEY`, `DATABASE_READONLY_URL` set, `METRICS_AUTH_SECRET` set, no wildcard `ALLOWED_ORIGINS` when `ENVIRONMENT=production` |
+| AML flag | Agent F auto-injects `AML_REPORTING_REQUIRED` when any transaction exceeds KRA AML threshold |
 
 ---
 
@@ -1093,6 +1070,8 @@ SECRET_KEY=<64+ char random secret>
 
 # PostgreSQL
 DATABASE_URL=postgresql+asyncpg://finguard:finguard@postgres:5432/finguard
+DATABASE_READONLY_URL=          # postgresql+asyncpg://finguard_readonly:<pw>@postgres:5432/finguard
+                                 # required in production; fail-closed if missing
 
 # MongoDB
 MONGODB_URL=mongodb://finguard:finguard@mongodb:27017
@@ -1121,18 +1100,15 @@ PASSWORD_MIN_LENGTH=8
 GEMINI_API_KEY=<your-key>
 GEMINI_MODEL=gemini-2.5-flash
 
-# Internal CA (Ed25519 — agent identity signing)
-FINGUARD_CA_PRIVATE_KEY_HEX=         # 32 raw bytes hex-encoded (64 chars). If empty, derived from SECRET_KEY (dev only).
-
-# PostgreSQL read-only role (Agent D / Text-to-SQL)
-DATABASE_READONLY_URL=               # postgresql+asyncpg://finguard_readonly:<pw>@postgres:5432/finguard (provision with infrastructure/db_security.sql)
+# Internal CA (Ed25519)
+FINGUARD_CA_PRIVATE_KEY_HEX=    # 32 bytes hex (64 chars). If empty, derived from SECRET_KEY (dev only).
 
 # Observability
-METRICS_AUTH_SECRET=                 # Static Bearer token for GET /metrics. If empty, auth is skipped (dev only).
+METRICS_AUTH_SECRET=             # Bearer token for GET /metrics. Required in production.
 
 # Background workers
-ENABLE_EXPENSE_EVENT_CONSUMER=false   # true to start RabbitMQ consumer on boot
-ENABLE_OUTBOX_PROJECTOR=false         # true to start outbox projector on boot
+ENABLE_EXPENSE_EVENT_CONSUMER=false
+ENABLE_OUTBOX_PROJECTOR=false
 OUTBOX_POLL_INTERVAL=5.0
 OUTBOX_BATCH_SIZE=50
 OUTBOX_MAX_RETRIES=5
@@ -1168,208 +1144,221 @@ RABBITMQ_PASSWORD=finguard
 ## 14. Design Patterns
 
 ### 1. Supervisor / ReAct Loop (LangGraph)
-
-**Pattern**: Supervisor node decides next agent using Gemini structured output. Every agent node unconditionally returns to supervisor after executing. Supervisor terminates by routing to `FINISH`.
-
+Every agent unconditionally returns to supervisor after executing. Supervisor terminates by routing to `FINISH`.
 **Files**: `orchestrator.py`, `agents/supervisor.py`
 
 ### 2. Gemini Native Structured Output
-
-**Pattern**: `generate_structured_content(prompt, ResponseSchema)` sends a `response_schema` in the Gemini API request. Gemini guarantees JSON conformance — no prompt engineering or fallback parsing needed.
-
+`generate_structured_content(prompt, ResponseSchema)` uses `response_schema` in the Gemini API request — no fallback parsing needed.
 **File**: `llm_client.py`
 
 ### 3. Hub-First Read-Through Cache
-
-**Pattern**: Every agent writes an `InsightArtifact` to MongoDB `intelligence_hub` with a per-agent TTL. Downstream consumers read the hub first; if the artifact is fresh they serve the cached insight without re-invoking the agent.
-
+Every agent writes an `InsightArtifact` to MongoDB `intelligence_hub` with a per-agent TTL. Downstream consumers read the hub first.
 **File**: `agents/hub_writer.py`
 
 ### 4. Transactional Outbox Pattern
-
-**Pattern**: Every PostgreSQL write that must be reflected in MongoDB also inserts a row into `outbox_events`. An async background worker (`run_projector`) polls `outbox_events` using `SELECT ... FOR UPDATE SKIP LOCKED`, projects each event to MongoDB, and marks rows `PROCESSED` or `DEAD_LETTER` after max retries.
-
-**File**: `workers/outbox/projector.py`
+Every PostgreSQL write that must trigger messaging also inserts a row into `outbox_events` **in the same transaction**. The outbox projector polls `PENDING` rows under `SELECT … FOR UPDATE SKIP LOCKED`, projects to MongoDB, marks `PROCESSED` or `DEAD_LETTER`. `rabbitmq_publisher.publish()` raises `BrokerUnavailableError` when the broker is unavailable, causing the surrounding `session.begin()` to roll back — events are never silently dropped.
+**Files**: `workers/outbox/projector.py`, `infrastructure/message_bus/rabbitmq_publisher.py`
 
 ### 5. RabbitMQ Event-Driven Watchdog
-
-**Pattern**: When an expense is created via the Finance API, an `expenses.created` event is published to RabbitMQ. The watchdog consumer receives it and immediately invokes Agent E — decoupling the expense write path from the anomaly detection workload.
-
-**Files**: `domains/finance/router.py` (publisher), `workers/consumers/watchdog_consumer.py` (consumer)
+Expense creation publishes `expenses.created` to RabbitMQ; watchdog consumer invokes Agent E asynchronously.
+**Files**: `domains/finance/service.py`, `workers/consumers/watchdog_consumer.py`
 
 ### 6. Idempotent Event Processing
-
-**Pattern**: Watchdog consumer checks a Redis key `watchdog_consumer:{expense_id}` before processing. If the key exists, the message was already handled (duplicate delivery) and is acked without re-invoking Agent E.
-
+Watchdog consumer checks Redis `watchdog_consumer:{expense_id}` before processing to handle RabbitMQ re-delivery.
 **File**: `workers/consumers/watchdog_consumer.py`
 
 ### 7. pgvector RAG (Tax Knowledge Base)
-
-**Pattern**: KRA tax regulation document chunks are stored in `knowledge_base` with pre-computed 768-dim Gemini `text-embedding-004` vectors. Agent F embeds the audit query, runs an L2-distance search via pgvector, and retrieves the top-3 most relevant KRA excerpts to include in the compliance audit prompt.
-
+KRA regulation chunks stored with 768-dim Gemini embeddings. Agent F retrieves top-3 excerpts via L2-distance search.
 **File**: `domains/intelligence/services/tax_rag_service.py`
 
 ### 8. Verifiable Credentials Audit Trail
-
-**Pattern**: Before Agent E writes a budget alert, a JWT-signed Verifiable Credential is issued containing the agent identity, operation, payload hash (SHA-256), and timestamp. The VC is stored in MongoDB `trust_log` and its ID is included in the agent output for SOC-2 compliance traceability.
-
+Before Agent E writes a budget alert, a JWT-signed VC is issued (agent identity + payload hash + timestamp) and stored in MongoDB `trust_log`.
 **Files**: `domains/intelligence/security/vc_issuer.py`, `agents/e_watchdog.py`
 
 ### 9. Deterministic Compute + LLM Narrative
-
-**Pattern**: Agents G and F pre-compute all numeric values deterministically (bankability score, tax liability, risk tier) and only use Gemini to write the human-readable narrative. This prevents LLM hallucination of financial figures while still producing natural language output.
-
+Agents G and F pre-compute all financial figures deterministically; Gemini only writes the human-readable narrative. Prevents hallucination of financial numbers.
 **Files**: `agents/g_reporter.py`, `agents/f_auditor.py`
 
 ### 10. Schema-Masked SQL (Agent D)
-
-**Pattern**: `get_masked_schema(agent_id)` in `sql_executor.py` returns DDL only for the tables that agent is permitted to query. Agent D sees `ledger_entries`, `invoices`, `budgets`, and `expenses` — never `users`, `knowledge_base`, or `outbox_events`. This is injected directly into the Gemini prompt so the model cannot hallucinate references to sensitive tables.
-
+`get_masked_schema(agent_id)` returns DDL only for permitted tables. Agent D never sees `users`, `knowledge_base`, or `outbox_events`.
 **File**: `domains/intelligence/tools/sql_executor.py`
 
 ### 11. Async-to-Sync Celery Bridge
-
-**Pattern**: Celery workers are synchronous processes; all LangGraph agents are async. Each Celery task bridges with `asyncio.run(_async_runner(...))`, which spins up a fresh event loop, runs the async work to completion, and tears it down. SQLAlchemy's asyncpg engine binds connections to the running event loop — the `AsyncSessionLocal` singleton is fresh per worker process and safe in this pattern.
-
+Each Celery task bridges into async via `asyncio.run(_async_runner(...))` — fresh event loop per task call, compatible with asyncpg.
 **Files**: `workers/tasks/reporting_tasks.py`, `workers/tasks/batch.py`, `workers/tasks/ocr.py`
 
 ### 12. Redis Logical DB Isolation
+Redis `/0`, `/1`, `/2` partition Celery results, JWT blacklist/lockout, and rate-limiting so a flush of one never affects another.
 
-**Pattern**: Redis is partitioned across three logical databases (`/0`, `/1`, `/2`) for separate concerns — Celery results, JWT blacklist, and rate limiting — so a flush of one concern never affects another.
-
-### 13. sqlglot AST SQL Validation (Agent D)
-
-**Pattern**: Every SQL query drafted by Agent D's Text-to-SQL engine passes through a two-stage gate: (1) regex pre-filter rejecting non-SELECT prefixes, (2) `sqlglot.parse` + AST walk confirming the root node is a `Select` and no forbidden node types (DDL, DML, `Command`) appear anywhere in the tree. The AST check is bypass-proof — it validates structure, not text — and enforces a 100-row `LIMIT` cap before handing the query to `asyncpg`.
-
+### 13. sqlglot AST SQL Validation
+Two-stage gate on Agent D queries: regex pre-filter + `sqlglot.parse` AST walk. Rejects DDL, DML, multi-statement, and forbidden node types regardless of text encoding.
 **File**: `domains/intelligence/tools/sql_executor.py`
 
 ### 14. Dual-Path Conversation Cache with Background Task Polling
-
-**Pattern**: The `/conversation` endpoint first checks MongoDB `intelligence_hub` for a fresh `InsightArtifact`. On a cache hit it returns immediately. On a miss it claims a Redis idempotency slot, dispatches a background `asyncio` task (`_graph_background_task`), and returns HTTP 202 with a `session_id`. The client polls `GET /conversation/{session_id}/status` (backed by Redis key `task_status:{session_id}`) until status is `completed`, then re-calls `/conversation` to get the now-cached result.
-
+`/conversation` returns cached artifact on MongoDB hit. On miss: claims Redis idempotency slot, stores `task_owner:{session_id}`, dispatches background asyncio task, returns 202. Client polls `/conversation/{id}/status` (owner-verified) until `completed`.
 **File**: `domains/intelligence/router.py`
 
 ### 15. LLM Retry with Exponential Back-off (tenacity)
-
-**Pattern**: Both `generate_structured_content` and `generate_content_stream` in `llm_client.py` are wrapped with `@retry` (tenacity). HTTP 429 and 5xx responses trigger exponential back-off (2 s → 10 s, up to 3 retries). On budget exhaustion a `LLMUnavailableError` is raised; agents catch this and append to `state["error_messages"]` rather than crashing the graph.
-
+`generate_structured_content` and `generate_content_stream` retry on 429/5xx (up to 3 retries, 2–10s back-off). Budget exhaustion raises `LLMUnavailableError`; agents append to `state["error_messages"]`.
 **File**: `domains/intelligence/llm_client.py`
 
 ### 16. Redis Embedding Cache (Tax RAG)
-
-**Pattern**: Before calling Gemini `text-embedding-004`, `tax_rag_service.py` checks Redis for the key `rag:embed:{sha256(query)}`. On a hit it deserialises the cached float array directly, skipping the API call. On a miss it calls Gemini, stores the result (24 h TTL), and proceeds. This avoids redundant embedding calls for identical audit queries across requests.
-
+Before calling Gemini `text-embedding-004`, `tax_rag_service.py` checks Redis `rag:embed:{sha256(query)}` (24h TTL).
 **File**: `domains/intelligence/services/tax_rag_service.py`
 
 ### 17. CompositeGenUIPayload — Findings + Visualisation Split
-
-**Pattern**: Each chart-producing agent (D, E, F, G) builds a `CompositeGenUIPayload` with two sections: `props` (deterministic chart data) and `findings: list[KeyFinding]` (LLM-generated metric badges). `to_gen_ui_payload()` merges findings into `props["findings"]` before the payload reaches `OrchestratorState`, so no schema changes are required downstream. The React layer detects a non-empty `findings` array and renders a `CompositeInsightBlock` (two-column: badges left, chart right) instead of the single-component `GenUiBlock`.
-
-**Files**: `domains/intelligence/schemas.py` (`CompositeGenUIPayload`, `KeyFinding`); `agents/d_forecaster.py`, `e_watchdog.py`, `f_auditor.py`, `g_reporter.py`; `frontend/src/components/dashboard/intelligence/CompositeInsightBlock.tsx`
+Agents D/E/F/G build `CompositeGenUIPayload` with deterministic `props` and LLM-generated `findings`. `to_gen_ui_payload()` merges findings into `props["findings"]`. React detects non-empty `findings` and routes to `CompositeInsightBlock` (two-column layout) instead of `GenUiBlock`.
+**Files**: `domains/intelligence/schemas.py`, agents D/E/F/G, `frontend/src/components/dashboard/intelligence/CompositeInsightBlock.tsx`
 
 ### 18. React Error Boundary for GenUI Components
-
-**Pattern**: `GenUiBoundary` (a React class component) wraps every chart component rendered inside `CompositeInsightBlock`. If a chart crashes during render (malformed props, Recharts edge case, missing data), `getDerivedStateFromError` sets `hasError=true` and the boundary renders the payload's `fallback_text` plus all `findings` badges as plain text — the chat window never goes blank. The error is logged to the console with the `component_id` and React component stack for debugging.
-
+`GenUiBoundary` (React class) wraps every chart. On render crash it shows `fallback_text` + findings as plain text — chat window never blanks.
 **File**: `frontend/src/components/dashboard/intelligence/GenUiBoundary.tsx`
 
 ### 19. Composite Loading Skeleton
-
-**Pattern**: While the polling `useQuery` is waiting for `status: "completed"`, `AgentBubble` renders `CompositeInsightSkeleton` in place of the text card. The skeleton mirrors the two-panel composite layout (4 badge placeholders left, a chart card with header + body + text rows right) using Tailwind `animate-pulse`. This gives users a layout-accurate loading affordance rather than generic pulse bars. It is controlled by the `isPending` prop derived from `pendingMsgIdRef.current === message.id && stage === "polling"`.
-
+`CompositeInsightSkeleton` mirrors the two-panel composite layout (badges left, chart right) using Tailwind `animate-pulse`. Shown while polling `useQuery`.
 **File**: `frontend/src/components/dashboard/intelligence/CompositeInsightSkeleton.tsx`
+
+### 20. SSRF Prevention (Agent I / External HTTP)
+`_assert_public_url()` in `http_caller.py` DNS-resolves the target hostname and blocks any resolved IP that is private, loopback, link-local, or multicast. `follow_redirects=False` prevents redirect-based bypass.
+**File**: `domains/intelligence/tools/http_caller.py`
+
+### 21. IDOR Guard on Conversation Status
+`POST /conversation` writes `task_owner:{session_id} = user.id`. `GET /conversation/{session_id}/status` reads the owner and returns 404 if it does not match `current_user.id` — prevents users from polling each other's sessions.
+**File**: `domains/intelligence/router.py`
+
+### 22. Production Fail-Fast Config Validation
+`config.py` runs a `model_validator(mode="after")` when `ENVIRONMENT=production`. It raises a `ValueError` at startup (not at runtime) if `DEBUG=True`, `SECRET_KEY` is weak, `DATABASE_READONLY_URL` is unset, `METRICS_AUTH_SECRET` is unset, or `ALLOWED_ORIGINS` contains a wildcard.
+**File**: `src/core/config.py`
+
+### 23. Permission-Based RBAC (Default-Deny)
+`domains/identity/permissions.py` defines a `Permission` enum and a role→permission matrix. `require_permission(*required)` is a FastAPI dependency factory that raises 403 if any required permission is absent. All routers use the ready-made aliases (`RequireFinanceRead`, etc.) — no route is unauthenticated by accident.
+**Files**: `domains/identity/permissions.py`, `domains/identity/dependencies.py`
+
+### 24. First-User Bootstrap as OWNER
+`identity/service.py::register()` checks `await self._repo.count() == 0`. If true, the first account is created as `role=OWNER, is_verified=True`. All subsequent self-registrations are `VIEWER + unverified`, preventing anonymous privilege escalation.
+**File**: `domains/identity/service.py`
 
 ---
 
 ## 15. Celery Tasks
 
-All tasks use `asyncio.run()` to bridge the sync Celery worker into the async application layer. See Design Pattern #11 for the rationale.
+All tasks use `asyncio.run()` to bridge into the async layer (see Design Pattern #11).
 
-### Beat Schedule (Periodic Tasks)
-
-Defined in `workers/tasks/celery_app.py`. Requires `celery-beat` service (`--profile workers`).
+### Beat Schedule
 
 | Task | Schedule | Purpose |
 |---|---|---|
-| `reporting_tasks.generate_monthly_intelligence_report` | Monthly, 1st at 00:00 | Runs Agent F + G for each active customer; writes `InsightArtifact` to MongoDB `intelligence_hub` |
-| `dlq.drain_watchdog_dlq` | Weekly, Sunday at 02:00 | Drains RabbitMQ Dead Letter Queue: republishes messages (requeue=true), discards poison messages after 3 total deaths |
-| `batch.enforce_data_retention` | Weekly, Sunday at 02:00 | Deletes `ledger_entries` rows older than 7 years in bounded batches (GDPR / Kenya DPA compliance) |
+| `reporting_tasks.generate_monthly_intelligence_report` | Monthly, 1st at 00:00 | Runs Agent F + G per active customer; writes to `intelligence_hub` |
+| `dlq.drain_watchdog_dlq` | Weekly, Sunday at 02:00 | Drains RabbitMQ DLQ; discards poison messages after 3 total deaths |
+| `batch.enforce_data_retention` | Weekly, Sunday at 02:00 | Deletes `ledger_entries` older than 7 years (GDPR / Kenya DPA) |
 
 ### OCR Queue (`ocr_processing`)
 
-| Task | Function | Purpose |
-|---|---|---|
-| `ocr.process_document_ocr` | `process_document_ocr(document_id, storage_path)` | Gemini multimodal extraction from an invoice document file; returns `ExtractedInvoice` |
-| `ocr.process_receipt_ocr` | `process_receipt_ocr(receipt_id, image_bytes_b64)` | Gemini multimodal extraction from a receipt image; returns `ReceiptExtraction` |
-| `ocr.process_invoice_image` | `process_invoice_image(invoice_id, storage_path)` | Gemini multimodal extraction from an invoice image; returns `ExtractedInvoice` |
+| Task | Purpose |
+|---|---|
+| `ocr.process_document_ocr` | Gemini multimodal extraction from invoice document |
+| `ocr.process_receipt_ocr` | Gemini multimodal extraction from receipt image |
+| `ocr.process_invoice_image` | Gemini multimodal extraction from invoice image |
 
 ### Batch Queue (`batch_processing`)
 
-| Task | Function | Purpose |
-|---|---|---|
-| `batch.classify_unclassified_ledger_entries` | no args | Sweeps `ledger_entries WHERE category IS NULL` in batches of 50; classifies with Gemini using `prompts/b_classifier.py`; persists categories; publishes `finance.transactions.classified` event |
-| `batch.run_batch_reconciliation` | no args | Queries unreconciled M-Pesa transactions + open invoices; pass-1 exact match; pass-2 Gemini confirmation via `prompts/c_reconciler.py`; publishes `finance.reconciliation.completed` event |
-| `batch.enforce_data_retention` | no args | Deletes `ledger_entries` older than 7 years in bounded batches; logs row count; runs weekly via Celery Beat (GDPR / Kenya DPA compliance) |
-| `reporting_tasks.generate_monthly_intelligence_report` | `sme_id: str` | Runs Agent F (tax audit) then Agent G (credit strategy) sequentially; writes both `InsightArtifact` documents to MongoDB `intelligence_hub`; returns `{sme_id, agent_f_artifact_id, agent_g_artifact_id, status}`. Retries 3× with 60s delay. |
-
-All batch tasks use `SELECT … FOR UPDATE SKIP LOCKED` for concurrent-worker safety.
-
-### DLQ Queue (`batch_processing`)
-
-| Task | Function | Purpose |
-|---|---|---|
-| `dlq.drain_watchdog_dlq` | `drain_watchdog_dlq(batch_size=20)` | Non-blocking drain of `finguard.dlq` RabbitMQ queue. Republishes messages with `requeue=True`; discards any message whose cumulative `x-death` count (across all queues) exceeds 3 — preventing poison messages from looping indefinitely. Scheduled weekly via Celery Beat. |
+| Task | Purpose |
+|---|---|
+| `batch.classify_unclassified_ledger_entries` | Sweeps `ledger_entries WHERE category IS NULL`; batches of 50; `FOR UPDATE SKIP LOCKED` |
+| `batch.run_batch_reconciliation` | Pass-1 exact match + pass-2 Gemini confirmation; 100 tx/batch |
+| `batch.enforce_data_retention` | Bounded-batch deletion of 7-year-old ledger rows |
+| `reporting_tasks.generate_monthly_intelligence_report` | Agent F + G sequential run; 3× retry with 60s delay |
+| `dlq.drain_watchdog_dlq` | Non-blocking DLQ drain; republishes or discards after 3 deaths |
 
 ---
 
-## 16. Quick Start
+## 16. CI/CD Pipelines
 
-### 1. Clone and configure
+### `ci.yml` — Continuous Integration
+
+Runs on every push and pull request.
+
+| Job | What it does |
+|---|---|
+| `test` | Spins up `pgvector/pgvector:pg16`, MongoDB, RabbitMQ services; creates `finguard_test` DB; runs `pytest` (116 tests); uploads coverage |
+| `lint` | `ruff check`, `ruff format --check`, `mypy` |
+| `migration-check` | Runs `alembic upgrade head` against the test DB to ensure migrations are not broken |
+| `security-scan` | **gitleaks** (blocking — fails the build on secrets); **pip-audit** (report only); **bandit** (report only); **npm audit** (report only) |
+
+### `deploy.yml` — Deployment
+
+Runs on push to `main` (gated by `DEPLOY_ENABLED=true` repository variable).
+
+| Job | What it does |
+|---|---|
+| `build` | Builds Docker image; tags as `:latest` and `:{git_sha}` |
+| `scan` | **Trivy** image scan — fails on fixable CRITICAL vulnerabilities |
+| `deploy` | Runs `alembic upgrade head` → deploys container → smoke-tests `GET /health/ready` (must return 200) |
+
+---
+
+## 17. Quick Start
+
+### Option A — Makefile (recommended)
 
 ```bash
 git clone <repo>
 cd Finguard-3.0
 cp infrastructure/.env.example infrastructure/.env
-# Fill in required secrets: SECRET_KEY, GEMINI_API_KEY
+# Fill in: SECRET_KEY, GEMINI_API_KEY
+
+make install        # Install backend (uv) + frontend (npm) dependencies
+make up             # docker compose up --build (core services)
+make backend-migrate  # alembic upgrade head
+
+# Dev loop
+make test           # backend pytest + frontend tsc
+make lint           # ruff + eslint
+make typecheck      # mypy + tsc --noEmit
+
+make down           # stop all containers
+make logs           # tail all container logs
 ```
 
-### 2. Start core services
+### Option B — Docker Compose directly
 
 ```bash
 cd infrastructure
 
-# Core only (PostgreSQL, MongoDB, Redis, RabbitMQ, FastAPI, Next.js, Nginx)
+# Core only (Postgres, MongoDB, Redis, RabbitMQ, FastAPI, Next.js, Nginx)
 docker compose up --build
 
-# With background workers (Celery worker, Beat, Flower)
+# + background workers (Celery worker, Beat, Flower)
 docker compose --profile workers up --build
 
-# With observability stack (Prometheus, Grafana, Redis Exporter)
+# + observability (Prometheus, Grafana, Redis Exporter)
 docker compose --profile monitoring up --build
 
 # Full stack
 docker compose --profile workers --profile monitoring up --build
 ```
 
-### 3. Initialize database
+Initialize the database:
 
 ```bash
 docker compose exec backend uv run alembic upgrade head
 ```
 
-### 4. Access services
+### Service URLs
 
 | Service | URL | Credentials |
 |---|---|---|
-| Frontend | http://localhost:3000 | Register a new account |
+| Frontend | http://localhost:3000 | Register first account → becomes OWNER |
 | Backend API | http://localhost:8000 | — |
-| API Docs | http://localhost:8000/docs | (only when DEBUG=true) |
+| API Docs | http://localhost:8000/docs | (DEBUG=true only) |
+| Health (liveness) | http://localhost:8000/health/live | — |
+| Health (readiness) | http://localhost:8000/health/ready | — |
 | RabbitMQ Management | http://localhost:15672 | finguard / finguard |
 | Flower (Celery) | http://localhost:5555 | — |
 | Prometheus | http://localhost:9090 | — |
 | Grafana | http://localhost:3001 | admin / $GRAFANA_PASSWORD |
 
-### 5. Enable background workers
+### Enable Background Workers
 
 ```env
 ENABLE_EXPENSE_EVENT_CONSUMER=true   # Starts RabbitMQ → Agent E consumer
@@ -1383,16 +1372,16 @@ ENABLE_OUTBOX_PROJECTOR=true         # Starts PostgreSQL outbox → MongoDB proj
 | Agent | Name | Status | Core Algorithm | Context Key Written | GenUI component_id | Hub TTL |
 |---|---|---|---|---|---|---|
 | A | Invoice Generator | ✅ Complete | Gemini structured extraction | `extracted_invoice` | — | 1h |
-| B | Transaction Classifier | ✅ Complete | Gemini zero-shot + batch Celery pipeline | `classified_transactions` | — | 1h |
+| B | Transaction Classifier | ✅ Complete | Gemini zero-shot + batch Celery | `classified_transactions` | — | 1h |
 | C | Reconciler | ✅ Complete | Exact match + Gemini semantic scoring; atomic transaction | `reconciliation_report` | — | 10m |
 | D | Cash-Flow Forecaster | ✅ Complete | Holt-Winters + regime detection + CoVe schema-masked SQL | `forecast` | `CashFlowChart` | 1h |
 | E | Budget Watchdog | ✅ Complete | HMM + IsolationForest + rapidfuzz + AML flag | `watchdog_result` | `BudgetWatchdogMeter` | 30m |
 | F | Tax Auditor | ✅ Complete | Deterministic Kenya tax + pgvector RAG + AML flag | `tax_audit_result` | `TaxLiabilityDonut` | 1d |
 | G | Credit Strategist | ✅ Complete | Holt-Winters + bankability score + Gemini NLG | `credit_strategy_result` | `BankabilityScoreRadar` | 1d |
 | H | Financial Advisor | ✅ Complete | Gemini multi-step reasoning + RBAC clip | `advice` | — | 1h |
-| I | External Integrator | ✅ Complete | httpx M-Pesa / CBK FX / Metropol / KRA + mock fallbacks | `external_data` | — | 1h |
+| I | External Integrator | ✅ Complete | httpx M-Pesa / CBK FX / Metropol / KRA + SSRF guard + mock fallbacks | `external_data` | — | 1h |
 | J | Executive Summarizer | ✅ Complete | Gemini context distillation ≤5 bullets + locale-aware | `executive_summary` | — | 30m |
 
 ---
 
-*Last updated: 2026-06-12*
+*Last updated: 2026-06-13*

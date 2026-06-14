@@ -115,6 +115,44 @@ interface IntentResponse {
   hub_artifact_id: string | null;
 }
 
+// ── Receipt Scanner — multimodal OCR ──────────────────────────────────────────
+
+/** Structured receipt OCR output (mirrors backend ReceiptExtraction). */
+export interface ReceiptExtraction {
+  merchant_name: string | null;
+  date: string | null;
+  total_amount: number | null;
+  currency: string;
+  kra_pin: string | null;
+  line_items: string[];
+  confidence: number;
+}
+
+/** Response of POST /intelligence/receipts/scan (mirrors ReceiptScanResponse). */
+export interface ReceiptScanResult {
+  session_id: string;
+  extraction: ReceiptExtraction;
+  suggested_category: string;
+  error: string | null;
+}
+
+/**
+ * Upload a receipt image and run Gemini vision OCR + categorisation.
+ * Returns the extracted fields and a suggested expense category for the user
+ * to review before persisting via createReceiptExpense().
+ */
+export async function scanReceipt(file: File): Promise<ReceiptScanResult> {
+  const form = new FormData();
+  form.append("file", file);
+  // Let the browser set the multipart boundary; overriding Content-Type breaks it.
+  const { data } = await httpClient.post<ReceiptScanResult>(
+    ENDPOINTS.INTELLIGENCE.RECEIPT_SCAN,
+    form,
+    { headers: { "Content-Type": "multipart/form-data" } }
+  );
+  return data;
+}
+
 /**
  * Run Agent A over a free-text description and return the structured invoice
  * extraction (or null when the model could not extract one). The caller maps

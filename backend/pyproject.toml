@@ -81,6 +81,13 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM"]
 
+[tool.ruff.lint.per-file-ignores]
+# Test files routinely contain long mock-target paths
+# (patch("a.b.c.d.e.f", new_callable=AsyncMock, ...)) and inline fixture data
+# where wrapping to 100 cols hurts readability more than it helps. E501 stays
+# strictly enforced in src/ where line length aids production readability.
+"tests/**/*.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
@@ -93,6 +100,16 @@ allow_untyped_calls = true
 allow_untyped_defs = false
 allow_incomplete_defs = false
 warn_return_any = false
+
+# Third-party libraries that ship no type stubs / py.typed marker. Treat their
+# imports as untyped rather than erroring — we don't control their packaging.
+[[tool.mypy.overrides]]
+module = [
+    "statsmodels.*",
+    "reportlab.*",
+    "pandas.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

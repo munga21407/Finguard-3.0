@@ -6,14 +6,32 @@
 import httpClient from "@/lib/api/http-client";
 import { ENDPOINTS } from "@/lib/api/endpoints";
 import type {
+  ApiBudget,
   ApiCustomer,
   ApiCustomerCreate,
+  ApiExpense,
   ApiInvoice,
   ApiInvoiceCreate,
+  ApiReceiptExpenseCreate,
 } from "@/types/api";
 
 export async function listCustomers(): Promise<ApiCustomer[]> {
   const { data } = await httpClient.get<ApiCustomer[]>(ENDPOINTS.CRM.CUSTOMERS);
+  return data;
+}
+
+export async function listInvoices(): Promise<ApiInvoice[]> {
+  const { data } = await httpClient.get<ApiInvoice[]>(ENDPOINTS.FINANCE.INVOICES);
+  return data;
+}
+
+export async function listExpenses(): Promise<ApiExpense[]> {
+  const { data } = await httpClient.get<ApiExpense[]>(ENDPOINTS.FINANCE.EXPENSES);
+  return data;
+}
+
+export async function listBudgets(): Promise<ApiBudget[]> {
+  const { data } = await httpClient.get<ApiBudget[]>(ENDPOINTS.FINANCE.BUDGETS);
   return data;
 }
 
@@ -37,34 +55,17 @@ export async function createInvoice(
   return data;
 }
 
-function slugify(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "client"
-  );
-}
-
 /**
- * Resolve a customer id from a client/merchant name: find an existing customer
- * by (case-insensitive) name, otherwise create one.
- *
- * NOTE: this is a pragmatic stand-in. A proper customer picker (search +
- * select, or an explicit email field) should replace the auto-derived email —
- * tracked as a Sprint 5 follow-up.
+ * Persist a reviewed receipt scan as an expense.  The OCR + categorisation
+ * happens in the intelligence domain (scanReceipt); this writes the
+ * user-verified fields via POST /finance/receipts.
  */
-export async function resolveCustomerId(name: string): Promise<string> {
-  const trimmed = name.trim();
-  const existing = await listCustomers();
-  const match = existing.find(
-    (c) => c.name.trim().toLowerCase() === trimmed.toLowerCase()
+export async function createReceiptExpense(
+  body: ApiReceiptExpenseCreate
+): Promise<ApiExpense> {
+  const { data } = await httpClient.post<ApiExpense>(
+    ENDPOINTS.FINANCE.RECEIPTS,
+    body
   );
-  if (match) return match.id;
-
-  const created = await createCustomer({
-    name: trimmed,
-    email: `${slugify(trimmed)}@example.com`,
-  });
-  return created.id;
+  return data;
 }

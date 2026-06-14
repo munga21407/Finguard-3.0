@@ -28,12 +28,11 @@ from typing import Any
 
 import numpy as np
 import structlog
+from google.genai import types
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from google.genai import types
 
 from src.core.config import settings
 from src.domains.intelligence.llm_client import get_gemini_client
