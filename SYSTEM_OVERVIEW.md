@@ -96,8 +96,10 @@ Finguard-3.0/
 │       │   │   ├── schemas.py         # ReceiptExpenseCreate + finance request/response models
 │       │   │   └── types.py           # VaultType (MPESA | CASH) dual-vault enum
 │       │   └── intelligence/          # AI/ML domain
-│       │       ├── llm_client.py      # Gemini singleton + generate_structured_content
-│       │       ├── orchestrator.py    # LangGraph StateGraph builder
+│       │       ├── llm_client.py      # Gemini singleton + generate_structured_content;
+│       │       │                      # agent_context + observe_llm_call (per-agent token/cost metrics)
+│       │       ├── observability.py   # @traced_tool — per-tool latency/outcome metrics
+│       │       ├── orchestrator.py    # LangGraph StateGraph builder; _tracked node wrapper
 │       │       ├── router.py          # /api/v1/intelligence endpoints (RBAC + IDOR owner check)
 │       │       ├── service.py         # Gemini streaming chat service
 │       │       ├── schemas.py         # OrchestratorState, all agent output models
