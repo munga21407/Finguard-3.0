@@ -50,11 +50,9 @@ Finguard-3.0/
 │   ├── alembic/                       # SQLAlchemy migration tooling
 │   │   ├── env.py
 │   │   └── versions/
-│   │       ├── 0001_..._initial.py
-│   │       ├── 0002_..._
-│   │       ├── ...
-│   │       ├── 0007_sprint1_mpesa_raw_payload.py   # Adds raw_payload JSONB to mpesa_transactions
-│   │       └── 0008_sprint2_verify_existing_users.py # Backfills is_verified=true for active users
+│   │       └── 0001_initial_schema.py # Single squashed baseline: full schema +
+│   │                                  # CHECK (balance_due = total - amount_paid),
+│   │                                  # vault columns, receipt-scan provenance, is_verified
 │   ├── scripts/
 │   │   ├── ingest_kra_docs.py         # Seeds knowledge_base with KRA docs via pgvector
 │   │   └── kra_docs/                  # Source KRA regulation documents
@@ -87,13 +85,14 @@ Finguard-3.0/
 │       │   │   └── schemas.py
 │       │   ├── finance/               # Finance domain
 │       │   │   ├── models.py          # LedgerEntry, Invoice, Budget, MpesaTransaction,
-│       │   │   │                      # Expense, Payment, OutboxEvent ORM
-│       │   │   ├── router.py          # /api/v1/finance endpoints (RBAC: RequireFinanceRead/Write)
+│       │   │   │                      # Expense, Payment, BankStatementLine, OutboxEvent ORM
+│       │   │   ├── router.py          # /api/v1/finance endpoints (RBAC: RequireFinanceRead/Write);
+│       │   │   │                      # includes POST /receipts (persist reviewed receipt scan)
 │       │   │   ├── service.py         # Outbox-first event publishing; M-Pesa strict validation;
 │       │   │   │                      # balance_due settlement; row-lock cash payments
 │       │   │   ├── repository.py
-│       │   │   ├── schemas.py
-│       │   │   └── types.py
+│       │   │   ├── schemas.py         # ReceiptExpenseCreate + finance request/response models
+│       │   │   └── types.py           # VaultType (MPESA | CASH) dual-vault enum
 │       │   └── intelligence/          # AI/ML domain
 │       │       ├── llm_client.py      # Gemini singleton + generate_structured_content
 │       │       ├── orchestrator.py    # LangGraph StateGraph builder
@@ -114,7 +113,8 @@ Finguard-3.0/
 │       │       │   ├── g_reporter.py  # Credit strategist ✅
 │       │       │   ├── h_advisor.py   # Financial advisor ✅
 │       │       │   ├── i_integrator.py# External API integrator ✅
-│       │       │   └── j_summarizer.py# Executive summarizer ✅
+│       │       │   ├── j_summarizer.py# Executive summarizer ✅
+│       │       │   └── receipt_scanner.py # receipt_ocr + receipt_classifier nodes (Gemini vision) ✅
 │       │       ├── prompts/
 │       │       │   ├── a_generator.py
 │       │       │   ├── b_classifier.py
@@ -207,6 +207,8 @@ Finguard-3.0/
 │       │   │   │   └── BankabilityScoreRadar.tsx
 │       │   │   ├── invoices/
 │       │   │   │   └── InvoiceGenerator.tsx   # Wired to real backend (Agent A extraction + CRM + finance API)
+│       │   │   ├── transactions/
+│       │   │   │   └── ReceiptScanner.tsx     # Upload receipt → scanReceipt() OCR → review → createReceiptExpense()
 │       │   │   ├── alerts/
 │       │   │   ├── payables/
 │       │   │   └── receivables/
@@ -218,9 +220,11 @@ Finguard-3.0/
 │       │   │   ├── http-client.ts     # Axios; Bearer injection; 401 silent refresh;
 │       │   │   │                      # idempotency key scoped to /ai-insights + /ai-actions only
 │       │   │   ├── endpoints.ts       # Typed URL constants
-│       │   │   ├── finance.ts         # listCustomers, createCustomer, createInvoice, resolveCustomerId
-│       │   │   ├── intelligence.ts    # dispatchConversation, checkConversationStatus, extractInvoice;
-│       │   │   │                      # KeyFinding, GenUIPayload, ExtractedInvoice interfaces
+│       │   │   ├── finance.ts         # listCustomers, createCustomer, createInvoice, resolveCustomerId,
+│       │   │   │                      # createReceiptExpense (POST /finance/receipts)
+│       │   │   ├── intelligence.ts    # dispatchConversation, checkConversationStatus, extractInvoice,
+│       │   │   │                      # scanReceipt (POST /intelligence/receipts/scan);
+│       │   │   │                      # KeyFinding, GenUIPayload, ExtractedInvoice, ReceiptScanResult interfaces
 │       │   │   └── auth-client.ts     # login, logout (revokes refresh token), getMe()
 │       │   ├── auth/
 │       │   │   ├── auth-context.tsx   # Hydrates user via GET /me (not JWT decode); proactive refresh
@@ -293,7 +297,7 @@ Finguard-3.0/
 
 | Layer | Technology | Version |
 |---|---|---|
-| Framework | Next.js (App Router) | 15.1.0 |
+| Framework | Next.js (App Router) | 15.5.19 |
 | UI | React | 19.0.0 |
 | Language | TypeScript | 5 |
 | Styling | Tailwind CSS | ≥3.4.0 |
@@ -420,91 +424,108 @@ finguard.customers (
 
 ### PostgreSQL — Finance Domain
 
+**Dual-vault model**: every money-movement row (`mpesa_transactions`, `expenses`, `payments`) carries a `vault VaultType ENUM (MPESA | CASH)` declaring its payment rail. The legacy `PaymentMethod` enum still exists in code but the persisted tables use `VaultType`.
+
 ```
 finguard.ledger_entries (
   id               UUID PK,
+  account_id       UUID (indexed),
+  customer_id      UUID (indexed, nullable),
   transaction_type TransactionType ENUM (credit | debit),
-  amount           NUMERIC(15,2),
-  account_code     VARCHAR,
-  narrative        TEXT,
-  category         VARCHAR,         -- NULL until Agent B classifies
+  amount           NUMERIC(18,2),
+  currency         VARCHAR(3) DEFAULT 'KES',
+  description      TEXT,
+  category         VARCHAR(100),    -- NULL until Agent B classifies
+  reference        VARCHAR(255) (indexed),
   created_at       TIMESTAMPTZ
 )
 
 finguard.invoices (
   id              UUID PK,
-  invoice_number  VARCHAR UNIQUE,
+  invoice_number  VARCHAR(50) UNIQUE,
   customer_id     UUID FK → customers,
-  status          InvoiceStatus ENUM (draft | sent | paid | overdue | cancelled | partially_paid),
-  subtotal        NUMERIC(15,2),
-  tax_total       NUMERIC(15,2),
-  discount_total  NUMERIC(15,2),
-  total           NUMERIC(15,2),
-  amount_paid     NUMERIC(15,2),
-  balance_due     NUMERIC(15,2),     -- CHECK (balance_due = total - amount_paid) enforced by migration 0006
-  due_date        DATE,
+  status          InvoiceStatus ENUM (draft | sent | paid | partially_paid | overdue | cancelled),
+  subtotal        NUMERIC(18,2),
+  tax             NUMERIC(18,2) DEFAULT 0,
+  total           NUMERIC(18,2),
+  amount_paid     NUMERIC(18,2) DEFAULT 0,
+  balance_due     NUMERIC(18,2),     -- CHECK ck_invoices_balance_due_consistent: balance_due = total - amount_paid
+  currency        VARCHAR(3) DEFAULT 'KES',
+  due_date        TIMESTAMPTZ,
+  paid_at         TIMESTAMPTZ,
+  notes           TEXT,
   created_at      TIMESTAMPTZ,
   updated_at      TIMESTAMPTZ
 )
 
 finguard.budgets (
   id              UUID PK,
-  name            VARCHAR,
-  category        VARCHAR,
-  allocated_amount NUMERIC(15,2),
-  spent_amount    NUMERIC(15,2),
-  period_start    DATE,
-  period_end      DATE,
+  name            VARCHAR(255),
+  category        VARCHAR(100),
+  amount          NUMERIC(18,2),     -- allocated
+  spent           NUMERIC(18,2) DEFAULT 0,
+  currency        VARCHAR(3) DEFAULT 'KES',
+  period_start    TIMESTAMPTZ,
+  period_end      TIMESTAMPTZ,
   created_at      TIMESTAMPTZ
 )
 
 finguard.mpesa_transactions (
   id              UUID PK,
-  trans_id        VARCHAR UNIQUE,
+  trans_id        VARCHAR(50) UNIQUE,
   amount          NUMERIC(15,2),
-  phone           VARCHAR,
-  bill_ref        VARCHAR,
-  raw_payload     JSONB,             -- full Daraja callback JSON (added migration 0007)
+  phone           VARCHAR(20),
+  bill_ref        VARCHAR(100),
+  vault           VaultType ENUM (MPESA | CASH) DEFAULT MPESA,
+  raw_payload     JSON,              -- full raw Daraja callback envelope (audit / dispute)
   is_reconciled   BOOLEAN DEFAULT false,
   created_at      TIMESTAMPTZ
 )
 
 finguard.expenses (
   id              UUID PK,
-  expense_ref     VARCHAR,
+  expense_ref     VARCHAR(50) (indexed),
   customer_id     UUID FK → customers,
-  category        VARCHAR,
+  category        VARCHAR(100),
   amount          NUMERIC(15,2),
-  payment_method  PaymentMethod ENUM (mpesa | cash | bank_transfer | card),
+  vault           VaultType ENUM (MPESA | CASH),
   mpesa_trans_id  UUID FK → mpesa_transactions,
   invoice_id      UUID FK → invoices,
+  -- Receipt-scan provenance (nullable; populated by POST /finance/receipts):
+  merchant_name   VARCHAR(255),      -- OCR audit trail
+  kra_pin         VARCHAR(20),       -- feeds Agent F (tax compliance)
+  description     TEXT,
+  receipt_date    TIMESTAMPTZ,       -- printed transaction date (may differ from created_at)
   created_at      TIMESTAMPTZ
 )
 
 finguard.payments (
   id              UUID PK,
   invoice_id      UUID FK → invoices,
-  user_id         UUID FK → users,
-  customer_id     UUID FK → customers,
+  amount          NUMERIC(18,2),
+  vault           VaultType ENUM (MPESA | CASH),
+  reference_note  TEXT,
+  payment_date    TIMESTAMPTZ,
+  recorded_by     UUID,              -- user who recorded the payment
+  created_at      TIMESTAMPTZ
+)
+
+finguard.bank_statement_lines (
+  id              UUID PK,
   amount          NUMERIC(15,2),
-  method          PaymentMethod,
-  status          VARCHAR,
-  mpesa_receipt   VARCHAR,
-  posted_at       TIMESTAMPTZ
+  date            TIMESTAMPTZ (indexed),
+  reference_text  TEXT,
+  is_reconciled   BOOLEAN DEFAULT false (indexed),  -- Agent C two-pass matching source
+  created_at      TIMESTAMPTZ
 )
 
 finguard.outbox_events (
-  id              VARCHAR(64) PK,
-  aggregate_type  VARCHAR(100),
-  aggregate_id    VARCHAR(100),
-  event_type      VARCHAR(100),
+  id              UUID PK,
+  exchange        VARCHAR(100),
+  routing_key     VARCHAR(255),
   payload         JSON,
-  version         INT,
-  status          VARCHAR(20),      -- PENDING | PROCESSED | DEAD_LETTER
-  retry_count     INT DEFAULT 0,
-  created_at      TIMESTAMPTZ,
-  processed_at    TIMESTAMPTZ,
-  error           TEXT
+  published       BOOLEAN DEFAULT false (indexed),  -- projector flips to true after broker ack
+  created_at      TIMESTAMPTZ
 )
 ```
 
@@ -739,6 +760,22 @@ class CompositeGenUIPayload(BaseModel):
 
 ---
 
+### Receipt Scanner (Vision OCR) ✅
+
+A standalone two-node graph (not part of the A–J supervisor loop) backing `POST /intelligence/receipts/scan`.
+
+| Field | Value |
+|---|---|
+| File | `agents/receipt_scanner.py` (`make_receipt_ocr_node`, `make_receipt_classifier_node`) |
+| Graph | `build_receipt_graph()` — `receipt_ocr → receipt_classifier` |
+| `receipt_ocr` | Gemini vision over base64 image → `ReceiptExtraction` (merchant_name, date, total_amount, currency, kra_pin, line_items, confidence) |
+| `receipt_classifier` | Suggests an expense category from the extracted fields |
+| Output schema | `ReceiptScanResponse` (session_id, extraction, suggested_category, error) |
+| Persistence | None — user reviews, then `POST /finance/receipts` (`ReceiptExpenseCreate`) writes the expense |
+| Degradation | Gemini failure → empty extraction + `error` message; form is still hand-fillable |
+
+---
+
 ## 7. Orchestrator & State Machine
 
 **File**: `src/domains/intelligence/orchestrator.py`
@@ -771,6 +808,14 @@ class OrchestratorState(TypedDict):
 ```
 [START] → [a_generator] → [hub_writer] → [END]
 ```
+
+**Receipt Graph** (`build_receipt_graph()`) — `/receipts/scan`:
+
+```
+[START] → [receipt_ocr] → [receipt_classifier] → [END]
+```
+
+`receipt_ocr` runs Gemini vision over the uploaded image; `receipt_classifier` suggests an expense category. The graph degrades to an empty extraction plus an `error` message on Gemini failure so the user can still fill the form by hand. No persistence — confirmed values are posted to `POST /finance/receipts`.
 
 **Conversation Endpoint** (`/conversation`) — dual-path with background task dispatch:
 
@@ -827,6 +872,7 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/invoices/{id}/pay` | `finance:write` | Record payment (settles balance_due) |
 | POST | `/expenses` | `finance:write` | Create expense (publishes via outbox) |
 | GET | `/expenses` | `finance:read` | List expenses |
+| POST | `/receipts` | `finance:write` | Persist a reviewed receipt scan as an expense (budget burn-down + `expenses.created`) |
 | POST | `/mpesa/callback` | — | M-Pesa Daraja STK callback (strict MpesaStkCallback validation; stores raw_payload) |
 | POST | `/payments/cash` | `finance:write` | Record cash payment (row-locked for UPDATE) |
 | POST | `/budgets` | `finance:write` | Create budget |
@@ -839,6 +885,7 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/ai-insights` | `intelligence:read` | Multi-agent orchestrator, insights mode |
 | POST | `/ai-actions` | `intelligence:act` | Multi-agent orchestrator, actions mode |
 | POST | `/intent` | `intelligence:read` | Invoice graph only (Agent A + hub writer) |
+| POST | `/receipts/scan` | `intelligence:read` | Receipt OCR graph (receipt_ocr → receipt_classifier); multipart image/PDF upload ≤10 MB; returns extraction + suggested category (no persistence) |
 | POST | `/conversation` | `intelligence:read` | Dual-path; stores task_owner for IDOR guard |
 | GET | `/conversation/{session_id}/status` | `intelligence:read` | Owner-verified status poll |
 
@@ -869,7 +916,7 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | `/dashboard/intelligence` | AI chat (AgentChatWindow) + composite GenUI blocks |
 | `/dashboard/invoices` | Invoice list + InvoiceGenerator (wired to real backend) |
 | `/dashboard/budgets` | Budget management |
-| `/dashboard/transactions` | Transaction list |
+| `/dashboard/transactions` | Transaction list + ReceiptScanner (upload → OCR → review → create expense) |
 | `/dashboard/receivables` | AR: InvoiceTable, AgentStatus |
 | `/dashboard/payables` | AP: DepartmentBudgets, RecentOutgoing, AgentIntegrations |
 | `/dashboard/payables/alerts` | Budget alerts |
@@ -916,8 +963,8 @@ User types free-text description
 |---|---|
 | `lib/api/http-client.ts` | Axios singleton: Bearer injection, 401 silent refresh, idempotency key (scoped to `/ai-insights` + `/ai-actions` only) |
 | `lib/api/endpoints.ts` | Typed URL constants |
-| `lib/api/finance.ts` | `listCustomers`, `createCustomer`, `createInvoice`, `resolveCustomerId` |
-| `lib/api/intelligence.ts` | `dispatchConversation`, `checkConversationStatus`, `extractInvoice`; `KeyFinding`, `GenUIPayload`, `ExtractedInvoice` types |
+| `lib/api/finance.ts` | `listCustomers`, `createCustomer`, `createInvoice`, `resolveCustomerId`, `createReceiptExpense` |
+| `lib/api/intelligence.ts` | `dispatchConversation`, `checkConversationStatus`, `extractInvoice`, `scanReceipt`; `KeyFinding`, `GenUIPayload`, `ExtractedInvoice`, `ReceiptExtraction`, `ReceiptScanResult` types |
 | `lib/api/auth-client.ts` | `login`, `logout` (sends refresh token to revoke), `getMe()` |
 | `lib/auth/auth-context.tsx` | React context; hydrates `user` via `GET /me` (not JWT decode); proactive refresh on expiry |
 | `lib/auth/token-manager.ts` | localStorage token CRUD, `isTokenExpired`, `fg_session` cookie for Next.js middleware |
@@ -1384,4 +1431,4 @@ ENABLE_OUTBOX_PROJECTOR=true         # Starts PostgreSQL outbox → MongoDB proj
 
 ---
 
-*Last updated: 2026-06-13*
+*Last updated: 2026-06-14*
