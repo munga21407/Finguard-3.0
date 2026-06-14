@@ -1,11 +1,18 @@
-"""invoice event log — append-only event sourcing for invoices
+"""invoice event log backfill — append-only event sourcing for invoices
 
-Adds ``invoice_events``: the append-only log that becomes the source of truth for
-an invoice's monetary state (``invoice_issued`` / ``payment_applied``). The
-materialized ``invoices`` row is henceforth a synchronous projection of folding
-this log (see ``src/domains/finance/events.py``).
+The ``invoice_events`` table itself is created by the ``0001_initial`` baseline
+(its ``create_all`` over the ORM metadata includes the ``InvoiceEvent`` model,
+along with the ``ix_invoice_events_invoice_id`` index and the
+``uq_invoice_events_invoice_seq`` constraint). This revision is therefore a
+**data-only** migration: it does not (re)create the table — doing so would raise
+``DuplicateTableError`` against the schema 0001 already built.
 
-Backfill: synthesise events for invoices/payments that predate this table so
+The append-only log becomes the source of truth for an invoice's monetary state
+(``invoice_issued`` / ``payment_applied``); the materialized ``invoices`` row is
+henceforth a synchronous projection of folding this log (see
+``src/domains/finance/events.py``).
+
+Backfill: synthesise events for invoices/payments that predate the log so
 ``reconstruct_invoice`` is valid for existing data — one ``invoice_issued`` per
 invoice (amount = total) followed by one ``payment_applied`` per recorded payment
 (ordered by creation time). Uses ``gen_random_uuid()`` (built-in on PostgreSQL
@@ -17,8 +24,6 @@ Create Date: 2026-06-14 00:00:00.000000
 """
 from __future__ import annotations
 
-import sqlalchemy as sa
-
 from alembic import op
 
 revision = "0002_invoice_events"
@@ -28,31 +33,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "invoice_events",
-        sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column(
-            "invoice_id",
-            sa.dialects.postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("invoices.id"),
-            nullable=False,
-        ),
-        sa.Column("sequence", sa.Integer(), nullable=False),
-        sa.Column("event_type", sa.String(length=50), nullable=False),
-        sa.Column("amount", sa.Numeric(18, 2), nullable=False, server_default="0"),
-        sa.Column("payload", sa.JSON(), nullable=False),
-        sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("recorded_by", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=False,
-        ),
-        sa.UniqueConstraint("invoice_id", "sequence", name="uq_invoice_events_invoice_seq"),
-    )
-    op.create_index("ix_invoice_events_invoice_id", "invoice_events", ["invoice_id"])
-
     # ── Backfill existing invoices: one invoice_issued event each (sequence 1) ──
     op.execute(
         """
@@ -84,5 +64,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_invoice_events_invoice_id", table_name="invoice_events")
-    op.drop_table("invoice_events")
+    # The table is owned by 0001's baseline, so undo only the data this revision
+    # inserted (the backfilled events tagged ``payload->>'backfilled' = true``).
+    op.execute("DELETE FROM invoice_events WHERE (payload->>'backfilled') = 'true'")

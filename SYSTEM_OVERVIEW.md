@@ -384,7 +384,7 @@ All services are defined in `infrastructure/docker-compose.yml`. Background work
 | Service | Port | Purpose |
 |---|---|---|
 | Prometheus | 9090 | Scrapes `backend:8000/metrics`, `redis-exporter:9121`, `flower:5555` |
-| Grafana | 3001 | Dashboard UI (admin / `$GRAFANA_PASSWORD`). Default home: `finguard_ai_overview.json` |
+| Grafana | 3001 | Dashboard UI (admin / `$GRAFANA_PASSWORD`). Default home: `finguard_ai_overview.json` — HTTP rate, agent LLM latency, Celery tasks, **per-agent LLM token/cost/outcome**, and **tool latency/error** panels |
 | Redis Exporter | 9121 | Translates Redis INFO stats to Prometheus `/metrics` |
 
 ---

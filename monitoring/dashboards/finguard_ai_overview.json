@@ -32,7 +32,7 @@
   "annotations": {
     "list": []
   },
-  "description": "FinGuard AI Overview — HTTP request rate, Agent LLM latency, and Celery active tasks",
+  "description": "FinGuard AI Overview \u2014 HTTP request rate, Agent LLM latency, Celery tasks, and per-agent LLM token/cost/outcome + tool latency observability.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -158,7 +158,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Percentile latency of LLM (Gemini) API calls made by each AI agent. P99 > 10 s indicates quota throttling or prompt token budget pressure. Queries both the canonical D3 metric (agent_llm_processing_seconds) and the legacy finguard_* series — whichever has data will appear.",
+      "description": "Percentile latency of LLM (Gemini) API calls made by each AI agent. P99 > 10 s indicates quota throttling or prompt token budget pressure. Queries both the canonical D3 metric (agent_llm_processing_seconds) and the legacy finguard_* series \u2014 whichever has data will appear.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -296,7 +296,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Celery worker task activity sourced from Flower metrics (job: flower-celery). Shows task ingress rate and per-state task counts. If Flower is not running (workers profile inactive) this panel shows No Data — expected.",
+      "description": "Celery worker task activity sourced from Flower metrics (job: flower-celery). Shows task ingress rate and per-state task counts. If Flower is not running (workers profile inactive) this panel shows No Data \u2014 expected.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -383,6 +383,369 @@
           "refId": "D"
         }
       ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Prompt vs completion tokens per second, by agent. Spot which agent burns the most context (e.g. Agent B/C dumping ledger_entries). Source: agent_llm_tokens_total.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "tokens / s"
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Per-Agent LLM Token Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (agent_id, kind) (rate(agent_llm_tokens_total[5m]))",
+          "legendFormat": "{{agent_id}} {{kind}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Approximate Gemini spend per agent, extrapolated to USD/hour from token rate \u00d7 configured list price (GEMINI_*_USD_PER_MTOK). TOTAL is all agents combined. Source: agent_llm_cost_usd_total.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Estimated LLM Cost by Agent (USD/hr)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (agent_id) (rate(agent_llm_cost_usd_total[5m])) * 3600",
+          "legendFormat": "{{agent_id}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum (rate(agent_llm_cost_usd_total[5m])) * 3600",
+          "legendFormat": "TOTAL",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Percentile latency of high-risk agent tools \u2014 readonly_sql (Text-to-SQL), http_request (Daraja/CBK), tax_rag (pgvector). A rising P95 flags a slow tool before it surfaces as user-visible latency. Source: agent_tool_duration_seconds.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Agent Tool Latency P95 / P99 (by tool)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(agent_tool_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{tool}} P95",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, tool) (rate(agent_tool_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{tool}} P99",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-tool call rate split by success/error (error series shown red). A climbing error rate on http_request means the Daraja/CBK integration is failing; on readonly_sql it means Agent D is generating rejected/failing SQL. Source: agent_tool_duration_seconds_count.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "calls / s"
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/error/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Tool Call Rate by Outcome (by tool)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (tool, status) (rate(agent_tool_duration_seconds_count[5m]))",
+          "legendFormat": "{{tool}} [{{status}}]",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-agent LLM call rate split by outcome (error series shown red). A spike in errors points to Gemini throttling / circuit-breaker trips for that agent. Source: agent_llm_calls_total.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "calls / s"
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/error/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "LLM Calls by Outcome (success / error)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (agent_id, status) (rate(agent_llm_calls_total[5m]))",
+          "legendFormat": "{{agent_id}} [{{status}}]",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "30s",
@@ -415,8 +778,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "FinGuard AI — Agent Overview",
+  "title": "FinGuard AI \u2014 Agent Overview",
   "uid": "finguard-ai-overview-d3",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
