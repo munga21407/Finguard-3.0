@@ -27,6 +27,7 @@ from sqlalchemy import bindparam, select
 from src.core.logging import logger
 from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.models import KnowledgeBase
+from src.domains.intelligence.observability import traced_tool
 from src.infrastructure.cache.redis import get_redis
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
@@ -110,6 +111,7 @@ async def _get_embedding(query: str) -> list[float] | None:
     return values
 
 
+@traced_tool("tax_rag")
 async def get_relevant_tax_rules(query: str, limit: int = 3) -> list[str]:
     """
     Return the `limit` most relevant KRA knowledge-base excerpts for `query`.

@@ -40,6 +40,11 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    # List-price estimates (USD per 1M tokens) used only to attribute per-agent
+    # LLM spend on the /metrics dashboard. Override via env when Google's
+    # published Gemini Flash pricing changes — these defaults are approximate.
+    GEMINI_INPUT_USD_PER_MTOK: float = 0.30
+    GEMINI_OUTPUT_USD_PER_MTOK: float = 2.50
 
     # Observability — Bearer token protecting the /metrics endpoint.
     # Leave empty to disable auth (development only; never empty in production).

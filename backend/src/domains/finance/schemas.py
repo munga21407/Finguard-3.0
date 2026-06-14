@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from src.domains.finance.models import InvoiceStatus, TransactionType
+from src.domains.finance.models import InvoiceEventType, InvoiceStatus, TransactionType
 from src.domains.finance.types import VaultType
 
 
@@ -66,6 +66,45 @@ class InvoiceResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── Invoice event log (event sourcing) ────────────────────────────────────────
+
+class InvoiceEventResponse(BaseModel):
+    id: uuid.UUID
+    invoice_id: uuid.UUID
+    sequence: int
+    event_type: InvoiceEventType
+    amount: Decimal
+    payload: dict[str, Any]
+    occurred_at: datetime
+    recorded_by: uuid.UUID | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class InvoiceReconstructionResponse(BaseModel):
+    """An invoice's event history plus the state derived by folding it.
+
+    ``matches_projection`` lets an auditor confirm the stored (materialized)
+    invoice row equals the fold of its events — i.e. the read model has not
+    drifted from the append-only source of truth.
+    """
+
+    invoice_id: uuid.UUID
+    event_count: int
+    # State derived purely from the event log.
+    derived_total: Decimal
+    derived_amount_paid: Decimal
+    derived_balance_due: Decimal
+    derived_status: InvoiceStatus | None
+    # The current materialized values, for side-by-side comparison.
+    stored_amount_paid: Decimal
+    stored_balance_due: Decimal
+    stored_status: InvoiceStatus
+    matches_projection: bool
+    events: list[InvoiceEventResponse]
 
 
 # ── Expenses ──────────────────────────────────────────────────────────────────

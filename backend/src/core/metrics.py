@@ -54,6 +54,39 @@ AGENT_LLM_PROCESSING = Histogram(
     buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0],
 )
 
+# Per-agent token consumption. kind ∈ {prompt, completion}. Lets Grafana show
+# which agent burns the most context (e.g. Agent B/C dumping ledger_entries).
+AGENT_LLM_TOKENS = Counter(
+    "agent_llm_tokens_total",
+    "LLM tokens consumed per agent and model, split into prompt vs completion",
+    labelnames=["agent_id", "model", "kind"],
+)
+
+# Estimated per-agent LLM spend (tokens × configured Gemini list price). USD.
+AGENT_LLM_COST_USD = Counter(
+    "agent_llm_cost_usd_total",
+    "Estimated LLM cost in USD per agent and model (list-price approximation)",
+    labelnames=["agent_id", "model"],
+)
+
+# LLM call outcomes per agent. status ∈ {success, error}.
+AGENT_LLM_CALLS = Counter(
+    "agent_llm_calls_total",
+    "LLM calls per agent and model, by outcome",
+    labelnames=["agent_id", "model", "status"],
+)
+
+# Duration + implicit count of agent tool calls (read-only SQL, outbound HTTP,
+# pgvector RAG), labelled by tool, the calling agent, and outcome. The
+# histogram's _count per {tool, agent, status} gives both latency and a
+# success/error breakdown for error-rate alerting — so no separate counter.
+AGENT_TOOL_DURATION = Histogram(
+    "agent_tool_duration_seconds",
+    "Duration of an agent tool call, per tool, calling agent, and outcome",
+    labelnames=["tool", "agent", "status"],
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0],
+)
+
 # Weighted anomaly score from Agent E's HMM/Viterbi pass. Updated each run.
 # 0.0 = fully HEALTHY, 1.0 = fully CRITICAL.
 AGENT_E_ANOMALY_SCORE = Gauge(

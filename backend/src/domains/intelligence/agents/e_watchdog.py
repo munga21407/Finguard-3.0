@@ -37,7 +37,7 @@ from src.core.metrics import (
     AGENT_LLM_LATENCY,
     AGENT_LLM_PROCESSING,
 )
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import get_gemini_client, observe_llm_call
 from src.domains.intelligence.prompts.e_watchdog import WATCHDOG_SYSTEM
 from src.domains.intelligence.schemas import (
     CompositeGenUIPayload,
@@ -432,6 +432,9 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
             AGENT_LLM_PROCESSING.labels(agent_id="e_watchdog", model=settings.GEMINI_MODEL).observe(
                 _elapsed
             )
+            # Latency already recorded above (direct client call) — pass elapsed=None
+            # so only tokens/cost/calls are added, no double-counted latency.
+            observe_llm_call(gemini_resp, elapsed=None, agent_id="e_watchdog")
             llm_output = _WatchdogLLMOutput.model_validate_json(gemini_resp.text or "{}")
         except Exception as exc:
             logger.warning("Agent E: Gemini structured output failed", error=str(exc))

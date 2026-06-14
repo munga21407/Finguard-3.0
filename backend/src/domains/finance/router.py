@@ -15,6 +15,8 @@ from src.domains.finance.schemas import (
     ExpenseCreate,
     ExpenseResponse,
     InvoiceCreate,
+    InvoiceEventResponse,
+    InvoiceReconstructionResponse,
     InvoiceResponse,
     InvoiceUpdate,
     LedgerEntryCreate,
@@ -126,6 +128,49 @@ async def mark_invoice_paid(
 ) -> InvoiceResponse:
     invoice = await FinanceService(db).mark_invoice_paid(invoice_id)
     return InvoiceResponse.model_validate(invoice)
+
+
+@router.get("/invoices/{invoice_id}/events", response_model=list[InvoiceEventResponse])
+async def list_invoice_events(
+    invoice_id: uuid.UUID, db: DBSession, _: RequireFinanceRead
+) -> list[InvoiceEventResponse]:
+    """Append-only event history for an invoice (issuance, payments), oldest first."""
+    events = await FinanceService(db).get_invoice_events(invoice_id)
+    return [InvoiceEventResponse.model_validate(e) for e in events]
+
+
+@router.get(
+    "/invoices/{invoice_id}/reconstruction",
+    response_model=InvoiceReconstructionResponse,
+)
+async def reconstruct_invoice(
+    invoice_id: uuid.UUID, db: DBSession, _: RequireFinanceRead
+) -> InvoiceReconstructionResponse:
+    """Fold the invoice's event log and compare it to the materialized row.
+
+    Audit endpoint: ``matches_projection`` is true when the stored invoice equals
+    the state derived purely from its events — proving the read model has not
+    drifted from the append-only source of truth.
+    """
+    invoice, state, events = await FinanceService(db).reconstruct_invoice(invoice_id)
+    matches = (
+        state.amount_paid == invoice.amount_paid
+        and state.balance_due == invoice.balance_due
+        and (state.payment_status is None or state.payment_status == invoice.status)
+    )
+    return InvoiceReconstructionResponse(
+        invoice_id=invoice.id,
+        event_count=state.event_count,
+        derived_total=state.total,
+        derived_amount_paid=state.amount_paid,
+        derived_balance_due=state.balance_due,
+        derived_status=state.payment_status,
+        stored_amount_paid=invoice.amount_paid,
+        stored_balance_due=invoice.balance_due,
+        stored_status=invoice.status,
+        matches_projection=matches,
+        events=[InvoiceEventResponse.model_validate(e) for e in events],
+    )
 
 
 # ── Expenses ──────────────────────────────────────────────────────────────────

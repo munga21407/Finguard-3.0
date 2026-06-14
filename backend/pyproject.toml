@@ -113,6 +113,9 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "llm_judge: LLM-as-judge evals — skipped unless RUN_LLM_EVALS=1 (nightly; costs tokens, needs GEMINI_API_KEY)",
+]
 filterwarnings = [
     "error",
     # passlib imports the deprecated `crypt` stdlib module at the module level;

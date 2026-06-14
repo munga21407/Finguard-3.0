@@ -27,6 +27,8 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from src.domains.intelligence.observability import traced_tool
+
 logger = structlog.get_logger(__name__)
 
 # Default client-level timeout (connect + read) in seconds.
@@ -90,6 +92,9 @@ def _should_retry(exc: BaseException) -> bool:
 # Internal retried transport
 # ---------------------------------------------------------------------------
 
+# traced_tool sits ABOVE @retry so it records one observation per logical call —
+# total time including all retry attempts, and the final success/error outcome.
+@traced_tool("http_request")
 @retry(
     retry=retry_if_exception(_should_retry),
     stop=stop_after_attempt(4),

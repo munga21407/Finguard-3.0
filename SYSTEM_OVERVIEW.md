@@ -50,9 +50,10 @@ Finguard-3.0/
 │   ├── alembic/                       # SQLAlchemy migration tooling
 │   │   ├── env.py
 │   │   └── versions/
-│   │       └── 0001_initial_schema.py # Single squashed baseline: full schema +
-│   │                                  # CHECK (balance_due = total - amount_paid),
-│   │                                  # vault columns, receipt-scan provenance, is_verified
+│   │       ├── 0001_initial_schema.py # Single squashed baseline: full schema +
+│   │       │                          # CHECK (balance_due = total - amount_paid),
+│   │       │                          # vault columns, receipt-scan provenance, is_verified
+│   │       └── 0002_invoice_events.py # Append-only invoice_events log + backfill (event sourcing)
 │   ├── scripts/
 │   │   ├── ingest_kra_docs.py         # Seeds knowledge_base with KRA docs via pgvector
 │   │   └── kra_docs/                  # Source KRA regulation documents
@@ -84,13 +85,14 @@ Finguard-3.0/
 │       │   │   ├── repository.py
 │       │   │   └── schemas.py
 │       │   ├── finance/               # Finance domain
-│       │   │   ├── models.py          # LedgerEntry, Invoice, Budget, MpesaTransaction,
+│       │   │   ├── models.py          # LedgerEntry, Invoice, InvoiceEvent, Budget, MpesaTransaction,
 │       │   │   │                      # Expense, Payment, BankStatementLine, OutboxEvent ORM
+│       │   │   ├── events.py          # fold_invoice_events() — pure event-sourcing fold → InvoiceState
 │       │   │   ├── router.py          # /api/v1/finance endpoints (RBAC: RequireFinanceRead/Write);
-│       │   │   │                      # includes POST /receipts (persist reviewed receipt scan)
+│       │   │   │                      # POST /receipts; GET /invoices/{id}/events + /reconstruction
 │       │   │   ├── service.py         # Outbox-first event publishing; M-Pesa strict validation;
-│       │   │   │                      # balance_due settlement; row-lock cash payments
-│       │   │   ├── repository.py
+│       │   │   │                      # invoice events appended + projected; row-lock cash payments
+│       │   │   ├── repository.py      # incl. InvoiceEventRepository (append-only)
 │       │   │   ├── schemas.py         # ReceiptExpenseCreate + finance request/response models
 │       │   │   └── types.py           # VaultType (MPESA | CASH) dual-vault enum
 │       │   └── intelligence/          # AI/ML domain
@@ -146,7 +148,7 @@ Finguard-3.0/
 │           ├── consumers/
 │           │   └── watchdog_consumer.py  # RabbitMQ consumer → Agent E trigger
 │           ├── outbox/
-│           │   └── projector.py          # Outbox → MongoDB projector
+│           │   └── projector.py          # Outbox → RabbitMQ projector (publishes then flips published=True)
 │           └── tasks/
 │               ├── celery_app.py
 │               ├── ocr.py
@@ -458,6 +460,19 @@ finguard.invoices (
   updated_at      TIMESTAMPTZ
 )
 
+finguard.invoice_events (              -- append-only event log (event sourcing); never UPDATE/DELETE
+  id              UUID PK,
+  invoice_id      UUID FK → invoices (indexed),
+  sequence        INT,               -- per-invoice monotonic version (1 = issuance)
+  event_type      VARCHAR(50),       -- invoice_issued | payment_applied (InvoiceEventType)
+  amount          NUMERIC(18,2),     -- signed contribution (invoice total for issuance, paid amount)
+  payload         JSON,
+  occurred_at     TIMESTAMPTZ,
+  recorded_by     UUID,
+  created_at      TIMESTAMPTZ,
+  UNIQUE (invoice_id, sequence)        -- gap-free history; writers serialise on the invoice FOR UPDATE lock
+)
+
 finguard.budgets (
   id              UUID PK,
   name            VARCHAR(255),
@@ -683,7 +698,7 @@ class CompositeGenUIPayload(BaseModel):
 | Context key written | `tax_audit_result` |
 | Output schema | `AgentFOutput` |
 | GenUI payload | `CompositeGenUIPayload` → `component_id: "TaxLiabilityDonut"` |
-| Method | Deterministic Kenya tax calculations (16% VAT threshold KES 8M, 30% CIT) + pgvector RAG (top-3 KRA excerpts) + Gemini structured output |
+| Method | Deterministic Kenya tax calculations (16% VAT, KES 5M mandatory registration threshold, 30% CIT) + pgvector RAG (top-3 KRA excerpts) + Gemini structured output |
 | Hub TTL | 1 day |
 
 ---
@@ -869,7 +884,9 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | GET | `/invoices/{id}` | `finance:read` | Get invoice |
 | POST | `/invoices` | `finance:write` | Create invoice |
 | PATCH | `/invoices/{id}` | `finance:write` | Update invoice |
-| POST | `/invoices/{id}/pay` | `finance:write` | Record payment (settles balance_due) |
+| POST | `/invoices/{id}/pay` | `finance:write` | Settle invoice (appends a `payment_applied` event for the balance) |
+| GET | `/invoices/{id}/events` | `finance:read` | Append-only invoice event history (issuance, payments), oldest first |
+| GET | `/invoices/{id}/reconstruction` | `finance:read` | Fold the event log; `matches_projection` proves the row equals the events |
 | POST | `/expenses` | `finance:write` | Create expense (publishes via outbox) |
 | GET | `/expenses` | `finance:read` | List expenses |
 | POST | `/receipts` | `finance:write` | Persist a reviewed receipt scan as an expense (budget burn-down + `expenses.created`) |
@@ -1146,6 +1163,8 @@ PASSWORD_MIN_LENGTH=8
 # Google Gemini
 GEMINI_API_KEY=<your-key>
 GEMINI_MODEL=gemini-2.5-flash
+GEMINI_INPUT_USD_PER_MTOK=0.30    # list-price estimate; drives per-agent cost metric
+GEMINI_OUTPUT_USD_PER_MTOK=2.50   # list-price estimate; drives per-agent cost metric
 
 # Internal CA (Ed25519)
 FINGUARD_CA_PRIVATE_KEY_HEX=    # 32 bytes hex (64 chars). If empty, derived from SECRET_KEY (dev only).
@@ -1156,9 +1175,9 @@ METRICS_AUTH_SECRET=             # Bearer token for GET /metrics. Required in pr
 # Background workers
 ENABLE_EXPENSE_EVENT_CONSUMER=false
 ENABLE_OUTBOX_PROJECTOR=false
-OUTBOX_POLL_INTERVAL=5.0
-OUTBOX_BATCH_SIZE=50
-OUTBOX_MAX_RETRIES=5
+OUTBOX_POLL_INTERVAL=5.0         # projector poll cadence (seconds) — actively used
+OUTBOX_BATCH_SIZE=50            # reserved; projector currently uses a fixed 100-row batch
+OUTBOX_MAX_RETRIES=5           # reserved; projector has no retry counter (retries are implicit via re-poll)
 RABBITMQ_CONSUMER_RETRY_SECONDS=5
 WATCHDOG_CONSUMER_INTERVAL_SECONDS=30
 
@@ -1203,7 +1222,7 @@ Every agent writes an `InsightArtifact` to MongoDB `intelligence_hub` with a per
 **File**: `agents/hub_writer.py`
 
 ### 4. Transactional Outbox Pattern
-Every PostgreSQL write that must trigger messaging also inserts a row into `outbox_events` **in the same transaction**. The outbox projector polls `PENDING` rows under `SELECT … FOR UPDATE SKIP LOCKED`, projects to MongoDB, marks `PROCESSED` or `DEAD_LETTER`. `rabbitmq_publisher.publish()` raises `BrokerUnavailableError` when the broker is unavailable, causing the surrounding `session.begin()` to roll back — events are never silently dropped.
+Every PostgreSQL write that must trigger messaging also inserts a row into `outbox_events` **in the same transaction**. The outbox projector (`run_projector`, polling every `OUTBOX_POLL_INTERVAL`s) selects up to 100 rows where `published = False`, oldest-first, under `SELECT … FOR UPDATE SKIP LOCKED`, publishes each to RabbitMQ, then flips `published = True` — all inside a single `session.begin()`. If `rabbitmq_publisher.publish()` raises `BrokerUnavailableError`, the exception propagates out of `session.begin()` and the whole batch rolls back, so the rows stay `published = False` and are retried on the next poll cycle — events are never silently dropped. This yields **at-least-once** delivery (a crash after broker ACK but before DB commit republishes on the next poll), so consumers must be idempotent. There is no `PROCESSED`/`DEAD_LETTER` status or `retry_count` column — retries are implicit via re-polling, and the projector forwards to RabbitMQ only (it does not write to MongoDB).
 **Files**: `workers/outbox/projector.py`, `infrastructure/message_bus/rabbitmq_publisher.py`
 
 ### 5. RabbitMQ Event-Driven Watchdog
@@ -1285,6 +1304,18 @@ Agents D/E/F/G build `CompositeGenUIPayload` with deterministic `props` and LLM-
 `identity/service.py::register()` checks `await self._repo.count() == 0`. If true, the first account is created as `role=OWNER, is_verified=True`. All subsequent self-registrations are `VIEWER + unverified`, preventing anonymous privilege escalation.
 **File**: `domains/identity/service.py`
 
+### 25. Event Sourcing for the Invoice Lifecycle (scoped)
+The `invoice_events` table is an **append-only log** that is the source of truth for an invoice's monetary state. Issuance appends `invoice_issued` (sequence 1, amount = total); each payment appends `payment_applied`. `fold_invoice_events()` is a **pure** function that replays the sequence into a derived `InvoiceState` (`amount_paid` / `balance_due` / status). The materialized `invoices` row is a **synchronous projection** of that fold — re-derived in the same transaction after every append — so the `CHECK (balance_due = total - amount_paid)` constraint and the `FOR UPDATE` payment serialization are preserved (no behavioural regression vs. the previous imperative updates). Sequence allocation is race-free because writers hold the invoice's `FOR UPDATE` lock; `UNIQUE (invoice_id, sequence)` is the backstop. `GET /invoices/{id}/reconstruction` folds the log and reports `matches_projection`, letting an auditor prove the read model has not drifted from the events. Deliberately scoped to invoices/payments (not the whole system); async projection, snapshotting, and `credit_note`/`cancellation` events are deferred — see `docs/SCALING.md`.
+**Files**: `domains/finance/events.py`, `domains/finance/models.py` (`InvoiceEvent`), `domains/finance/service.py`
+
+### 26. Per-Agent LLM Observability (contextvar attribution)
+Every graph node is wrapped at registration by `orchestrator._tracked(name, node)`, which sets a `current_agent_id` contextvar for the node's execution. The Gemini client's `observe_llm_call()` reads that contextvar and records **per-agent** Prometheus metrics for each call — latency (`agent_llm_processing_seconds`), tokens (`agent_llm_tokens_total{kind=prompt|completion}`), estimated cost (`agent_llm_cost_usd_total`, tokens × `GEMINI_*_USD_PER_MTOK`), and outcome (`agent_llm_calls_total{status}`). This gives central attribution with no per-agent edits, so a Grafana panel can show which agent burns the most tokens (e.g. Agent B/C dumping `ledger_entries`). Recording is best-effort and never throws into the agent path (non-numeric token counts are coerced/skipped). Agent E calls the Gemini client directly (not the shared helpers) and so calls `observe_llm_call(..., elapsed=None)` to add tokens/cost without double-counting the latency it already records.
+**Files**: `domains/intelligence/llm_client.py` (`agent_context`, `observe_llm_call`), `domains/intelligence/orchestrator.py` (`_tracked`), `core/metrics.py`
+
+### 27. Tool Observability (traced high-risk tools)
+`@traced_tool(name)` (`domains/intelligence/observability.py`) wraps the agents' high-risk tool calls — read-only Text-to-SQL (`execute_readonly_sql`), outbound HTTP / Daraja (`_send_with_retry`, decorated **above** `@retry` so one observation covers the whole retried call), and pgvector RAG (`get_relevant_tax_rules`) — recording `agent_tool_duration_seconds{tool,agent,status}`. The histogram's per-`status` `_count` gives both latency and a success/error breakdown for alerting; `agent` reuses the `current_agent_id` contextvar (so "Agent D's SQL is slow" / "the Daraja call started failing" become visible). Duration is observed even on failure (a hung call → a long `error` sample) and the original exception always re-raises — telemetry is transparent to the caller.
+**Files**: `domains/intelligence/observability.py`, `tools/sql_executor.py`, `tools/http_caller.py`, `services/tax_rag_service.py`, `core/metrics.py`
+
 ---
 
 ## 15. Celery Tasks
@@ -1323,13 +1354,14 @@ All tasks use `asyncio.run()` to bridge into the async layer (see Design Pattern
 
 ### `ci.yml` — Continuous Integration
 
-Runs on every push and pull request.
+Runs on every push and pull request (plus a nightly `schedule` for the eval job).
 
 | Job | What it does |
 |---|---|
-| `test` | Spins up `pgvector/pgvector:pg16`, MongoDB, RabbitMQ services; creates `finguard_test` DB; runs `pytest` (116 tests); uploads coverage |
-| `lint` | `ruff check`, `ruff format --check`, `mypy` |
+| `test` | Spins up `pgvector/pgvector:pg16`, MongoDB, RabbitMQ services; creates `finguard_test` DB; runs `pytest` (167 tests); uploads coverage. Includes the **deterministic Agent-F tax eval gate** (`tests/evals/` — golden VAT/CIT/AML scenarios + pinned regulatory constants), so wrong tax math fails the build |
+| `lint` | `ruff check`, `mypy` |
 | `migration-check` | Runs `alembic upgrade head` against the test DB to ensure migrations are not broken |
+| `llm-evals` | **Nightly + non-blocking** (`if: schedule`, `continue-on-error`): runs the LLM-as-judge narrative evals (`pytest tests/evals -m llm_judge`, `RUN_LLM_EVALS=1`, needs `GEMINI_API_KEY` secret). Judges narrative grounding only — never gates a PR |
 | `security-scan` | **gitleaks** (blocking — fails the build on secrets); **pip-audit** (report only); **bandit** (report only); **npm audit** (report only) |
 
 ### `deploy.yml` — Deployment

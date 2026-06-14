@@ -39,7 +39,24 @@ from src.domains.intelligence.agents.receipt_scanner import (
     make_receipt_ocr_node,
 )
 from src.domains.intelligence.agents.supervisor import make_supervisor_node
+from src.domains.intelligence.llm_client import agent_context
 from src.domains.intelligence.schemas import OrchestratorState
+
+
+def _tracked(name: str, node: Any) -> Any:
+    """Wrap a graph node so every LLM call inside it attributes to ``name``.
+
+    Sets the ``current_agent_id`` contextvar for the node's execution, which the
+    Gemini client reads to label per-agent latency/token/cost metrics — central
+    attribution with no per-agent edits.  Pure pass-through for non-LLM nodes.
+    """
+
+    async def _wrapped(state: Any) -> Any:
+        with agent_context(name):
+            return await node(state)
+
+    return _wrapped
+
 
 # Mapping from state["next"] value → graph node name
 AGENT_NODE_MAP: dict[str, str] = {
@@ -67,8 +84,8 @@ def build_invoice_graph() -> Any:
     Hub writer upserts the extracted invoice into `intelligence_hub`.
     """
     workflow = StateGraph(OrchestratorState)
-    workflow.add_node("a_generator", make_a_generator_node())
-    workflow.add_node("hub_writer", make_hub_writer_node())
+    workflow.add_node("a_generator", _tracked("a_generator", make_a_generator_node()))
+    workflow.add_node("hub_writer", _tracked("hub_writer", make_hub_writer_node()))
     workflow.add_edge(START, "a_generator")
     workflow.add_edge("a_generator", "hub_writer")
     workflow.add_edge("hub_writer", END)
@@ -88,8 +105,10 @@ def build_receipt_graph() -> Any:
     user to complete rather than an HTTP 500.
     """
     workflow = StateGraph(OrchestratorState)
-    workflow.add_node("receipt_ocr", make_receipt_ocr_node())
-    workflow.add_node("receipt_classifier", make_receipt_classifier_node())
+    workflow.add_node("receipt_ocr", _tracked("receipt_ocr", make_receipt_ocr_node()))
+    workflow.add_node(
+        "receipt_classifier", _tracked("receipt_classifier", make_receipt_classifier_node())
+    )
     workflow.add_edge(START, "receipt_ocr")
     workflow.add_edge("receipt_ocr", "receipt_classifier")
     workflow.add_edge("receipt_classifier", END)
@@ -118,19 +137,20 @@ def build_graph() -> Any:
     """Compile and return the full supervisor-based LangGraph StateGraph."""
     workflow = StateGraph(OrchestratorState)
 
-    # Register nodes — all agents use Gemini internally; no llm arg needed
-    workflow.add_node("supervisor",    make_supervisor_node())
-    workflow.add_node("a_generator",   make_a_generator_node())
-    workflow.add_node("b_classifier",  make_b_classifier_node())
-    workflow.add_node("c_reconciler",  make_c_reconciler_node())
-    workflow.add_node("d_forecaster",  make_d_forecaster_node())
-    workflow.add_node("e_watchdog",    make_e_watchdog_node())
-    workflow.add_node("f_auditor",     make_f_auditor_node())
-    workflow.add_node("g_reporter",    make_g_reporter_node())
-    workflow.add_node("h_advisor",     make_h_advisor_node())
-    workflow.add_node("i_integrator",  make_i_integrator_node())
-    workflow.add_node("j_summarizer",  make_j_summarizer_node())
-    workflow.add_node("hub_writer",    make_hub_writer_node())
+    # Register nodes — all agents use Gemini internally; no llm arg needed.
+    # _tracked wraps each so its LLM calls attribute to the agent on /metrics.
+    workflow.add_node("supervisor",    _tracked("supervisor",   make_supervisor_node()))
+    workflow.add_node("a_generator",   _tracked("a_generator",  make_a_generator_node()))
+    workflow.add_node("b_classifier",  _tracked("b_classifier", make_b_classifier_node()))
+    workflow.add_node("c_reconciler",  _tracked("c_reconciler", make_c_reconciler_node()))
+    workflow.add_node("d_forecaster",  _tracked("d_forecaster", make_d_forecaster_node()))
+    workflow.add_node("e_watchdog",    _tracked("e_watchdog",   make_e_watchdog_node()))
+    workflow.add_node("f_auditor",     _tracked("f_auditor",    make_f_auditor_node()))
+    workflow.add_node("g_reporter",    _tracked("g_reporter",   make_g_reporter_node()))
+    workflow.add_node("h_advisor",     _tracked("h_advisor",    make_h_advisor_node()))
+    workflow.add_node("i_integrator",  _tracked("i_integrator", make_i_integrator_node()))
+    workflow.add_node("j_summarizer",  _tracked("j_summarizer", make_j_summarizer_node()))
+    workflow.add_node("hub_writer",    _tracked("hub_writer",   make_hub_writer_node()))
 
     # Supervisor → conditional fan-out based on state["next"]
     workflow.add_conditional_edges(

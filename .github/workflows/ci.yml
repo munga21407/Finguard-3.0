@@ -5,6 +5,9 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  schedule:
+    # Nightly 03:00 UTC — runs the opt-in LLM-as-judge evals (llm-evals job).
+    - cron: "0 3 * * *"
 
 jobs:
   backend-lint-test:
@@ -57,6 +60,54 @@ jobs:
         env:
           DATABASE_URL: postgresql+asyncpg://finguard:finguard@localhost:5432/finguard
           REDIS_URL: redis://localhost:6379/0
+          MONGODB_URL: mongodb://localhost:27017/finguard_test
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672//
+          SECRET_KEY: ci-test-secret-key-not-for-production-32
+
+  llm-evals:
+    name: Agent Evals — LLM-as-judge (nightly)
+    # Schedule-only and non-blocking: the deterministic eval gate runs in
+    # backend-lint-test on every PR; this judges LLM narrative quality, which is
+    # non-deterministic and costs tokens, so it never blocks a merge.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: finguard
+          POSTGRES_PASSWORD: finguard
+          POSTGRES_DB: finguard
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Create test database
+        run: PGPASSWORD=finguard psql -h localhost -U finguard -d finguard -c "CREATE DATABASE finguard_test;"
+      - name: Run LLM-as-judge evals
+        run: uv run pytest tests/evals -m llm_judge -v
+        env:
+          RUN_LLM_EVALS: "1"
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DATABASE_URL: postgresql+asyncpg://finguard:finguard@localhost:5432/finguard
+          REDIS_URL: redis://localhost:6379/0
+          # Required settings; the judge evals never connect to these services.
           MONGODB_URL: mongodb://localhost:27017/finguard_test
           RABBITMQ_URL: amqp://guest:guest@localhost:5672//
           SECRET_KEY: ci-test-secret-key-not-for-production-32

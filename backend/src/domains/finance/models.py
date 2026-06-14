@@ -4,7 +4,19 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +27,19 @@ from src.infrastructure.database.postgres import Base
 class TransactionType(enum.StrEnum):
     DEBIT = "debit"
     CREDIT = "credit"
+
+
+class InvoiceEventType(enum.StrEnum):
+    """Domain events appended to the append-only ``invoice_events`` log.
+
+    The invoice's monetary state (``amount_paid`` / ``balance_due`` / ``status``)
+    is *derived* by folding these events — the materialized ``invoices`` row is a
+    synchronous projection of the fold (see ``finance/events.py``).  Extend with
+    ``CREDIT_NOTE_APPLIED`` / ``INVOICE_CANCELLED`` when those flows are wired.
+    """
+
+    INVOICE_ISSUED = "invoice_issued"
+    PAYMENT_APPLIED = "payment_applied"
 
 
 class InvoiceStatus(enum.StrEnum):
@@ -83,6 +108,40 @@ class Invoice(Base):
     )
 
     payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="invoice")
+
+
+class InvoiceEvent(Base):
+    """Append-only event log for the invoice lifecycle (event-sourcing).
+
+    Every monetary mutation to an invoice (issuance, payment application) is
+    recorded here as an immutable row.  ``sequence`` is a per-invoice monotonic
+    version starting at 1; the ``(invoice_id, sequence)`` uniqueness guarantees a
+    gap-free, replayable history (writers serialise on the invoice row's
+    ``FOR UPDATE`` lock).  ``amount`` carries the event's signed monetary
+    contribution — the invoice total for ``invoice_issued``, the paid amount for
+    ``payment_applied``.  Rows are never updated or deleted.
+    """
+
+    __tablename__ = "invoice_events"
+    __table_args__ = (
+        UniqueConstraint("invoice_id", "sequence", name="uq_invoice_events_invoice_seq"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[InvoiceEventType] = mapped_column(
+        Enum(InvoiceEventType, native_enum=False, length=50), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0"))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class Budget(Base):

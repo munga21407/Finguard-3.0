@@ -1,12 +1,13 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domains.finance.models import (
     Budget,
     Expense,
     Invoice,
+    InvoiceEvent,
     LedgerEntry,
     MpesaTransaction,
     Payment,
@@ -74,6 +75,41 @@ class InvoiceRepository:
         await self._session.flush()
         await self._session.refresh(invoice)
         return invoice
+
+
+class InvoiceEventRepository:
+    """Append-only access to the invoice event log.
+
+    There is no update or delete — events are immutable.  ``append`` must be
+    called while the parent invoice row is held ``FOR UPDATE`` so concurrent
+    writers cannot allocate the same ``sequence``.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def next_sequence(self, invoice_id: uuid.UUID) -> int:
+        """Next monotonic sequence for an invoice (1 for the first event)."""
+        current = await self._session.scalar(
+            select(func.max(InvoiceEvent.sequence)).where(
+                InvoiceEvent.invoice_id == invoice_id
+            )
+        )
+        return (current or 0) + 1
+
+    async def append(self, event: InvoiceEvent) -> InvoiceEvent:
+        self._session.add(event)
+        await self._session.flush()
+        await self._session.refresh(event)
+        return event
+
+    async def list_by_invoice(self, invoice_id: uuid.UUID) -> list[InvoiceEvent]:
+        result = await self._session.execute(
+            select(InvoiceEvent)
+            .where(InvoiceEvent.invoice_id == invoice_id)
+            .order_by(InvoiceEvent.sequence.asc())
+        )
+        return list(result.scalars().all())
 
 
 class ExpenseRepository:

@@ -8,11 +8,13 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import ConflictError, NotFoundError, UnprocessableError
+from src.domains.finance.events import InvoiceState, fold_invoice_events
 from src.domains.finance.models import (
     Budget,
     Expense,
     Invoice,
-    InvoiceStatus,
+    InvoiceEvent,
+    InvoiceEventType,
     LedgerEntry,
     MpesaTransaction,
     OutboxEvent,
@@ -21,6 +23,7 @@ from src.domains.finance.models import (
 from src.domains.finance.repository import (
     BudgetRepository,
     ExpenseRepository,
+    InvoiceEventRepository,
     InvoiceRepository,
     LedgerRepository,
     MpesaRepository,
@@ -52,6 +55,7 @@ class FinanceService:
         self._expense_repo = ExpenseRepository(session)
         self._mpesa_repo = MpesaRepository(session)
         self._payment_repo = PaymentRepository(session)
+        self._invoice_event_repo = InvoiceEventRepository(session)
         self._session = session
 
     async def post_ledger_entry(self, data: LedgerEntryCreate) -> LedgerEntry:
@@ -68,6 +72,25 @@ class FinanceService:
             **data.model_dump(), total=total, amount_paid=Decimal("0"), balance_due=total
         )
         invoice = await self._invoice_repo.create(invoice)
+        # Event sourcing: issuance is the first event in the invoice's append-only
+        # log.  The materialized row above is the projection of this single event;
+        # every later payment appends to the log and re-projects (see
+        # record_cash_payment / _project_invoice_from_events).
+        await self._invoice_event_repo.append(
+            InvoiceEvent(
+                invoice_id=invoice.id,
+                sequence=1,
+                event_type=InvoiceEventType.INVOICE_ISSUED,
+                amount=total,
+                payload={
+                    "invoice_number": invoice.invoice_number,
+                    "subtotal": float(data.subtotal),
+                    "tax": float(data.tax),
+                    "currency": invoice.currency,
+                },
+                occurred_at=invoice.created_at,
+            )
+        )
         self._session.add(
             OutboxEvent(
                 exchange="finguard.finance",
@@ -77,6 +100,24 @@ class FinanceService:
         )
         await self._session.commit()
         return invoice
+
+    async def _project_invoice_from_events(self, invoice: Invoice) -> InvoiceState:
+        """Re-derive an invoice's monetary fields from its event log.
+
+        Folds the full event history and applies the result to the materialized
+        ``invoices`` row in-place (caller owns the commit).  ``amount_paid`` and
+        ``balance_due`` are always overwritten so the row provably equals the
+        fold; ``status``/``paid_at`` are only touched when a payment has been
+        applied — manual statuses (DRAFT/SENT/OVERDUE) are left intact.
+        """
+        events = await self._invoice_event_repo.list_by_invoice(invoice.id)
+        state = fold_invoice_events(events)
+        invoice.amount_paid = state.amount_paid
+        invoice.balance_due = state.balance_due
+        if state.payment_status is not None:
+            invoice.status = state.payment_status
+            invoice.paid_at = state.paid_at
+        return state
 
     async def update_invoice(self, invoice_id: uuid.UUID, data: InvoiceUpdate) -> Invoice:
         invoice = await self._invoice_repo.get_by_id(invoice_id)
@@ -92,14 +133,25 @@ class FinanceService:
         invoice = await self._invoice_repo.get_by_id_for_update(invoice_id)
         if not invoice:
             raise NotFoundError("Invoice not found")
-        # Settle the monetary fields too — not just status/paid_at.  Leaving
-        # amount_paid/balance_due untouched would violate the
-        # ck_invoices_balance_due_consistent constraint (balance_due =
-        # total - amount_paid) and leave a "paid" invoice with a non-zero balance.
-        invoice.amount_paid = invoice.total
-        invoice.balance_due = Decimal("0")
-        invoice.status = InvoiceStatus.PAID
-        invoice.paid_at = datetime.now(UTC)
+        # Settle by appending a payment_applied event for the outstanding balance,
+        # then re-projecting — so the event log stays the single source of truth
+        # and the row never drifts from ck_invoices_balance_due_consistent. A
+        # no-op when the invoice is already fully settled.
+        remaining = invoice.balance_due
+        if remaining > Decimal("0"):
+            now = datetime.now(UTC)
+            sequence = await self._invoice_event_repo.next_sequence(invoice.id)
+            await self._invoice_event_repo.append(
+                InvoiceEvent(
+                    invoice_id=invoice.id,
+                    sequence=sequence,
+                    event_type=InvoiceEventType.PAYMENT_APPLIED,
+                    amount=remaining,
+                    payload={"reason": "manual_settlement"},
+                    occurred_at=now,
+                )
+            )
+            await self._project_invoice_from_events(invoice)
         invoice = await self._invoice_repo.save(invoice)
         await self._session.commit()
         return invoice
@@ -306,6 +358,30 @@ class FinanceService:
             raise NotFoundError("Invoice not found")
         return invoice
 
+    async def get_invoice_events(self, invoice_id: uuid.UUID) -> list[InvoiceEvent]:
+        """Return an invoice's append-only event history (oldest first)."""
+        invoice = await self._invoice_repo.get_by_id(invoice_id)
+        if not invoice:
+            raise NotFoundError("Invoice not found")
+        return await self._invoice_event_repo.list_by_invoice(invoice_id)
+
+    async def reconstruct_invoice(
+        self, invoice_id: uuid.UUID
+    ) -> tuple[Invoice, InvoiceState, list[InvoiceEvent]]:
+        """Fold an invoice's events into derived state for audit verification.
+
+        Returns the materialized invoice, the state derived purely from its event
+        log, and the events themselves — letting a caller assert the stored row
+        equals the fold (i.e. the projection has not drifted from the source of
+        truth).
+        """
+        invoice = await self._invoice_repo.get_by_id(invoice_id)
+        if not invoice:
+            raise NotFoundError("Invoice not found")
+        events = await self._invoice_event_repo.list_by_invoice(invoice_id)
+        state = fold_invoice_events(events)
+        return invoice, state, events
+
     async def create_budget(self, data: BudgetCreate) -> Budget:
         budget = Budget(**data.model_dump())
         budget = await self._budget_repo.create(budget)
@@ -338,18 +414,7 @@ class FinanceService:
                 f"Payment amount {data.amount} exceeds balance due {invoice.balance_due}"
             )
 
-        # Update invoice running totals
-        invoice.amount_paid += data.amount
-        invoice.balance_due -= data.amount
-        if invoice.balance_due == Decimal("0"):
-            invoice.status = InvoiceStatus.PAID
-            invoice.paid_at = datetime.now(UTC)
-        else:
-            # Partial settlement — reflect it in the status so the dashboard and
-            # Agent E watchdog don't treat a part-paid invoice as still fully open.
-            invoice.status = InvoiceStatus.PARTIALLY_PAID
-
-        # Persist the payment record
+        # Persist the payment record (the immutable money-movement row).
         payment = Payment(
             invoice_id=data.invoice_id,
             amount=data.amount,
@@ -359,6 +424,32 @@ class FinanceService:
             recorded_by=current_user.id,
         )
         payment = await self._payment_repo.create(payment)
+
+        # Event sourcing: append payment_applied to the invoice log, then derive
+        # the new amount_paid/balance_due/status by folding the full history.
+        # The invoice's FOR UPDATE lock (acquired above) serialises concurrent
+        # payments, so sequence allocation is race-free and the derived balance
+        # can never be over-credited. The status flips to PARTIALLY_PAID or PAID
+        # purely as a function of the events — the dashboard and Agent E watchdog
+        # then read a consistent state.
+        sequence = await self._invoice_event_repo.next_sequence(invoice.id)
+        await self._invoice_event_repo.append(
+            InvoiceEvent(
+                invoice_id=invoice.id,
+                sequence=sequence,
+                event_type=InvoiceEventType.PAYMENT_APPLIED,
+                amount=data.amount,
+                payload={
+                    "payment_id": str(payment.id),
+                    "vault": VaultType.CASH.value,
+                    "reference_note": data.reference_note,
+                    "recorded_by": str(current_user.id),
+                },
+                occurred_at=data.payment_date,
+                recorded_by=current_user.id,
+            )
+        )
+        await self._project_invoice_from_events(invoice)
 
         # Emit event via transactional outbox — guaranteed delivery even on crash
         self._session.add(

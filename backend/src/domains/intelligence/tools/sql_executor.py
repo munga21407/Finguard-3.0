@@ -26,6 +26,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from src.core.config import settings
+from src.domains.intelligence.observability import traced_tool
 from src.infrastructure.database.postgres import ReadOnlyAsyncSessionLocal
 
 logger = structlog.get_logger(__name__)
@@ -272,6 +273,7 @@ def make_sql_executor(session: AsyncSession) -> Any:
     return execute_sql
 
 
+@traced_tool("readonly_sql")
 async def execute_readonly_sql(query: str) -> list[dict[str, Any]]:
     """
     Execute a validated SELECT query using the read-only session factory.
