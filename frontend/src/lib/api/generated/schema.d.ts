@@ -261,6 +261,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/invoices/{invoice_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Invoice Events
+         * @description Append-only event history for an invoice (issuance, payments), oldest first.
+         */
+        get: operations["list_invoice_events_api_v1_finance_invoices__invoice_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/invoices/{invoice_id}/reconstruction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reconstruct Invoice
+         * @description Fold the invoice's event log and compare it to the materialized row.
+         *
+         *     Audit endpoint: ``matches_projection`` is true when the stored invoice equals
+         *     the state derived purely from its events — proving the read model has not
+         *     drifted from the append-only source of truth.
+         */
+        get: operations["reconstruct_invoice_api_v1_finance_invoices__invoice_id__reconstruction_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/expenses": {
         parameters: {
             query?: never;
@@ -926,6 +970,84 @@ export interface components {
             due_date?: string | null;
             /** Notes */
             notes?: string | null;
+        };
+        /** InvoiceEventResponse */
+        InvoiceEventResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Invoice Id
+             * Format: uuid
+             */
+            invoice_id: string;
+            /** Sequence */
+            sequence: number;
+            event_type: components["schemas"]["InvoiceEventType"];
+            /** Amount */
+            amount: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Recorded By */
+            recorded_by: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * InvoiceEventType
+         * @description Domain events appended to the append-only ``invoice_events`` log.
+         *
+         *     The invoice's monetary state (``amount_paid`` / ``balance_due`` / ``status``)
+         *     is *derived* by folding these events — the materialized ``invoices`` row is a
+         *     synchronous projection of the fold (see ``finance/events.py``).  Extend with
+         *     ``CREDIT_NOTE_APPLIED`` / ``INVOICE_CANCELLED`` when those flows are wired.
+         * @enum {string}
+         */
+        InvoiceEventType: "invoice_issued" | "payment_applied";
+        /**
+         * InvoiceReconstructionResponse
+         * @description An invoice's event history plus the state derived by folding it.
+         *
+         *     ``matches_projection`` lets an auditor confirm the stored (materialized)
+         *     invoice row equals the fold of its events — i.e. the read model has not
+         *     drifted from the append-only source of truth.
+         */
+        InvoiceReconstructionResponse: {
+            /**
+             * Invoice Id
+             * Format: uuid
+             */
+            invoice_id: string;
+            /** Event Count */
+            event_count: number;
+            /** Derived Total */
+            derived_total: string;
+            /** Derived Amount Paid */
+            derived_amount_paid: string;
+            /** Derived Balance Due */
+            derived_balance_due: string;
+            derived_status: components["schemas"]["InvoiceStatus"] | null;
+            /** Stored Amount Paid */
+            stored_amount_paid: string;
+            /** Stored Balance Due */
+            stored_balance_due: string;
+            stored_status: components["schemas"]["InvoiceStatus"];
+            /** Matches Projection */
+            matches_projection: boolean;
+            /** Events */
+            events: components["schemas"]["InvoiceEventResponse"][];
         };
         /** InvoiceResponse */
         InvoiceResponse: {
@@ -1807,6 +1929,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InvoiceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_invoice_events_api_v1_finance_invoices__invoice_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invoice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceEventResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconstruct_invoice_api_v1_finance_invoices__invoice_id__reconstruction_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invoice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceReconstructionResponse"];
                 };
             };
             /** @description Validation Error */
