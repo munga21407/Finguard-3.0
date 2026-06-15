@@ -7,7 +7,18 @@ class Settings(BaseSettings):
 
     ENVIRONMENT: str = "development"
     DEBUG: bool = False
+    # SECRET_KEY remains the general application secret and the verification key
+    # for *legacy* HS256 Verifiable Credentials (issued before the Ed25519
+    # migration). It MUST NOT be reused for new signing concerns.
     SECRET_KEY: str
+    # Dedicated signing key for user-authentication JWTs. Decoupled from
+    # SECRET_KEY so an auth-key rotation never touches the legacy-VC or CA trust
+    # roots. Defaults to SECRET_KEY when unset (see validator) for back-compat.
+    JWT_SECRET_KEY: str = ""
+    # Ed25519 internal-CA private key (32 raw bytes, hex-encoded). Signs agent
+    # cards and Verifiable Credentials. Required in production; outside prod a
+    # fixed dev-only key is derived (never from SECRET_KEY). See key_manager.py.
+    FINGUARD_CA_PRIVATE_KEY_HEX: str = ""
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
 
     DATABASE_URL: str
@@ -23,6 +34,10 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = ""
 
     JWT_ALGORITHM: str = "HS256"
+    # Enforce double-submit CSRF on cookie-authenticated mutating requests.
+    # Default on; the test suite disables it because tests authenticate via a
+    # dependency override and send no CSRF token. Never disable in production.
+    CSRF_ENABLED: bool = True
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     MAX_LOGIN_ATTEMPTS: int = 5
@@ -40,11 +55,11 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
-    # List-price estimates (USD per 1M tokens) used only to attribute per-agent
-    # LLM spend on the /metrics dashboard. Override via env when Google's
-    # published Gemini Flash pricing changes — these defaults are approximate.
-    GEMINI_INPUT_USD_PER_MTOK: float = 0.30
-    GEMINI_OUTPUT_USD_PER_MTOK: float = 2.50
+    # Per-agent LLM cost attribution is now model-keyed and externally
+    # configurable via the LLM_PRICING_JSON env var — see
+    # src/domains/intelligence/llm/pricing.py. The old hardcoded single-rate
+    # GEMINI_*_USD_PER_MTOK settings were removed to stop cost metrics drifting
+    # as list prices change or a second model is introduced.
 
     # Observability — Bearer token protecting the /metrics endpoint.
     # Leave empty to disable auth (development only; never empty in production).
@@ -57,6 +72,19 @@ class Settings(BaseSettings):
     CBK_FX_API_KEY: str = ""           # Central Bank of Kenya FX rates API
     METROPOL_API_KEY: str = ""         # Metropol credit bureau API
     KRA_ECITIZEN_API_KEY: str = ""     # KRA e-Citizen VAT/tax status API
+
+    @field_validator("JWT_SECRET_KEY", mode="before")
+    @classmethod
+    def default_jwt_secret(cls, v: str, info: ValidationInfo) -> str:
+        """Fall back to SECRET_KEY when a dedicated JWT key isn't configured.
+
+        This keeps existing single-secret deployments working unchanged while
+        allowing operators to rotate the auth key independently by setting
+        JWT_SECRET_KEY explicitly.
+        """
+        if v:
+            return v
+        return str((info.data or {}).get("SECRET_KEY", ""))
 
     @field_validator("CELERY_BROKER_URL", mode="before")
     @classmethod
@@ -104,6 +132,11 @@ class Settings(BaseSettings):
             problems.append("METRICS_AUTH_SECRET must be set")
         if "*" in self.ALLOWED_ORIGINS:
             problems.append("ALLOWED_ORIGINS must not contain '*'")
+        if not self.FINGUARD_CA_PRIVATE_KEY_HEX:
+            problems.append(
+                "FINGUARD_CA_PRIVATE_KEY_HEX must be set (Ed25519 CA key for "
+                "agent cards / Verifiable Credentials)"
+            )
 
         if problems:
             raise ValueError(

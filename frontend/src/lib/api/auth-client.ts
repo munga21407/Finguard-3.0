@@ -59,9 +59,10 @@ class AuthAPIClient {
   // ── Get authenticated user ─────────────────────────────────────────────────
 
   async getMe(): Promise<User> {
-    const token = tokenManager.getAccessToken();
+    // Authenticates via the HttpOnly access cookie — credentials: "include" is
+    // required so the browser attaches it on this cross-origin request.
     const response = await fetch(`${BASE_URL}${ENDPOINTS.AUTH.ME}`, {
-      headers: { Authorization: `Bearer ${token ?? ""}` },
+      credentials: "include",
     });
 
     if (!response.ok) throw new Error("Failed to load current user");
@@ -106,25 +107,24 @@ class AuthAPIClient {
   }
 
   // ── Logout ─────────────────────────────────────────────────────────────────
-  // credentials: "include" sends the HttpOnly refresh cookie so the backend
-  // can blacklist it.  Always swallows errors so the caller always proceeds
-  // to clear local state.
+  // credentials: "include" sends the HttpOnly access + refresh cookies so the
+  // backend can blacklist both JTIs.  POST /logout is CSRF-protected, so the
+  // X-CSRF-Token header is required.  Always swallows errors so the caller
+  // always proceeds to clear local state.
 
   async logout(): Promise<void> {
-    const token = tokenManager.getAccessToken();
-    if (!token) return;
-
+    const csrf = tokenManager.getCsrfToken();
     try {
       await fetch(`${BASE_URL}${ENDPOINTS.AUTH.LOGOUT}`, {
         method: "POST",
-        credentials: "include",   // send refresh cookie so backend can blacklist it
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(csrf ? { "X-CSRF-Token": csrf } : {}),
         },
       });
     } catch {
-      // Network errors are swallowed — local tokens are cleared regardless.
+      // Network errors are swallowed — local state is cleared regardless.
     }
   }
 }

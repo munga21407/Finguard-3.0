@@ -8,6 +8,12 @@ from jose import JWTError, jwt
 from src.core.config import settings
 from src.core.exceptions import UnauthorizedError
 
+# Auth cookie names. The access token is delivered as an HttpOnly cookie so it
+# is invisible to JS (XSS-exfiltration safe); ``fg_session`` is a non-HttpOnly
+# presence marker the Next.js Edge middleware reads to gate /dashboard routes.
+ACCESS_COOKIE_NAME = "fg_access_token"
+SESSION_COOKIE_NAME = "fg_session"
+
 # bcrypt has a hard 72-byte limit on the input; longer secrets must be truncated
 # rather than raising.  We use the bcrypt library directly — passlib 1.7.4 is
 # unmaintained and breaks against bcrypt >= 4.1 (it reads the removed
@@ -40,7 +46,7 @@ def create_access_token(subject: str | int, extra: dict[str, Any] | None = None)
     }
     if extra:
         payload.update(extra)
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
 def create_refresh_token(subject: str | int, family_id: str | None = None) -> str:
@@ -58,11 +64,11 @@ def create_refresh_token(subject: str | int, family_id: str | None = None) -> st
         "exp": datetime.now(UTC) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
         "type": "refresh",
     }
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
 def decode_token(token: str) -> dict[str, Any]:
     try:
-        return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
     except JWTError as exc:
         raise UnauthorizedError("Invalid or expired token") from exc

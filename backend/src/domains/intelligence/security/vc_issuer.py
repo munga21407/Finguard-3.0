@@ -12,8 +12,20 @@ Two credential types
    executing any database write to prove they hold a valid, in-scope credential for
    that exact transaction.
 
-Both types are signed with HS256 using the application ``SECRET_KEY``. The agent_did
-field from the CA-signed AgentCard is embedded so validators can cross-check identity.
+Signing (Ed25519, asymmetric)
+-----------------------------
+VCs are signed with the internal CA's **Ed25519** key (``key_manager.py``) — the
+same trust root that signs agent cards — so the audit trail is *independently
+verifiable* with the CA public key and is no longer forgeable by anyone holding
+the symmetric application secret. Tokens use a compact ``header.payload.signature``
+encoding (base64url JSON segments); the header records ``"alg": "EdDSA"``.
+
+Backward compatibility
+----------------------
+VCs issued before this migration are JWTs signed with HS256 over ``SECRET_KEY``.
+``_decode_vc`` inspects the token header and routes legacy ``HS256`` tokens
+through ``jose`` + ``SECRET_KEY`` so existing ``trust_log`` entries still verify.
+New tokens are always EdDSA.
 
 Sprint 6 additions
 -------------------
@@ -23,21 +35,114 @@ Sprint 6 additions
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import jwt
+from jose import JWTError, jwt
 
 from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.security.agent_cards import get_card
+from src.domains.intelligence.security.key_manager import sign_data, verify_signature
 from src.infrastructure.database.mongodb import get_mongo_db
 
 COLLECTION = "trust_log"
 VC_TTL_DAYS = 365
 TASK_VC_TTL_SECONDS = 300  # 5-minute hard TTL for task-scoped VCs
+
+# Compact-token header for EdDSA-signed VCs. The signature covers the exact
+# ``<header_seg>.<payload_seg>`` ASCII string, so verification reconstructs the
+# signing input from the received segments rather than re-serialising claims.
+_VC_HEADER: dict[str, str] = {"alg": "EdDSA", "typ": "FG-VC"}
+
+
+class VCError(Exception):
+    """Raised when a Verifiable Credential fails to decode, verify, or expires."""
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(segment: str) -> bytes:
+    padding = "=" * (-len(segment) % 4)
+    return base64.urlsafe_b64decode(segment + padding)
+
+
+def _encode_vc(claims: dict[str, Any]) -> str:
+    """Serialise claims into an EdDSA-signed compact VC token."""
+    header_seg = _b64url_encode(
+        json.dumps(_VC_HEADER, sort_keys=True, separators=(",", ":")).encode()
+    )
+    payload_seg = _b64url_encode(
+        json.dumps(claims, sort_keys=True, separators=(",", ":"), default=str).encode()
+    )
+    signing_input = f"{header_seg}.{payload_seg}".encode("ascii")
+    signature = sign_data(signing_input)
+    return f"{header_seg}.{payload_seg}.{_b64url_encode(signature)}"
+
+
+def _enforce_exp(claims: dict[str, Any]) -> None:
+    """Reject an expired VC (EdDSA path; jose enforces exp for legacy tokens)."""
+    exp = claims.get("exp")
+    if exp is None:
+        return
+    try:
+        expired = int(exp) < int(datetime.now(UTC).timestamp())
+    except (TypeError, ValueError) as exc:
+        raise VCError(f"VC has a non-numeric exp claim: {exp!r}") from exc
+    if expired:
+        raise VCError("VC has expired")
+
+
+def _decode_vc(token: str) -> dict[str, Any]:
+    """Verify a VC token's signature + expiry and return its claims.
+
+    EdDSA tokens are verified against the CA public key. Legacy HS256 tokens
+    (``alg: HS256`` in the header) fall back to ``jose`` + ``SECRET_KEY``.
+
+    Raises:
+        VCError — malformed token, unsupported algorithm, bad signature, or
+            expired credential.
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise VCError("Malformed VC token (expected three segments)")
+    header_seg, payload_seg, sig_seg = parts
+
+    try:
+        header = json.loads(_b64url_decode(header_seg))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise VCError("Malformed VC header") from exc
+
+    alg = header.get("alg")
+    if alg == "EdDSA":
+        signing_input = f"{header_seg}.{payload_seg}".encode("ascii")
+        try:
+            signature = _b64url_decode(sig_seg)
+        except ValueError as exc:
+            raise VCError("Malformed VC signature") from exc
+        if not verify_signature(signing_input, signature):
+            raise VCError("VC signature verification failed")
+        try:
+            claims: dict[str, Any] = json.loads(_b64url_decode(payload_seg))
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise VCError("Malformed VC payload") from exc
+        _enforce_exp(claims)
+        return claims
+
+    if alg == "HS256":
+        # Legacy VC issued before the Ed25519 migration — jose enforces both the
+        # HMAC signature and the exp claim.
+        try:
+            return jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        except JWTError as exc:
+            raise VCError(f"Legacy HS256 VC verification failed: {exc}") from exc
+
+    raise VCError(f"Unsupported VC algorithm: {alg!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +205,7 @@ async def issue_vc(
         MongoDB ObjectId string of the inserted trust_log document.
     """
     claims = _build_audit_vc_claims(agent_id, operation, operation_summary, payload)
-    token = jwt.encode(claims, settings.SECRET_KEY, algorithm="HS256")
+    token = _encode_vc(claims)
 
     doc = {
         "vc_token": token,
@@ -118,8 +223,11 @@ async def issue_vc(
 
 
 def verify_vc(token: str) -> dict[str, Any]:
-    """Decode and verify an audit VC token. Raises ``jose.JWTError`` on failure."""
-    return jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+    """Decode and verify a VC token (EdDSA, or legacy HS256).
+
+    Raises ``VCError`` on a malformed token, bad signature, or expiry.
+    """
+    return _decode_vc(token)
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +281,7 @@ async def issue_task_scoped_vc(
         "payload_hash": _payload_hash(payload),
     }
 
-    token = jwt.encode(claims, settings.SECRET_KEY, algorithm="HS256")
+    token = _encode_vc(claims)
 
     doc = {
         "vc_token": token,
@@ -251,10 +359,10 @@ def validate_task_vc(
         Decoded and validated claims dict.
 
     Raises:
-        jose.JWTError: if signature is invalid or token is expired.
+        VCError: if the signature is invalid or the token is expired.
         ValueError: if vc_type, jti, or sub claims don't match expectations.
     """
-    claims = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+    claims = _decode_vc(token)
 
     if claims.get("vc_type") != "task_scoped":
         raise ValueError(

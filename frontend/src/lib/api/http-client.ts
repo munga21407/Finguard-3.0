@@ -1,18 +1,22 @@
 // ─── Axios HTTP Client ────────────────────────────────────────────────────────
 // Singleton Axios instance used for all non-auth API calls.
 //
-// withCredentials: true — needed so the browser sends the fg_csrf cookie on
-// cross-origin requests (frontend :3000 → backend :8000).  The fg_refresh_token
-// HttpOnly cookie is path-scoped to /api/v1/identity and only sent there.
+// withCredentials: true — the browser sends the HttpOnly access cookie
+// (fg_access_token, authenticates every request) and the fg_csrf cookie
+// cross-origin (frontend :3000 → backend :8000).  The fg_refresh_token cookie is
+// path-scoped to /api/v1/identity and only sent there.
 //
 // Request interceptor:
-//   - Injects Authorization: Bearer header from localStorage
-//   - Injects Idempotency-Key for /ai-insights and /ai-actions only
+//   - Injects X-CSRF-Token (from the fg_csrf cookie) on mutating requests —
+//     required because the access cookie is auto-sent, so every mutation is
+//     CSRF-eligible and the backend enforces the double-submit token.
+//   - Injects Idempotency-Key for /ai-insights and /ai-actions only.
+//   - No Authorization header: auth rides the HttpOnly cookie, invisible to JS.
 //
 // Response interceptor:
-//   - On 401: reads the fg_csrf cookie, sends X-CSRF-Token header, calls
-//     /token/refresh (which reads the HttpOnly refresh cookie automatically),
-//     updates the stored access token, and retries the original request once.
+//   - On 401: calls /token/refresh (reads the HttpOnly refresh cookie + sends
+//     the CSRF header), which rotates the access cookie, then retries the
+//     original request once.
 //   - On refresh failure: clears local state and redirects to /login.
 
 import axios, {
@@ -33,19 +37,27 @@ const httpClient: AxiosInstance = axios.create({
   withCredentials: true,  // send cookies cross-origin (CORS allow_credentials: true on server)
 });
 
-// ── Request interceptor — Bearer token + idempotency key ─────────────────────
+// ── Request interceptor — CSRF token + idempotency key ───────────────────────
+const MUTATING_METHODS = new Set(["post", "put", "patch", "delete"]);
+
 httpClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    const token = tokenManager.getAccessToken();
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    const method = (config.method ?? "get").toLowerCase();
+
+    // Mutating requests carry the double-submit CSRF token. The backend rejects
+    // any cookie-authenticated mutation lacking a matching X-CSRF-Token.
+    if (MUTATING_METHODS.has(method)) {
+      const csrf = tokenManager.getCsrfToken();
+      if (csrf) {
+        config.headers["X-CSRF-Token"] = csrf;
+      }
     }
 
     // Only /ai-insights and /ai-actions need Idempotency-Key — they may
     // trigger side-effecting agent runs.  /intent and /conversation do not.
     const url = config.url ?? "";
     const needsIdempotencyKey =
-      config.method?.toLowerCase() === "post" &&
+      method === "post" &&
       (url.includes("/intelligence/ai-insights") ||
         url.includes("/intelligence/ai-actions"));
 
@@ -61,14 +73,14 @@ httpClient.interceptors.request.use(
 // ── Response interceptor — silent refresh on 401 ─────────────────────────────
 let isRefreshing = false;
 let pendingQueue: Array<{
-  resolve: (token: string) => void;
+  resolve: () => void;
   reject: (err: unknown) => void;
 }> = [];
 
-function processPendingQueue(error: unknown, token: string | null) {
+function processPendingQueue(error: unknown) {
   pendingQueue.forEach(({ resolve, reject }) => {
     if (error) reject(error);
-    else resolve(token!);
+    else resolve();
   });
   pendingQueue = [];
 }
@@ -92,12 +104,9 @@ httpClient.interceptors.response.use(
     }
 
     if (isRefreshing) {
-      return new Promise((resolve, reject) => {
+      return new Promise<void>((resolve, reject) => {
         pendingQueue.push({ resolve, reject });
-      }).then((token) => {
-        originalRequest.headers.Authorization = `Bearer ${token}`;
-        return httpClient(originalRequest);
-      });
+      }).then(() => httpClient(originalRequest));
     }
 
     originalRequest._retry = true;
@@ -108,25 +117,20 @@ httpClient.interceptors.response.use(
       if (!csrf) throw new Error("No CSRF token available for refresh");
 
       // POST without body — the HttpOnly refresh cookie is sent automatically
-      // by the browser because withCredentials: true is set on this client.
-      const { data } = await axios.post(
-        `${BASE_URL}${ENDPOINTS.AUTH.REFRESH}`,
-        null,
-        {
-          withCredentials: true,
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRF-Token": csrf,
-          },
-        }
-      );
+      // (withCredentials). The response rotates the HttpOnly access cookie, so
+      // the retried request re-authenticates via the cookie with no token in JS.
+      await axios.post(`${BASE_URL}${ENDPOINTS.AUTH.REFRESH}`, null, {
+        withCredentials: true,
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrf,
+        },
+      });
 
-      tokenManager.setTokens(data.access_token);
-      processPendingQueue(null, data.access_token);
-      originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
+      processPendingQueue(null);
       return httpClient(originalRequest);
     } catch (refreshError) {
-      processPendingQueue(refreshError, null);
+      processPendingQueue(refreshError);
       tokenManager.clearTokens();
       if (typeof window !== "undefined") window.location.href = "/login";
       return Promise.reject(refreshError);

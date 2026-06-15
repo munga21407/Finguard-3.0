@@ -17,6 +17,7 @@ from prometheus_client import Counter, Histogram
 
 from src.core.config import settings
 from src.domains.intelligence import llm_client
+from src.domains.intelligence.llm.pricing import cost_usd
 from src.domains.intelligence.llm_client import (
     agent_context,
     current_agent_id,
@@ -68,10 +69,7 @@ def test_tokens_cost_and_calls_attributed_to_agent() -> None:
     assert _sample(llm_client.AGENT_LLM_TOKENS, **labels_completion) == c0 + 200
     assert _sample(llm_client.AGENT_LLM_CALLS, **call_labels) == calls0 + 1
 
-    expected_cost = (
-        1000 / 1_000_000 * settings.GEMINI_INPUT_USD_PER_MTOK
-        + 200 / 1_000_000 * settings.GEMINI_OUTPUT_USD_PER_MTOK
-    )
+    expected_cost = cost_usd(model, 1000, 200)
     assert _sample(llm_client.AGENT_LLM_COST_USD, **cost_labels) == cost0 + expected_cost
 
 

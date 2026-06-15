@@ -15,6 +15,7 @@ from slowapi.errors import RateLimitExceeded
 
 import src.core.metrics as _metrics  # noqa: F401 — registers all custom collectors
 from src.core.config import settings
+from src.core.csrf import CSRFMiddleware
 from src.core.exceptions import register_exception_handlers
 from src.core.logging import configure_logging
 from src.domains.crm.router import router as crm_router
@@ -109,6 +110,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Double-submit CSRF guard for cookie-authenticated mutations. Added after CORS
+# so it sits inside the CORS layer — preflight OPTIONS (a safe method) passes
+# through untouched and cross-origin error responses still carry CORS headers.
+app.add_middleware(CSRFMiddleware)
 
 Instrumentator(
     should_group_status_codes=True,

@@ -4,11 +4,11 @@
 // Wraps the entire app. Provides: user, isAuthenticated, login, register, logout.
 //
 // Bootstrap strategy (HttpOnly cookie era):
-//   The refresh token now lives in an HttpOnly cookie — we cannot read it from
-//   JS.  Instead, tokenManager.hasSession() checks for the non-HttpOnly fg_csrf
-//   cookie (set by the backend on login/refresh, cleared on logout) OR the
-//   presence of an access token in localStorage.  If either signal is present
-//   we try to hydrate; otherwise we skip the network round-trip entirely.
+//   Both the access and refresh tokens are HttpOnly cookies invisible to JS.
+//   tokenManager.hasSession() checks the non-HttpOnly fg_csrf / fg_session
+//   markers (set on login, cleared on logout); if present we hydrate the user
+//   from GET /me (authenticated by the access cookie), falling back to a silent
+//   refresh on 401.  Otherwise we skip the network round-trip entirely.
 
 import {
   createContext,
@@ -43,14 +43,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     async function hydrate() {
       try {
-        const accessToken = tokenManager.getAccessToken();
-        if (!accessToken || tokenManager.isTokenExpired(accessToken)) {
-          // Try a silent refresh via the HttpOnly cookie.  The backend reads
-          // the cookie automatically; we just need the CSRF header.
-          const tokens = await authClient.refreshToken();
-          tokenManager.setTokens(tokens.access_token);
+        let me;
+        try {
+          // Authenticated by the HttpOnly access cookie (sent automatically).
+          me = await authClient.getMe();
+        } catch {
+          // Access cookie missing/expired — try a silent refresh (reads the
+          // HttpOnly refresh cookie + CSRF header) then retry /me.
+          await authClient.refreshToken();
+          me = await authClient.getMe();
         }
-        const me = await authClient.getMe();
         if (!cancelled) setUser(me);
       } catch {
         // Refresh failed or /me failed — treat as logged out.
@@ -69,10 +71,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // ── Login ─────────────────────────────────────────────────────────────────
   const login = useCallback(
     async (email: string, password: string) => {
-      const tokens = await authClient.login({ email, password });
-      // Store the access token; the refresh + CSRF cookies are set by the
-      // backend response and managed by the browser automatically.
-      tokenManager.setTokens(tokens.access_token);
+      // The backend sets the HttpOnly access + refresh cookies and the
+      // non-HttpOnly CSRF/session cookies on this response; the browser manages
+      // them automatically, so there is nothing to store client-side.
+      await authClient.login({ email, password });
       setUser(await authClient.getMe());
       router.push("/dashboard");
     },

@@ -11,12 +11,12 @@ import uuid
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import ForbiddenError, UnauthorizedError
-from src.core.security import decode_token
+from src.core.security import ACCESS_COOKIE_NAME, decode_token
 from src.domains.identity.models import User
 from src.domains.identity.permissions import Permission, has_permission
 from src.domains.identity.repository import UserRepository
@@ -27,12 +27,18 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
-    if credentials is None:
-        raise UnauthorizedError("Missing Authorization header")
-    payload = decode_token(credentials.credentials)
+    # Prefer the HttpOnly access cookie (browser sessions); fall back to the
+    # Authorization: Bearer header for programmatic / non-browser clients.
+    token = request.cookies.get(ACCESS_COOKIE_NAME) or (
+        credentials.credentials if credentials else None
+    )
+    if not token:
+        raise UnauthorizedError("Missing authentication credentials")
+    payload = decode_token(token)
     raw_id: str | None = payload.get("sub")
     if not raw_id:
         raise UnauthorizedError("Invalid token payload")

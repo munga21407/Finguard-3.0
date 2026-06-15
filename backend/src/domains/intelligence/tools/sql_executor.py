@@ -206,8 +206,13 @@ def _validate(query: str) -> None:
       2. sqlglot AST validation — deterministic, bypass-proof structural check.
     """
     stripped = query.strip()
-    if not stripped.upper().startswith("SELECT"):
-        raise ValueError("Only SELECT queries are permitted")
+    # Allow read-only CTEs (``WITH … SELECT``) as well as plain SELECTs. The
+    # sqlglot AST walk below is the authoritative gate: it rejects any non-Select
+    # root and any DML/DDL node nested inside a CTE body, so widening this leading
+    # keyword check does not weaken the guard (verified: a CTE wrapping a
+    # DELETE/INSERT still trips the forbidden-node walk in _ast_validate).
+    if not stripped.upper().startswith(("SELECT", "WITH")):
+        raise ValueError("Only SELECT/WITH (CTE) queries are permitted")
     if _FORBIDDEN.search(stripped):
         raise ValueError("Query contains forbidden keyword")
     # AST check is the authoritative gate — runs even when the regex passes,

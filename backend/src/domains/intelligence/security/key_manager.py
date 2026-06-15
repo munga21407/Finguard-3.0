@@ -13,9 +13,13 @@ Key loading priority
    Set this in production using your secrets manager (e.g. AWS Secrets Manager,
    HashiCorp Vault, or Kubernetes Secrets mounted as env vars).
 
-2. Deterministic derivation from ``SECRET_KEY`` via SHA-256 (development fallback).
-   This ensures a stable key across restarts WITHOUT hardcoding key material.
-   The derivation domain string "finguard-ca-ed25519:" prevents cross-context reuse.
+2. Fixed dev-only seed (development / test fallback). When no explicit key is
+   provided outside production, the CA key is derived from a constant domain
+   string — **never** from the application auth secret (``SECRET_KEY``). This
+   keeps the CA trust root fully decoupled from authentication: rotating one
+   never silently changes the other. Production refuses to boot without an
+   explicit key (same fail-in-prod / warn-in-dev contract as the read-only DB
+   engine and schema-migration guards).
 
 NEVER commit a real FINGUARD_CA_PRIVATE_KEY_HEX value to version control.
 Generate one with:  python -c "import secrets; print(secrets.token_hex(32))"
@@ -23,7 +27,6 @@ Generate one with:  python -c "import secrets; print(secrets.token_hex(32))"
 from __future__ import annotations
 
 import hashlib
-import os
 from functools import lru_cache
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -32,11 +35,18 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from src.core.config import settings
+
+# Fixed, public dev-only derivation domain. Produces a stable key across local
+# restarts WITHOUT coupling to SECRET_KEY and without embedding usable
+# production key material in source. Only ever used outside production.
+_DEV_KEY_DOMAIN = b"finguard-ca-ed25519:dev-only-fixed-seed:v1"
+
 
 @lru_cache(maxsize=1)
 def _load_ca_private_key() -> Ed25519PrivateKey:
     """Load or derive the CA private key (cached for the process lifetime)."""
-    raw_hex = os.environ.get("FINGUARD_CA_PRIVATE_KEY_HEX", "").strip()
+    raw_hex = settings.FINGUARD_CA_PRIVATE_KEY_HEX.strip()
     if raw_hex:
         raw_bytes = bytes.fromhex(raw_hex)
         if len(raw_bytes) != 32:
@@ -46,9 +56,18 @@ def _load_ca_private_key() -> Ed25519PrivateKey:
             )
         return Ed25519PrivateKey.from_private_bytes(raw_bytes)
 
-    # Dev fallback: deterministic derivation — stable across restarts, never random
-    secret = os.environ.get("SECRET_KEY", "change-me-in-production")
-    seed = hashlib.sha256(f"finguard-ca-ed25519:{secret}".encode()).digest()
+    if settings.ENVIRONMENT == "production":
+        raise RuntimeError(
+            "FINGUARD_CA_PRIVATE_KEY_HEX must be set in production. The Ed25519 "
+            "internal CA signs agent cards and Verifiable Credentials; it must "
+            "never be derived implicitly. Generate one with "
+            "`python -c \"import secrets; print(secrets.token_hex(32))\"` and "
+            "inject it via your secrets manager."
+        )
+
+    # Dev/test only: deterministic key from a fixed domain string — stable across
+    # restarts, and decoupled from the auth secret.
+    seed = hashlib.sha256(_DEV_KEY_DOMAIN).digest()
     return Ed25519PrivateKey.from_private_bytes(seed)
 
 

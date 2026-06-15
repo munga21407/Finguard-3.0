@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import settings
 from src.core.csrf import CSRF_COOKIE_NAME, generate_csrf_token, require_csrf_token
 from src.core.exceptions import UnauthorizedError
-from src.core.security import decode_token
+from src.core.security import ACCESS_COOKIE_NAME, SESSION_COOKIE_NAME, decode_token
 from src.domains.identity.dependencies import CurrentUser, RequireUserManage
 from src.domains.identity.schemas import (
     AccessTokenResponse,
@@ -35,14 +35,29 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 _REFRESH_COOKIE = "fg_refresh_token"
 _REFRESH_COOKIE_PATH = "/api/v1/identity"   # only sent to auth endpoints
 _COOKIE_MAX_AGE = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86_400
+_ACCESS_COOKIE_MAX_AGE = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
 # secure=True requires HTTPS — safe to enable only in production.
 # Never set secure=True behind HTTP in development or tests; the browser
 # silently drops the cookie.
 _COOKIE_SECURE = settings.ENVIRONMENT == "production"
 
 
-def _set_auth_cookies(response: Response, refresh_token: str, csrf_token: str) -> None:
-    """Attach the HttpOnly refresh-token cookie and the JS-readable CSRF cookie."""
+def _set_auth_cookies(
+    response: Response, access_token: str, refresh_token: str, csrf_token: str
+) -> None:
+    """Set the access (HttpOnly), refresh (HttpOnly), CSRF, and session cookies."""
+    # Access token — HttpOnly so JS can't read it (XSS-exfiltration safe), sent
+    # to every API path. SameSite=strict; the double-submit CSRF token guards
+    # cross-site mutations.
+    response.set_cookie(
+        key=ACCESS_COOKIE_NAME,
+        value=access_token,
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite="strict",
+        path="/",
+        max_age=_ACCESS_COOKIE_MAX_AGE,
+    )
     response.set_cookie(
         key=_REFRESH_COOKIE,
         value=refresh_token,
@@ -63,10 +78,28 @@ def _set_auth_cookies(response: Response, refresh_token: str, csrf_token: str) -
         path="/",
         max_age=_COOKIE_MAX_AGE,
     )
+    # Non-HttpOnly presence marker for the Next.js Edge middleware (which cannot
+    # read the HttpOnly access cookie). SameSite=lax so top-level navigations
+    # still see it. Carries no token material — just "a session exists".
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value="1",
+        httponly=False,
+        secure=_COOKIE_SECURE,
+        samesite="lax",
+        path="/",
+        max_age=_COOKIE_MAX_AGE,
+    )
 
 
 def _clear_auth_cookies(response: Response) -> None:
-    """Expire both auth cookies (forces the browser to delete them on receipt)."""
+    """Expire every auth cookie (forces the browser to delete them on receipt)."""
+    response.delete_cookie(
+        key=ACCESS_COOKIE_NAME,
+        path="/",
+        samesite="strict",
+        secure=_COOKIE_SECURE,
+    )
     response.delete_cookie(
         key=_REFRESH_COOKIE,
         path=_REFRESH_COOKIE_PATH,
@@ -77,6 +110,12 @@ def _clear_auth_cookies(response: Response) -> None:
         key=CSRF_COOKIE_NAME,
         path="/",
         samesite="strict",
+        secure=_COOKIE_SECURE,
+    )
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path="/",
+        samesite="lax",
         secure=_COOKIE_SECURE,
     )
 
@@ -99,13 +138,16 @@ async def login(
 ) -> AccessTokenResponse:
     """Authenticate and issue tokens.
 
-    The access token is returned in the JSON body.  The refresh token is set as
-    an HttpOnly, SameSite=Strict cookie so it is invisible to JavaScript and
-    therefore safe from XSS exfiltration.  A non-HttpOnly CSRF cookie is also
-    set for use by the double-submit CSRF pattern on /token/refresh.
+    The access token is set as an HttpOnly, SameSite=Strict cookie (invisible to
+    JS, safe from XSS exfiltration) and also returned in the JSON body for
+    non-browser clients. The refresh token is likewise an HttpOnly cookie. A
+    non-HttpOnly CSRF cookie is set for the double-submit pattern that guards all
+    cookie-authenticated mutations.
     """
     result = await IdentityService(db).login(data.email, data.password)
-    _set_auth_cookies(response, result.refresh_token, generate_csrf_token())
+    _set_auth_cookies(
+        response, result.access_token, result.refresh_token, generate_csrf_token()
+    )
     return AccessTokenResponse(access_token=result.access_token)
 
 
@@ -127,7 +169,9 @@ async def refresh(
     if not refresh_cookie:
         raise UnauthorizedError("No refresh token cookie present")
     result = await IdentityService(db).refresh(refresh_cookie)
-    _set_auth_cookies(response, result.refresh_token, generate_csrf_token())
+    _set_auth_cookies(
+        response, result.access_token, result.refresh_token, generate_csrf_token()
+    )
     return AccessTokenResponse(access_token=result.access_token)
 
 
@@ -152,8 +196,13 @@ async def logout(
     so the client can always clear its local session.
     Clears both auth cookies so the browser drops them immediately.
     """
-    if credentials is not None:
-        await _blacklist_token(credentials.credentials, fallback_ttl=900)
+    # Blacklist the access token from whichever transport carried it — the
+    # HttpOnly cookie (browser) or the Authorization header (API client).
+    access_token = request.cookies.get(ACCESS_COOKIE_NAME) or (
+        credentials.credentials if credentials is not None else None
+    )
+    if access_token is not None:
+        await _blacklist_token(access_token, fallback_ttl=900)
     refresh_cookie = request.cookies.get(_REFRESH_COOKIE)
     if refresh_cookie:
         await _blacklist_token(

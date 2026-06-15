@@ -18,6 +18,7 @@ _BASE = {
 _STRONG_SECRET = "x" * 40
 _RO_URL = "postgresql+asyncpg://finguard_readonly:pw@h:5432/finguard"
 _METRICS = "m" * 32
+_CA_KEY = "a" * 64  # 32-byte Ed25519 CA key, hex-encoded
 
 
 def _settings(**over: object) -> Settings:
@@ -29,6 +30,17 @@ def test_dev_allows_placeholder_secret() -> None:
     assert s.ENVIRONMENT == "development"
 
 
+def test_jwt_secret_defaults_to_secret_key() -> None:
+    s = _settings(SECRET_KEY=_STRONG_SECRET)
+    assert s.JWT_SECRET_KEY == _STRONG_SECRET
+
+
+def test_jwt_secret_can_be_decoupled() -> None:
+    s = _settings(SECRET_KEY=_STRONG_SECRET, JWT_SECRET_KEY="y" * 40)
+    assert s.JWT_SECRET_KEY == "y" * 40
+    assert s.JWT_SECRET_KEY != s.SECRET_KEY
+
+
 def test_production_valid_config_boots() -> None:
     s = _settings(
         ENVIRONMENT="production",
@@ -36,6 +48,7 @@ def test_production_valid_config_boots() -> None:
         DEBUG=False,
         DATABASE_READONLY_URL=_RO_URL,
         METRICS_AUTH_SECRET=_METRICS,
+        FINGUARD_CA_PRIVATE_KEY_HEX=_CA_KEY,
         ALLOWED_ORIGINS=["https://app.finguard.io"],
     )
     assert s.ENVIRONMENT == "production"
@@ -50,6 +63,7 @@ def test_production_valid_config_boots() -> None:
         {"DATABASE_READONLY_URL": ""},
         {"METRICS_AUTH_SECRET": ""},
         {"ALLOWED_ORIGINS": ["*"]},
+        {"FINGUARD_CA_PRIVATE_KEY_HEX": ""},  # CA key required in production
     ],
 )
 def test_production_rejects_unsafe_config(override: dict) -> None:
@@ -59,6 +73,7 @@ def test_production_rejects_unsafe_config(override: dict) -> None:
         "DEBUG": False,
         "DATABASE_READONLY_URL": _RO_URL,
         "METRICS_AUTH_SECRET": _METRICS,
+        "FINGUARD_CA_PRIVATE_KEY_HEX": _CA_KEY,
         "ALLOWED_ORIGINS": ["https://app.finguard.io"],
     }
     base.update(override)

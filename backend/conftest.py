@@ -13,3 +13,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:
 os.environ.setdefault("MONGODB_URL", "mongodb://localhost:27017")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+# Tests authenticate via a get_current_user dependency override and send no CSRF
+# token, so disable the global CSRF middleware. test_csrf.py re-enables it via
+# its own minimal app to exercise enforcement directly.
+os.environ.setdefault("CSRF_ENABLED", "false")
