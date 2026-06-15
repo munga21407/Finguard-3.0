@@ -34,10 +34,11 @@ export interface paths {
          * Login
          * @description Authenticate and issue tokens.
          *
-         *     The access token is returned in the JSON body.  The refresh token is set as
-         *     an HttpOnly, SameSite=Strict cookie so it is invisible to JavaScript and
-         *     therefore safe from XSS exfiltration.  A non-HttpOnly CSRF cookie is also
-         *     set for use by the double-submit CSRF pattern on /token/refresh.
+         *     The access token is set as an HttpOnly, SameSite=Strict cookie (invisible to
+         *     JS, safe from XSS exfiltration) and also returned in the JSON body for
+         *     non-browser clients. The refresh token is likewise an HttpOnly cookie. A
+         *     non-HttpOnly CSRF cookie is set for the double-submit pattern that guards all
+         *     cookie-authenticated mutations.
          */
         post: operations["login_api_v1_identity_token_post"];
         delete?: never;
