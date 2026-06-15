@@ -36,6 +36,43 @@ VALID_NEXT = frozenset({
     "i_integrator", "j_summarizer", "FINISH",
 })
 
+# ── Routing-context window bounds ─────────────────────────────────────────────
+# The supervisor only needs the user's original intent plus the most recent
+# agent results to choose the next hop.  Feeding the entire transcript on every
+# hop grows the routing prompt O(hops) — inflating token cost and degrading the
+# decision via lost-in-the-middle — so we keep head + tail and cap each message.
+_KEEP_LAST_MESSAGES = 4
+_MAX_MSG_CHARS = 600
+
+
+def _format_message(m: Any) -> str:
+    """Render one message as ``[Type] content`` with a per-message char cap."""
+    content = str(getattr(m, "content", ""))
+    if len(content) > _MAX_MSG_CHARS:
+        content = content[:_MAX_MSG_CHARS] + " …[truncated]"
+    return f"[{m.__class__.__name__}] {content}"
+
+
+def _windowed_messages(messages: list[Any], *, keep_last: int = _KEEP_LAST_MESSAGES) -> str:
+    """Bound the routing context to the first message (intent) + last ``keep_last``.
+
+    De-duplicates by object identity so a short conversation whose head and tail
+    overlap is not repeated.  Cost is O(1) in conversation length per hop instead
+    of O(hops), and the per-message truncation caps any single verbose agent
+    payload before it reaches the model.
+    """
+    if not messages:
+        return ""
+    head = messages[:1]
+    tail = messages[-keep_last:] if keep_last > 0 else []
+    seen: set[int] = set()
+    chosen: list[Any] = []
+    for m in (*head, *tail):
+        if id(m) not in seen:
+            seen.add(id(m))
+            chosen.append(m)
+    return "\n".join(_format_message(m) for m in chosen)
+
 
 class _SupervisorDecision(BaseModel):
     next: str
@@ -74,11 +111,7 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
 
         # ── Build prompt ──────────────────────────────────────────────────────
         system = SUPERVISOR_SYSTEM.format(mode=state.get("mode", "insights"))
-        human = SUPERVISOR_HUMAN.format(
-            messages="\n".join(
-                f"[{m.__class__.__name__}] {m.content}" for m in state["messages"]
-            )
-        )
+        human = SUPERVISOR_HUMAN.format(messages=_windowed_messages(state["messages"]))
         full_prompt = f"{system}\n\n{human}"
 
         # ── LLM call with exhaustive fallback ─────────────────────────────────

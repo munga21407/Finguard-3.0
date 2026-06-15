@@ -109,3 +109,55 @@ AML_CASES: list[AmlCase] = [
     AmlCase("well_above_threshold", 1_500_000.0, True, "clearly reportable"),
     AmlCase("no_large_transaction", 0.0, False, "empty ledger → no flag"),
 ]
+
+
+@dataclass(frozen=True)
+class RouteCase:
+    """A golden supervisor-routing scenario: a user query and the single agent
+    that should act first.  Each query is deliberately unambiguous — it maps to
+    exactly one agent's documented responsibility (see the Available Agents table
+    in ``prompts/supervisor.py``) — so a routing regression is a clear failure,
+    not a judgement call.  ``expected_agent`` must be a member of ``VALID_NEXT``.
+    """
+
+    id: str
+    query: str
+    expected_agent: str
+    note: str
+
+
+# Trajectory golden set — answers "did the supervisor take the right first step?"
+# Used deterministically to assert the routing *contract* (targets are valid
+# agents) and, in the nightly llm_judge suite, to measure real-model routing
+# accuracy against these expectations.
+ROUTING_CASES: list[RouteCase] = [
+    RouteCase(
+        "tax_liability", "What is my corporate tax liability for this quarter?",
+        "f_auditor", "tax/compliance computation → Agent F (auditor)",
+    ),
+    RouteCase(
+        "cash_runway", "Will I have enough cash to cover payroll over the next 30 days?",
+        "d_forecaster", "forward cash-flow projection → Agent D (forecaster)",
+    ),
+    RouteCase(
+        "reconcile_mpesa", "Reconcile my M-Pesa statement against my outstanding invoices.",
+        "c_reconciler", "matching ledger/bank entries → Agent C (reconciler)",
+    ),
+    RouteCase(
+        "extract_invoice",
+        "Here is the raw text of a supplier invoice — pull out the line items and totals.",
+        "a_generator", "structure invoice data from raw text → Agent A (generator)",
+    ),
+    RouteCase(
+        "bankability", "What is my bankability score and credit risk tier?",
+        "g_reporter", "bankability score / risk tier → Agent G (reporter)",
+    ),
+    RouteCase(
+        "budget_anomaly", "Have any of my budget categories overspent unexpectedly this month?",
+        "e_watchdog", "budget anomaly detection → Agent E (watchdog)",
+    ),
+    RouteCase(
+        "exec_summary", "Give me a one-paragraph executive summary of this month's finances.",
+        "j_summarizer", "concise executive summary → Agent J (summarizer)",
+    ),
+]
