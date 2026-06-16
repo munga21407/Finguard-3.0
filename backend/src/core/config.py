@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     MPESA_CONSUMER_KEY: str = ""       # Safaricom Daraja sandbox — free self-service keys
     MPESA_CONSUMER_SECRET: str = ""
     MPESA_SHORTCODE: str = ""          # Business short code for STK Push
+    # Primary authentication for the inbound Daraja STK callback. Safaricom does
+    # NOT HMAC-sign callbacks, so the production-grade control is an IP allowlist
+    # of Safaricom's published callback ranges (CIDRs or bare IPs, comma- or
+    # JSON-list-separated). When set, callbacks must originate from one of these
+    # networks. The optional MPESA_CONSUMER_SECRET HMAC check is layered on top
+    # only when a signature header is actually present (defence in depth).
+    MPESA_CALLBACK_ALLOWED_IPS: list[str] = []
     # FX rates: free, keyless public provider (USD-based; *_KES derived as cross-rates).
     # CBK has no public developer FX API — substitute any equivalent source here.
     FX_API_URL: str = "https://open.er-api.com/v6/latest/USD"

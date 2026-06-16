@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-from src.domains.intelligence.tools.sql_executor import _enforce_limit, _validate
+from src.domains.intelligence.tools.sql_executor import (
+    _READONLY_ALLOWED_TABLES,
+    _enforce_limit,
+    _validate,
+)
 
 
 def test_plain_select_allowed() -> None:
@@ -61,3 +65,47 @@ def test_cte_limit_enforced() -> None:
         "WITH x AS (SELECT total FROM invoices) SELECT * FROM x LIMIT 5000"
     )
     assert "LIMIT 100" in out.upper()
+
+
+# ── Table allowlist (structural schema masking) ─────────────────────────────────
+
+
+def test_allowed_table_select_passes() -> None:
+    # Tables in the read-only allowlist are permitted.
+    _validate(
+        "SELECT id, total FROM invoices", allowed_tables=_READONLY_ALLOWED_TABLES
+    )
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT hashed_password FROM users",                       # sensitive table
+        "SELECT content FROM knowledge_base",                      # sensitive table
+        "SELECT * FROM outbox_events",                             # sensitive table
+        "SELECT * FROM information_schema.columns",                # catalog probe
+        "SELECT * FROM pg_catalog.pg_user",                        # catalog probe
+        "SELECT total FROM invoices UNION SELECT email FROM users",  # hidden join
+        "SELECT i.total FROM invoices i JOIN users u ON u.id = i.customer_id",
+    ],
+)
+def test_disallowed_table_rejected(query: str) -> None:
+    # A perfectly valid read-only SELECT is still refused when it reaches outside
+    # the allowlist — the gate that prompt-only schema masking cannot enforce.
+    with pytest.raises(ValueError):
+        _validate(query, allowed_tables=_READONLY_ALLOWED_TABLES)
+
+
+def test_cte_name_not_treated_as_disallowed_table() -> None:
+    # A CTE identifier is a derived name, not a physical table, so referencing it
+    # must not trip the allowlist.
+    _validate(
+        "WITH paid AS (SELECT total FROM invoices WHERE status = 'paid') "
+        "SELECT SUM(total) FROM paid",
+        allowed_tables=_READONLY_ALLOWED_TABLES,
+    )
+
+
+def test_allowlist_not_enforced_without_set() -> None:
+    # Back-compat: the generic validator (no allowlist) leaves table access open.
+    _validate("SELECT email FROM users")

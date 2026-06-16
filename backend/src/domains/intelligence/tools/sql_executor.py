@@ -129,6 +129,15 @@ _AGENT_ALLOWED_TABLES: dict[str, frozenset[str]] = {
 }
 
 
+# Union of every agent's allowed table set — the hard allowlist the read-only
+# executor enforces structurally (not just via prompt masking).  Any SELECT that
+# touches a table outside this set (users, knowledge_base, outbox_events, the
+# Postgres catalog, information_schema, …) is rejected before it reaches the DB.
+_READONLY_ALLOWED_TABLES: frozenset[str] = frozenset().union(
+    *_AGENT_ALLOWED_TABLES.values()
+)
+
+
 def get_masked_schema(agent_id: str) -> str:
     """
     Return a DDL string containing only the tables the agent is authorised to query.
@@ -143,7 +152,36 @@ def get_masked_schema(agent_id: str) -> str:
     return "\n\n".join(fragments)
 
 
-def _ast_validate(query: str) -> None:
+def _assert_allowed_tables(tree: exp.Expression, allowed: frozenset[str]) -> None:
+    """Reject a query that references any table outside ``allowed``.
+
+    Schema masking only shapes the LLM *prompt*; it cannot stop a prompt-injected
+    or hallucinated query from naming ``users`` directly.  This is the structural
+    gate: every real table reference in the AST must be in the allowlist, so a
+    SELECT against users / knowledge_base / pg_catalog / information_schema is
+    refused even though it is a perfectly valid read-only statement.
+
+    CTE names (``WITH foo AS (…) SELECT * FROM foo``) are derived identifiers,
+    not physical tables, so they are excluded from the check.
+    """
+    cte_names = {
+        cte.alias_or_name.lower()
+        for cte in tree.find_all(exp.CTE)
+        if cte.alias_or_name
+    }
+    for table in tree.find_all(exp.Table):
+        name = table.name.lower()
+        if name in cte_names:
+            continue
+        if name not in allowed:
+            raise ValueError(
+                f"Query references table '{table.name}' which is not in the "
+                f"read-only allowlist — query rejected. "
+                f"Allowed: {', '.join(sorted(allowed))}"
+            )
+
+
+def _ast_validate(query: str, allowed_tables: frozenset[str] | None = None) -> None:
     """
     Deterministic SQL AST validation via sqlglot.
 
@@ -198,12 +236,20 @@ def _ast_validate(query: str) -> None:
             f"detected in query AST — query rejected"
         )
 
+    # Table allowlist: only enforced when a set is supplied (the read-only
+    # executor passes one).  Keeps the generic make_sql_executor unrestricted.
+    if allowed_tables is not None:
+        _assert_allowed_tables(tree, allowed_tables)
 
-def _validate(query: str) -> None:
+
+def _validate(query: str, allowed_tables: frozenset[str] | None = None) -> None:
     """
     Two-layer read-only guard:
       1. Regex pre-filter — fast rejection of obvious forbidden keywords.
       2. sqlglot AST validation — deterministic, bypass-proof structural check.
+
+    When ``allowed_tables`` is provided, the AST walk additionally rejects any
+    query that references a table outside that set (structural schema masking).
     """
     stripped = query.strip()
     # Allow read-only CTEs (``WITH … SELECT``) as well as plain SELECTs. The
@@ -217,7 +263,7 @@ def _validate(query: str) -> None:
         raise ValueError("Query contains forbidden keyword")
     # AST check is the authoritative gate — runs even when the regex passes,
     # catching obfuscation techniques that survive keyword scanning.
-    _ast_validate(stripped)
+    _ast_validate(stripped, allowed_tables)
 
 
 _MAX_ROWS = 100
@@ -283,11 +329,19 @@ async def execute_readonly_sql(query: str) -> list[dict[str, Any]]:
     """
     Execute a validated SELECT query using the read-only session factory.
 
-    Used by the Text-to-SQL CoVe workflow in Agent D so LLM-generated queries
-    run under the finguard_readonly PostgreSQL role, even if DATABASE_READONLY_URL
-    is not yet configured (falls back gracefully to the main engine).
+    Used by the Text-to-SQL CoVe workflow in Agent D and the Agent E watchdog so
+    LLM-generated queries run under the finguard_readonly PostgreSQL role.  In
+    addition to the read-only role boundary (defence in depth), every query is
+    structurally restricted to the table allowlist so a prompt-injected or
+    hallucinated SELECT cannot read users / knowledge_base / outbox_events even
+    if the role grant were ever misconfigured.
+
+    Fail-closed in production: ``ReadOnlyAsyncSessionLocal`` is bound to a
+    fail-closed engine (see infrastructure/database/postgres.py) that refuses to
+    fall back to the privileged engine when DATABASE_READONLY_URL is unset in
+    production.
     """
-    _validate(query)
+    _validate(query, allowed_tables=_READONLY_ALLOWED_TABLES)
     safe_query = _enforce_limit(query)
 
     if not settings.DATABASE_READONLY_URL:

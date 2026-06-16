@@ -24,6 +24,12 @@ from src.domains.identity.repository import UserRepository
 from src.domains.identity.schemas import TokenResponse, UserCreate, UserUpdate
 from src.infrastructure.cache.redis import get_auth_redis
 
+# A fixed, valid bcrypt hash verified against on the "email not found" path so a
+# login attempt for a non-existent account costs the same wall-clock time as one
+# for a real account.  Without it, the missing-user branch short-circuits before
+# bcrypt runs, turning response latency into an account-enumeration oracle.
+_DUMMY_PASSWORD_HASH = hash_password("finguard-timing-equalizer-not-a-real-password")
+
 
 class IdentityService:
     def __init__(self, session: AsyncSession) -> None:
@@ -51,9 +57,16 @@ class IdentityService:
         await self._session.commit()
         return user
 
-    async def login(self, email: str, password: str) -> TokenResponse:
+    async def login(
+        self, email: str, password: str, ip: str | None = None
+    ) -> TokenResponse:
         redis = get_auth_redis()
-        attempts_key = f"login_attempts:{email.lower()}"
+        # Lockout is keyed per (email, source IP) rather than per email alone.
+        # An email-only key let any anonymous attacker lock a victim out of their
+        # account by submitting bad passwords (a targeted denial of service). The
+        # IP component confines a lockout to the offending client, while the
+        # per-endpoint rate limit (5/min/IP) remains the brute-force backstop.
+        attempts_key = f"login_attempts:{email.lower()}:{ip or 'unknown'}"
 
         # Account lockout: reject before verifying the password once the failure
         # threshold is hit, so brute-force / credential-stuffing stops cold.
@@ -65,7 +78,12 @@ class IdentityService:
             )
 
         user = await self._repo.get_by_email(email)
-        if not user or not verify_password(password, user.hashed_password):
+        # Always run bcrypt — against the user's hash, or a dummy hash when the
+        # email is unknown — so timing does not reveal whether the account exists.
+        password_ok = verify_password(
+            password, user.hashed_password if user else _DUMMY_PASSWORD_HASH
+        )
+        if not user or not password_ok:
             await redis.incr(attempts_key)
             # Sliding window: each failed attempt extends the lock so a
             # persistent attacker stays locked out.

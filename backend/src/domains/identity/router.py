@@ -27,6 +27,24 @@ from src.infrastructure.database.postgres import get_db
 limiter = Limiter(key_func=get_remote_address, storage_uri=settings.RATE_LIMIT_REDIS_URL)
 _bearer = HTTPBearer(auto_error=False)
 
+
+def _client_ip(request: Request) -> str:
+    """Best-effort source IP for per-client login lockout.
+
+    Behind the nginx reverse proxy ``request.client.host`` is the proxy's IP
+    (identical for every user), so the per-IP lockout would collapse back to a
+    per-email one.  Prefer the left-most ``X-Forwarded-For`` entry (the original
+    client as recorded by the trusted proxy) when present.  Operators must ensure
+    nginx sets X-Forwarded-For and does not forward a client-supplied value
+    verbatim; absent a proxy the direct peer address is used.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else "unknown"
+
 router = APIRouter()
 
 DBSession = Annotated[AsyncSession, Depends(get_db)]
@@ -144,7 +162,9 @@ async def login(
     non-HttpOnly CSRF cookie is set for the double-submit pattern that guards all
     cookie-authenticated mutations.
     """
-    result = await IdentityService(db).login(data.email, data.password)
+    result = await IdentityService(db).login(
+        data.email, data.password, ip=_client_ip(request)
+    )
     _set_auth_cookies(
         response, result.access_token, result.refresh_token, generate_csrf_token()
     )

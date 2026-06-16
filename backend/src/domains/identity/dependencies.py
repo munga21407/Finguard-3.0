@@ -39,6 +39,17 @@ async def get_current_user(
     if not token:
         raise UnauthorizedError("Missing authentication credentials")
     payload = decode_token(token)
+
+    # Reject token-type confusion: only access tokens authenticate a request.
+    # Access and refresh tokens are signed with the same key, so without this
+    # check a (longer-lived, broader) refresh token presented in the access
+    # cookie or Authorization header would authenticate. Tokens minted before
+    # the ``type`` claim existed have no type and are allowed through — they
+    # expire naturally via their ``exp`` claim.
+    token_type: str | None = payload.get("type")
+    if token_type is not None and token_type != "access":
+        raise UnauthorizedError("Invalid token type")
+
     raw_id: str | None = payload.get("sub")
     if not raw_id:
         raise UnauthorizedError("Invalid token payload")

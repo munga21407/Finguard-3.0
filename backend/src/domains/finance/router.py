@@ -1,6 +1,8 @@
 import hashlib
 import hmac
+import ipaddress
 import uuid
+from functools import lru_cache
 from typing import Annotated, Any
 
 import structlog
@@ -36,44 +38,103 @@ logger = structlog.get_logger(__name__)
 DBSession = Annotated[AsyncSession, Depends(get_db)]
 
 
+@lru_cache(maxsize=1)
+def _mpesa_allowed_networks() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """Parse MPESA_CALLBACK_ALLOWED_IPS into networks once (bare IPs → /32 or /128)."""
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for raw in settings.MPESA_CALLBACK_ALLOWED_IPS:
+        entry = raw.strip()
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            logger.warning("mpesa: ignoring malformed allowlist entry", entry=entry)
+    return tuple(networks)
+
+
+def _callback_origin_ip(request: Request) -> str | None:
+    """Source IP of the callback, honouring the trusted proxy's X-Forwarded-For.
+
+    Behind nginx ``request.client.host`` is the proxy address, so the left-most
+    X-Forwarded-For entry (set by the trusted proxy) identifies the real caller.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else None
+
+
+def _origin_allowed(ip_str: str | None) -> bool:
+    if ip_str is None:
+        return False
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    return any(ip in net for net in _mpesa_allowed_networks())
+
+
 async def verify_mpesa_signature(
     request: Request,
     x_daraja_signature: Annotated[str | None, Header()] = None,
 ) -> None:
     """
-    Verify that this Daraja callback was signed by Safaricom.
+    Authenticate an inbound Daraja STK Push callback.
 
-    Computes HMAC-SHA256 over the raw request body using MPESA_CONSUMER_SECRET
-    and compares against the X-Daraja-Signature header with hmac.compare_digest
-    to prevent timing-based side-channel attacks.
+    Safaricom does not HMAC-sign callbacks, so the primary control is an IP
+    allowlist (MPESA_CALLBACK_ALLOWED_IPS) of Safaricom's published callback
+    ranges.  The optional HMAC-SHA256 body signature (MPESA_CONSUMER_SECRET vs
+    X-Daraja-Signature) is layered on as defence in depth and is enforced when a
+    signature header is present, or as the sole control when no allowlist is set
+    (e.g. a signing proxy in front of the app).
 
-    Raises 503 when M-Pesa credentials are not configured (rather than a
-    misleading 403) so operators can diagnose misconfiguration immediately.
-    Raises 403 on a missing or non-matching signature.
+    Fail-closed: when NEITHER an allowlist nor a consumer secret is configured
+    the endpoint refuses traffic (503) rather than processing unauthenticated
+    callbacks.  Raises 403 on a disallowed origin or a bad signature.
 
     Body stream note: Starlette caches the body after the first await request.body()
     call, so FastAPI can still parse the JSON payload after this dependency runs.
     """
-    if not settings.MPESA_CONSUMER_SECRET:
+    networks = _mpesa_allowed_networks()
+    has_secret = bool(settings.MPESA_CONSUMER_SECRET)
+
+    if not networks and not has_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="M-Pesa integration is not configured on this server",
+            detail="M-Pesa callback authentication is not configured on this server",
         )
-    if x_daraja_signature is None:
+
+    # ── Primary control: source-IP allowlist ─────────────────────────────────
+    if networks and not _origin_allowed(_callback_origin_ip(request)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Missing X-Daraja-Signature header",
+            detail="Callback origin is not in the M-Pesa allowlist",
         )
-    body: bytes = await request.body()
-    key: bytes = settings.MPESA_CONSUMER_SECRET.encode()
-    computed: str = hmac.new(key, body, hashlib.sha256).hexdigest()
-    # Normalise the incoming signature to lowercase before constant-time comparison
-    # so capitalisation differences do not cause false rejections.
-    if not hmac.compare_digest(computed, x_daraja_signature.lower()):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Signature mismatch",
-        )
+
+    # ── Optional HMAC signature ───────────────────────────────────────────────
+    # Enforced when the provider sends a signature, or when it is the only
+    # configured control (no allowlist). When an allowlist is configured and no
+    # signature header is sent (real Daraja), the IP check above is sufficient.
+    must_check_signature = has_secret and (x_daraja_signature is not None or not networks)
+    if must_check_signature:
+        if x_daraja_signature is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Missing X-Daraja-Signature header",
+            )
+        body: bytes = await request.body()
+        key: bytes = settings.MPESA_CONSUMER_SECRET.encode()
+        computed: str = hmac.new(key, body, hashlib.sha256).hexdigest()
+        # Normalise the incoming signature to lowercase before constant-time
+        # comparison so capitalisation differences do not cause false rejections.
+        if not hmac.compare_digest(computed, x_daraja_signature.lower()):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Signature mismatch",
+            )
 
 
 # ── Ledger ────────────────────────────────────────────────────────────────────

@@ -94,6 +94,39 @@ async def test_refresh_rejected_with_wrong_csrf_header(client: AsyncClient) -> N
 
 
 @pytest.mark.asyncio
+async def test_refresh_token_rejected_as_access_token(client: AsyncClient) -> None:
+    """A refresh token presented where an access token is expected is rejected.
+
+    Access and refresh tokens are signed with the same key, so without a
+    ``type`` check ``get_current_user`` would accept the longer-lived refresh
+    token in the access cookie / Authorization header — a privilege-lifetime
+    escalation (token-type confusion).
+    """
+    email = f"typeconf-{uuid.uuid4().hex[:8]}@finguard.io"
+    await _register_and_login(client, email)
+
+    refresh_token = client.cookies.get("fg_refresh_token")
+    assert refresh_token
+
+    # The real access cookie authenticates /me normally.
+    ok = await client.get("/api/v1/identity/me")
+    assert ok.status_code == 200
+
+    # Swap the refresh token into the access cookie — must NOT authenticate.
+    client.cookies.set("fg_access_token", refresh_token)
+    spoofed = await client.get("/api/v1/identity/me")
+    assert spoofed.status_code == 401
+
+    # Same via the Authorization: Bearer transport (programmatic clients).
+    client.cookies.delete("fg_access_token")
+    bearer = await client.get(
+        "/api/v1/identity/me",
+        headers={"Authorization": f"Bearer {refresh_token}"},
+    )
+    assert bearer.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_logout_clears_cookies_and_blacklists_tokens(client: AsyncClient) -> None:
     email = f"logout-{uuid.uuid4().hex[:8]}@finguard.io"
     body = await _register_and_login(client, email)
