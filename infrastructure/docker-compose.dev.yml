@@ -1,7 +1,7 @@
 services:
   # Run migrations under the dev image + dev config so local `compose up` doesn't
-  # trip the production config validation (which requires DATABASE_READONLY_URL,
-  # METRICS_AUTH_SECRET, etc.). Migrations themselves are environment-agnostic.
+  # trip the production config validation (which requires METRICS_AUTH_SECRET, a
+  # strong SECRET_KEY, etc.). Migrations themselves are environment-agnostic.
   migrate:
     build:
       context: ../backend
@@ -10,6 +10,12 @@ services:
       ENVIRONMENT: development
 
   postgres:
+    # Provision the finguard_readonly role on first init so dev exercises the
+    # same read-only Text-to-SQL boundary as production (gap #2b dev parity).
+    environment:
+      POSTGRES_READONLY_PASSWORD: ${POSTGRES_READONLY_PASSWORD:-finguard_readonly}
+    volumes:
+      - ./scripts/init-readonly-role.sh:/docker-entrypoint-initdb.d/10-readonly-role.sh:ro
     ports:
       - "5432:5432"
 
@@ -40,6 +46,9 @@ services:
     environment:
       ENVIRONMENT: development
       DEBUG: "true"
+      # Point Agent D/E Text-to-SQL at the read-only role provisioned above, so
+      # the privilege boundary is real in dev (not just the string-level guard).
+      DATABASE_READONLY_URL: postgresql+asyncpg://finguard_readonly:${POSTGRES_READONLY_PASSWORD:-finguard_readonly}@postgres:5432/${POSTGRES_DB:-finguard}
 
   frontend:
     build:

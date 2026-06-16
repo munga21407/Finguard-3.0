@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import math
-import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -29,15 +28,12 @@ from rapidfuzz import fuzz
 from sklearn.ensemble import IsolationForest  # type: ignore[import-untyped]
 from sqlalchemy import text
 
-from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import (
     AGENT_E_ANOMALY_SCORE,
     AGENT_E_STATE_PROBABILITY,
-    AGENT_LLM_LATENCY,
-    AGENT_LLM_PROCESSING,
 )
-from src.domains.intelligence.llm_client import get_gemini_client, observe_llm_call
+from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.e_watchdog import WATCHDOG_SYSTEM
 from src.domains.intelligence.schemas import (
     CompositeGenUIPayload,
@@ -415,27 +411,10 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
         full_prompt = f"{WATCHDOG_SYSTEM}\n\nAnalysis data:\n{prompt_data}"
         llm_output: _WatchdogLLMOutput | None = None
         try:
-            from google.genai import types as genai_types
-            _t0 = time.monotonic()
-            gemini_resp = await get_gemini_client().aio.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=full_prompt,
-                config=genai_types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=_WatchdogLLMOutput,
-                ),
-            )
-            _elapsed = time.monotonic() - _t0
-            AGENT_LLM_LATENCY.labels(agent="e_watchdog", model=settings.GEMINI_MODEL).observe(
-                _elapsed
-            )
-            AGENT_LLM_PROCESSING.labels(agent_id="e_watchdog", model=settings.GEMINI_MODEL).observe(
-                _elapsed
-            )
-            # Latency already recorded above (direct client call) — pass elapsed=None
-            # so only tokens/cost/calls are added, no double-counted latency.
-            observe_llm_call(gemini_resp, elapsed=None, agent_id="e_watchdog")
-            llm_output = _WatchdogLLMOutput.model_validate_json(gemini_resp.text or "{}")
+            # generate_structured_content records latency/tokens/cost via
+            # observe_llm_call, attributed to "e_watchdog" through the
+            # agent_context contextvar set by orchestrator._tracked.
+            llm_output = await generate_structured_content(full_prompt, _WatchdogLLMOutput)
         except Exception as exc:
             logger.warning("Agent E: Gemini structured output failed", error=str(exc))
 

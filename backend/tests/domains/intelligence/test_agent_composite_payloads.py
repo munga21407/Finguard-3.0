@@ -15,11 +15,14 @@ from __future__ import annotations
 import json
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from datetime import date
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
+from src.domains.intelligence.agents.e_watchdog import _WatchdogLLMOutput
+from src.domains.intelligence.agents.f_auditor import _ComplianceAnalysis
 from src.domains.intelligence.schemas import (
     CompositeGenUIPayload,
     GenUIPayload,
@@ -76,13 +79,14 @@ async def _noop_session():
     yield MagicMock()
 
 
-def _gemini_mock(response_text: str) -> MagicMock:
-    """Build a minimal mock Gemini client whose generate_content returns response_text."""
-    resp = MagicMock()
-    resp.text = response_text
-    client = MagicMock()
-    client.aio.models.generate_content = AsyncMock(return_value=resp)
-    return client
+def _structured(module: str, value: object) -> Any:
+    """Patch a module's ``generate_structured_content`` facade to return ``value``."""
+    return patch(f"{module}.generate_structured_content", new_callable=AsyncMock, return_value=value)
+
+
+def _text(module: str, value: str) -> Any:
+    """Patch a module's ``generate_text_content`` facade to return ``value``."""
+    return patch(f"{module}.generate_text_content", new_callable=AsyncMock, return_value=value)
 
 
 # ── Part 1: Schema unit tests (no I/O) ────────────────────────────────────────
@@ -239,11 +243,12 @@ class TestAgentEWatchdog:
             stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog._fetch_spending_ratios", new_callable=AsyncMock, return_value=ratios or [0.55, 0.60, 0.58, 0.62, 0.50]))
             stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog._fetch_recent_amounts", new_callable=AsyncMock, return_value=amounts or [1000.0, 1200.0, 800.0, 1500.0, 900.0, 1100.0]))
             stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog._fetch_recent_invoices", new_callable=AsyncMock, return_value=invoices or [{"invoice_number": "INV-001", "amount": 1000.0, "vendor": "Acme"}]))
-            stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog.get_gemini_client", return_value=_gemini_mock(self._llm_json)))
+            stack.enter_context(_structured(
+                "src.domains.intelligence.agents.e_watchdog",
+                _WatchdogLLMOutput.model_validate_json(self._llm_json),
+            ))
             stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog.AGENT_E_ANOMALY_SCORE"))
             stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog.AGENT_E_STATE_PROBABILITY"))
-            stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog.AGENT_LLM_LATENCY"))
-            stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog.AGENT_LLM_PROCESSING"))
             yield
 
     @pytest.mark.asyncio
@@ -319,7 +324,10 @@ class TestAgentFAuditor:
         analysis = gemini_text if gemini_text is not None else self._gemini_analysis
         with ExitStack() as stack:
             stack.enter_context(patch("src.domains.intelligence.agents.f_auditor.get_relevant_tax_rules", new_callable=AsyncMock, return_value=["[KRA Ref: VAT Act — Section 2]\nVAT at 16%..."]))
-            stack.enter_context(patch("src.domains.intelligence.agents.f_auditor.get_gemini_client", return_value=_gemini_mock(analysis)))
+            stack.enter_context(_structured(
+                "src.domains.intelligence.agents.f_auditor",
+                _ComplianceAnalysis.model_validate_json(analysis),
+            ))
             yield
 
     @pytest.mark.asyncio
@@ -396,7 +404,7 @@ class TestAgentGReporter:
     @contextmanager
     def _patches(self):
         with ExitStack() as stack:
-            stack.enter_context(patch("src.domains.intelligence.agents.g_reporter.get_gemini_client", return_value=_gemini_mock(self._narrative)))
+            stack.enter_context(_text("src.domains.intelligence.agents.g_reporter", self._narrative))
             stack.enter_context(patch("src.domains.intelligence.agents.g_reporter._generate_pdf_report", return_value=b""))
             stack.enter_context(patch("src.domains.intelligence.agents.g_reporter._generate_forecast_excel", return_value=b""))
             yield

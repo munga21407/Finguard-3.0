@@ -96,11 +96,14 @@ Finguard-3.0/
 │       │   │   ├── schemas.py         # ReceiptExpenseCreate + finance request/response models
 │       │   │   └── types.py           # VaultType (MPESA | CASH) dual-vault enum
 │       │   └── intelligence/          # AI/ML domain
-│       │       ├── llm_client.py      # Gemini singleton + generate_structured_content;
-│       │       │                      # agent_context + observe_llm_call (per-agent token/cost metrics)
+│       │       ├── llm_client.py      # back-compat facade re-exporting the llm/ package surface
+│       │       ├── llm/               # provider-agnostic LLM layer:
+│       │       │                      #   base.py (BaseLLMClient), gemini.py (impl),
+│       │       │                      #   telemetry.py (agent_context/observe_llm_call), pricing.py (model-keyed cost)
 │       │       ├── observability.py   # @traced_tool — per-tool latency/outcome metrics
 │       │       ├── orchestrator.py    # LangGraph StateGraph builder; _tracked node wrapper
-│       │       ├── router.py          # /api/v1/intelligence endpoints (RBAC + IDOR owner check)
+│       │       ├── router.py          # aggregates routers/ sub-routers (insights, receipts, conversations)
+│       │       ├── routers/           # HTTP split by concern + _common.py (idempotency, orchestrator, GenUI)
 │       │       ├── service.py         # Gemini streaming chat service
 │       │       ├── schemas.py         # OrchestratorState, all agent output models
 │       │       ├── models.py          # AgentRun, KnowledgeBase (pgvector) ORM
@@ -127,7 +130,7 @@ Finguard-3.0/
 │       │       │   ├── e_watchdog.py
 │       │       │   └── supervisor.py
 │       │       ├── security/
-│       │       │   ├── vc_issuer.py   # JWT-signed Verifiable Credentials (SOC-2 audit)
+│       │       │   ├── vc_issuer.py   # Ed25519-signed Verifiable Credentials (SOC-2 audit; HS256 legacy verify)
 │       │       │   ├── agent_cards.py # Agent identity metadata
 │       │       │   └── key_manager.py # Ed25519 internal CA — key loading + sign/verify
 │       │       ├── services/
@@ -221,8 +224,8 @@ Finguard-3.0/
 │       │   └── ui/
 │       ├── lib/
 │       │   ├── api/
-│       │   │   ├── http-client.ts     # Axios; Bearer injection; 401 silent refresh;
-│       │   │   │                      # idempotency key scoped to /ai-insights + /ai-actions only
+│       │   │   ├── http-client.ts     # Axios (withCredentials); X-CSRF-Token on mutations; 401 silent refresh;
+│       │   │   │                      # cookie auth (no Bearer); idempotency key scoped to /ai-insights + /ai-actions
 │       │   │   ├── endpoints.ts       # Typed URL constants
 │       │   │   ├── finance.ts         # listCustomers, createCustomer, createInvoice, resolveCustomerId,
 │       │   │   │                      # createReceiptExpense (POST /finance/receipts)
@@ -232,7 +235,7 @@ Finguard-3.0/
 │       │   │   └── auth-client.ts     # login, logout (revokes refresh token), getMe()
 │       │   ├── auth/
 │       │   │   ├── auth-context.tsx   # Hydrates user via GET /me (not JWT decode); proactive refresh
-│       │   │   └── token-manager.ts   # localStorage token CRUD + fg_session cookie
+│       │   │   └── token-manager.ts   # reads fg_csrf / fg_session markers (access token is HttpOnly — not JS-readable)
 │       │   ├── hooks/
 │       │   │   ├── useAuth.ts
 │       │   │   └── useRole.ts
@@ -578,7 +581,7 @@ finguard.knowledge_base (
 | Collection | Purpose |
 |---|---|
 | `intelligence_hub` | InsightArtifact per agent invocation (TTL-cached, keyed `{agent_id}:{intent}`) |
-| `trust_log` | Verifiable Credentials — Audit VCs (365-day JWT) and Task-Scoped VCs (5-min JWT). 90-day MongoDB TTL index on `created_at`. |
+| `trust_log` | Verifiable Credentials — Ed25519-signed Audit VCs (365-day) and Task-Scoped VCs (5-min). 90-day MongoDB TTL index on `created_at`. |
 
 ---
 
@@ -740,7 +743,7 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/i_integrator.py` |
 | Trigger | Supervisor routes here when external data is needed |
 | Context key written | `external_data` |
-| Method | Calls M-Pesa Daraja, CBK FX, Metropol, KRA via `http_caller` tool (SSRF-guarded). Mock fallbacks when live endpoints unavailable. |
+| Method | Calls M-Pesa Daraja (sandbox), a free FX provider (`FX_API_URL`), Metropol, KRA via `http_caller` (SSRF-guarded). Every source carries an explicit `status` (live/manual/mock/unavailable); Metropol & KRA are deferred — `unavailable` unless real or manually supplied (never fabricated). |
 | SSRF protection | `_assert_public_url()` in `http_caller.py` blocks private IPs, loopback, link-local; `follow_redirects=False` |
 | Hub TTL | 1 hour |
 
@@ -861,12 +864,12 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | POST | `/register` | — | Create user (first → OWNER+verified; subsequent → VIEWER+unverified) |
-| POST | `/token` | — | Login; returns access + refresh tokens; enforces Redis lockout |
-| POST | `/token/refresh` | Refresh token | Rotate tokens (jti blacklisted on use; reuse detected) |
-| POST | `/logout` | Bearer | Revoke access token; optionally revoke refresh token via request body |
-| GET | `/me` | Bearer | Return authenticated user profile from backend (authoritative) |
-| GET | `/users` | Bearer + `user:manage` | List all users (admin/owner only) |
-| PATCH | `/users/{user_id}` | Bearer + `user:manage` | Update user role / verified status |
+| POST | `/token` | — | Login; sets HttpOnly access/refresh + CSRF/session cookies (access also in body); Redis lockout |
+| POST | `/token/refresh` | Refresh cookie + CSRF | Rotate tokens (jti blacklisted on use; reuse detected) |
+| POST | `/logout` | Cookie/Bearer + CSRF | Revoke access + refresh tokens; clears auth cookies |
+| GET | `/me` | Cookie/Bearer | Return authenticated user profile from backend (authoritative) |
+| GET | `/users` | Cookie/Bearer + `user:manage` | List all users (admin/owner only) |
+| PATCH | `/users/{user_id}` | Cookie/Bearer + `user:manage` | Update user role / verified status |
 
 ### CRM — `/api/v1/crm`
 
@@ -980,13 +983,13 @@ User types free-text description
 
 | File | Purpose |
 |---|---|
-| `lib/api/http-client.ts` | Axios singleton: Bearer injection, 401 silent refresh, idempotency key (scoped to `/ai-insights` + `/ai-actions` only) |
+| `lib/api/http-client.ts` | Axios singleton (`withCredentials`): cookie auth, `X-CSRF-Token` on mutations, 401 silent refresh, idempotency key (scoped to `/ai-insights` + `/ai-actions` only) |
 | `lib/api/endpoints.ts` | Typed URL constants |
 | `lib/api/finance.ts` | `listCustomers`, `createCustomer`, `createInvoice`, `resolveCustomerId`, `createReceiptExpense` |
 | `lib/api/intelligence.ts` | `dispatchConversation`, `checkConversationStatus`, `extractInvoice`, `scanReceipt`; `KeyFinding`, `GenUIPayload`, `ExtractedInvoice`, `ReceiptExtraction`, `ReceiptScanResult` types |
 | `lib/api/auth-client.ts` | `login`, `logout` (sends refresh token to revoke), `getMe()` |
 | `lib/auth/auth-context.tsx` | React context; hydrates `user` via `GET /me` (not JWT decode); proactive refresh on expiry |
-| `lib/auth/token-manager.ts` | localStorage token CRUD, `isTokenExpired`, `fg_session` cookie for Next.js middleware |
+| `lib/auth/token-manager.ts` | reads `fg_csrf` (CSRF header source) + `fg_session` markers; clears them on logout. Access/refresh tokens are HttpOnly cookies (not JS-readable) |
 | `lib/hooks/useRole.ts` | `hasRole(minRole)` RBAC helper using 5-tier hierarchy |
 
 ---
@@ -1065,6 +1068,10 @@ Exchange: finguard.events  (type=TOPIC, durable=true)
 | Access token | HS256 | 30 minutes | `sub` (user UUID), `role`, `exp`, `jti` |
 | Refresh token | HS256 | 7 days | `sub`, `exp`, `jti` (for revocability) |
 
+Both tokens are signed with `JWT_SECRET_KEY` (which defaults to `SECRET_KEY` when unset, so a single-secret deployment still works but the auth key can be rotated independently).
+
+**Transport (cookie-first, Bearer fallback).** Login/refresh set the access token as an **HttpOnly, `SameSite=Strict` cookie** (`fg_access_token`, invisible to JS — XSS-exfiltration safe) and the refresh token as an HttpOnly cookie path-scoped to `/api/v1/identity`. The access token is also returned in the JSON body for non-browser clients. `get_current_user` reads the access cookie first and falls back to `Authorization: Bearer`. A non-HttpOnly `fg_session` marker is set for the Next.js Edge middleware, and a non-HttpOnly `fg_csrf` cookie drives the double-submit CSRF check (below).
+
 Both tokens carry a `jti` (JWT ID). On logout or refresh rotation, the consumed `jti` is written to Redis `blacklist:{jti}` with TTL = remaining token lifetime. `get_current_user` checks the blacklist on every request.
 
 ### RBAC Permissions
@@ -1111,9 +1118,11 @@ After `MAX_LOGIN_ATTEMPTS` (default 5) consecutive failures for the same email, 
 | Account lockout | Redis `login_attempts:{email}` counter; 429 after N attempts |
 | JWT blacklist | `blacklist:{jti}` Redis key; checked in `get_current_user` |
 | Refresh rotation | Consumed `jti` blacklisted on every `/token/refresh`; reuse returns 401 |
+| HttpOnly access cookie | Access token delivered as `fg_access_token` (HttpOnly, `SameSite=Strict`) — not readable by JS; `Authorization: Bearer` still accepted for API clients |
+| CSRF (double-submit) | Global `CSRFMiddleware` enforces a matching `fg_csrf` cookie + `X-CSRF-Token` header on every unsafe method; gated by `CSRF_ENABLED`. Exempt allowlist: `/finance/mpesa/callback` (signed webhook), `/identity/token`, `/identity/register` |
 | Password hashing | Direct `bcrypt.hashpw` / `bcrypt.checkpw` — passlib not used (bcrypt ≥5.0 incompatibility) |
-| Verifiable Credentials | Audit VCs (365-day JWT) and Task-Scoped VCs (5-min JWT) in MongoDB `trust_log` |
-| Internal CA (Ed25519) | `security/key_manager.py` — production: `FINGUARD_CA_PRIVATE_KEY_HEX`; dev: derived from `SECRET_KEY` |
+| Verifiable Credentials | **Ed25519-signed** compact tokens (`header.payload.signature`) — Audit VCs (365-day) and Task-Scoped VCs (5-min) in MongoDB `trust_log`. Legacy HS256 tokens still verify via a fallback branch |
+| Internal CA (Ed25519) | `security/key_manager.py` — production: `FINGUARD_CA_PRIVATE_KEY_HEX` (required, fail-fast); dev: a fixed dev-only seed **decoupled from `SECRET_KEY`** |
 | Metrics endpoint auth | `GET /metrics` guarded by `METRICS_AUTH_SECRET` Bearer token |
 | Text-to-SQL role | `finguard_readonly` PostgreSQL role; `DATABASE_READONLY_URL` fail-closed in production |
 | SQL injection prevention | Two-stage: regex pre-filter + sqlglot AST validation; 100-row `LIMIT` cap |
@@ -1132,7 +1141,9 @@ After `MAX_LOGIN_ATTEMPTS` (default 5) consecutive failures for the same email, 
 # Application
 ENVIRONMENT=development         # development | staging | production
 DEBUG=false
-SECRET_KEY=<64+ char random secret>
+SECRET_KEY=<64+ char random secret>      # general app secret + legacy-HS256 VC verification
+JWT_SECRET_KEY=                  # auth-token signing key; defaults to SECRET_KEY if empty
+CSRF_ENABLED=true                # double-submit CSRF on mutations; never disable in production
 
 # PostgreSQL
 DATABASE_URL=postgresql+asyncpg://finguard:finguard@postgres:5432/finguard
@@ -1165,11 +1176,12 @@ PASSWORD_MIN_LENGTH=8
 # Google Gemini
 GEMINI_API_KEY=<your-key>
 GEMINI_MODEL=gemini-2.5-flash
-GEMINI_INPUT_USD_PER_MTOK=0.30    # list-price estimate; drives per-agent cost metric
-GEMINI_OUTPUT_USD_PER_MTOK=2.50   # list-price estimate; drives per-agent cost metric
+# Per-agent cost attribution is now model-keyed and externally configurable.
+# Optional JSON override of the built-in price table (USD per 1M tokens):
+LLM_PRICING_JSON=                 # e.g. {"gemini-2.5-flash":{"input":0.30,"output":2.50}}
 
 # Internal CA (Ed25519)
-FINGUARD_CA_PRIVATE_KEY_HEX=    # 32 bytes hex (64 chars). If empty, derived from SECRET_KEY (dev only).
+FINGUARD_CA_PRIVATE_KEY_HEX=    # 32 bytes hex (64 chars). Required in production; dev derives a fixed seed (NOT from SECRET_KEY).
 
 # Observability
 METRICS_AUTH_SECRET=             # Bearer token for GET /metrics. Required in production.
@@ -1240,8 +1252,8 @@ KRA regulation chunks stored with 768-dim Gemini embeddings. Agent F retrieves t
 **File**: `domains/intelligence/services/tax_rag_service.py`
 
 ### 8. Verifiable Credentials Audit Trail
-Before Agent E writes a budget alert, a JWT-signed VC is issued (agent identity + payload hash + timestamp) and stored in MongoDB `trust_log`.
-**Files**: `domains/intelligence/security/vc_issuer.py`, `agents/e_watchdog.py`
+Before Agent E writes a budget alert, an **Ed25519-signed** VC is issued (agent identity + payload hash + timestamp) and stored in MongoDB `trust_log`. The VC is a compact `header.payload.signature` token signed by the internal CA (`key_manager.py`), so it is independently verifiable with the CA public key and not forgeable by holders of the symmetric app secret. VCs minted before the Ed25519 migration (HS256) still verify via a legacy fallback keyed by the token's `alg` header.
+**Files**: `domains/intelligence/security/vc_issuer.py`, `security/key_manager.py`, `agents/e_watchdog.py`
 
 ### 9. Deterministic Compute + LLM Narrative
 Agents G and F pre-compute all financial figures deterministically; Gemini only writes the human-readable narrative. Prevents hallucination of financial numbers.
@@ -1311,7 +1323,7 @@ The `invoice_events` table is an **append-only log** that is the source of truth
 **Files**: `domains/finance/events.py`, `domains/finance/models.py` (`InvoiceEvent`), `domains/finance/service.py`
 
 ### 26. Per-Agent LLM Observability (contextvar attribution)
-Every graph node is wrapped at registration by `orchestrator._tracked(name, node)`, which sets a `current_agent_id` contextvar for the node's execution. The Gemini client's `observe_llm_call()` reads that contextvar and records **per-agent** Prometheus metrics for each call — latency (`agent_llm_processing_seconds`), tokens (`agent_llm_tokens_total{kind=prompt|completion}`), estimated cost (`agent_llm_cost_usd_total`, tokens × `GEMINI_*_USD_PER_MTOK`), and outcome (`agent_llm_calls_total{status}`). This gives central attribution with no per-agent edits, so a Grafana panel can show which agent burns the most tokens (e.g. Agent B/C dumping `ledger_entries`). Recording is best-effort and never throws into the agent path (non-numeric token counts are coerced/skipped). Agent E calls the Gemini client directly (not the shared helpers) and so calls `observe_llm_call(..., elapsed=None)` to add tokens/cost without double-counting the latency it already records.
+Every graph node is wrapped at registration by `orchestrator._tracked(name, node)`, which sets a `current_agent_id` contextvar for the node's execution. The Gemini client's `observe_llm_call()` reads that contextvar and records **per-agent** Prometheus metrics for each call — latency (`agent_llm_processing_seconds`), tokens (`agent_llm_tokens_total{kind=prompt|completion}`), estimated cost (`agent_llm_cost_usd_total`, tokens × the model-keyed rate from `llm/pricing.py`, overridable via `LLM_PRICING_JSON`), and outcome (`agent_llm_calls_total{status}`). This gives central attribution with no per-agent edits, so a Grafana panel can show which agent burns the most tokens (e.g. Agent B/C dumping `ledger_entries`). Recording is best-effort and never throws into the agent path (non-numeric token counts are coerced/skipped). Agent E calls the Gemini client directly (not the shared helpers) and so calls `observe_llm_call(..., elapsed=None)` to add tokens/cost without double-counting the latency it already records.
 **Files**: `domains/intelligence/llm_client.py` (`agent_context`, `observe_llm_call`), `domains/intelligence/orchestrator.py` (`_tracked`), `core/metrics.py`
 
 ### 27. Tool Observability (traced high-risk tools)
@@ -1460,7 +1472,7 @@ ENABLE_OUTBOX_PROJECTOR=true         # Starts PostgreSQL outbox → MongoDB proj
 | F | Tax Auditor | ✅ Complete | Deterministic Kenya tax + pgvector RAG + AML flag | `tax_audit_result` | `TaxLiabilityDonut` | 1d |
 | G | Credit Strategist | ✅ Complete | Holt-Winters + bankability score + Gemini NLG | `credit_strategy_result` | `BankabilityScoreRadar` | 1d |
 | H | Financial Advisor | ✅ Complete | Gemini multi-step reasoning + RBAC clip | `advice` | — | 1h |
-| I | External Integrator | ✅ Complete | httpx M-Pesa / CBK FX / Metropol / KRA + SSRF guard + mock fallbacks | `external_data` | — | 1h |
+| I | External Integrator | ✅ Complete | httpx M-Pesa (sandbox) / free FX provider / Metropol / KRA + SSRF guard; explicit per-source status (live/manual/mock/unavailable) | `external_data` | — | 1h |
 | J | Executive Summarizer | ✅ Complete | Gemini context distillation ≤5 bullets + locale-aware | `executive_summary` | — | 30m |
 
 ---

@@ -14,13 +14,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from google.genai import types
 from langchain_core.messages import AIMessage
 from sqlalchemy import text
 
-from src.core.config import settings
 from src.core.logging import logger
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.b_classifier import CLASSIFIER_SYSTEM, TRANSACTION_TAXONOMY
 from src.domains.intelligence.schemas import (
     BatchClassificationResult,
@@ -57,17 +55,9 @@ async def _classify_via_gemini(
         "Every input entry_id must appear exactly once in the output."
     )
 
-    client = get_gemini_client()
-    response = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=BatchClassificationResult,
-            temperature=0.0,
-        ),
+    result = await generate_structured_content(
+        prompt, BatchClassificationResult, temperature=0.0
     )
-    result = BatchClassificationResult.model_validate_json(response.text or "{}")
 
     # Guard: any entry_id not returned by Gemini gets "other"
     returned_ids = {c.entry_id for c in result.classifications}

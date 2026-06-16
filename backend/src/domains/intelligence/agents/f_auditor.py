@@ -25,9 +25,8 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from src.core.config import settings
 from src.core.logging import logger
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.schemas import (
     AgentFOutput,
     CompositeGenUIPayload,
@@ -242,17 +241,7 @@ Return a JSON object with exactly these fields:
 """
 
         try:
-            client = get_gemini_client()
-            from google.genai import types as genai_types
-            resp = await client.aio.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=compliance_prompt,
-                config=genai_types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=_ComplianceAnalysis,
-                ),
-            )
-            analysis = _ComplianceAnalysis.model_validate_json(resp.text or "")
+            analysis = await generate_structured_content(compliance_prompt, _ComplianceAnalysis)
         except Exception as exc:
             logger.warning("Agent F: Gemini compliance analysis failed", error=str(exc))
             aml_flag = max_single_tx >= _AML_REPORTING_THRESHOLD

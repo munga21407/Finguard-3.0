@@ -26,14 +26,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from google.genai import types
 from langchain_core.messages import AIMessage
 from rapidfuzz import fuzz
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.config import settings
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.c_reconciler import RECONCILER_PASS2_SYSTEM
 from src.domains.intelligence.schemas import (
     OrchestratorState,
@@ -180,18 +178,8 @@ async def _gemini_score_candidates(
         "Score each candidate. Return only those with match_score >= 0.60. "
         "Deduplicate so each transaction_id and invoice_id appears at most once."
     )
-    client = get_gemini_client()
-    response = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ReconciliationScoringResult,
-            temperature=0.0,
-        ),
-    )
-    return ReconciliationScoringResult.model_validate_json(
-        response.text or '{"candidates": []}'
+    return await generate_structured_content(
+        prompt, ReconciliationScoringResult, temperature=0.0
     )
 
 

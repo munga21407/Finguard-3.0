@@ -19,13 +19,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
 
 from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
 from sqlalchemy import bindparam, select
 
 from src.core.logging import logger
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_embedding
 from src.domains.intelligence.models import KnowledgeBase
 from src.domains.intelligence.observability import traced_tool
 from src.infrastructure.cache.redis import get_redis
@@ -59,7 +58,6 @@ async def _get_embedding(query: str) -> list[float] | None:
     result before returning it.  Returns None on any failure so the caller
     can degrade gracefully.
     """
-    from google.genai import types as genai_types  # noqa: PLC0415
 
     redis_client = get_redis()
     cache_key = _embed_cache_key(query)
@@ -75,19 +73,13 @@ async def _get_embedding(query: str) -> list[float] | None:
         except (json.JSONDecodeError, TypeError):
             pass  # stale / corrupt entry — fall through to Gemini
 
-    # ── Gemini call ─────────────────────────────────────────────────────────
-    client = get_gemini_client()
+    # ── Embedding call (provider-agnostic) ───────────────────────────────────
     try:
-        embed_resp = await client.aio.models.embed_content(
-            model=EMBEDDING_MODEL,
-            contents=query,
-            config=genai_types.EmbedContentConfig(
-                task_type="RETRIEVAL_QUERY",
-                output_dimensionality=_EXPECTED_DIM,
-            ),
+        values = await generate_embedding(
+            query,
+            task_type="RETRIEVAL_QUERY",
+            output_dimensionality=_EXPECTED_DIM,
         )
-        raw_embeddings: Any = embed_resp.embeddings
-        values = list(raw_embeddings[0].values)
     except Exception as exc:
         logger.warning("Tax RAG: embedding call failed", error=str(exc))
         return None

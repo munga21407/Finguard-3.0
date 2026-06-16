@@ -2,24 +2,15 @@
  * E2E tests for the composite GenUI chat pipeline.
  *
  * All API calls are intercepted with page.route() so no live backend is needed.
- * Auth is simulated by:
- *   1. Setting the `fg_session=1` cookie (Next.js Edge middleware guard)
- *   2. Injecting localStorage tokens with a far-future exp so auth-context
- *      decodes a valid MANAGER user on mount
+ * Auth is simulated via the shared `setupAuth` helper (cookie-auth transport:
+ * fg_session + fg_csrf + HttpOnly fg_access_token cookies, plus a mocked GET /me).
  *
  * Run: npx playwright test e2e/chat-composite-flow.spec.ts --reporter=list
  * (Dev server must be running on http://localhost:3000)
  */
-import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
-// ── Fake auth token ──────────────────────────────────────────────────────────
-// payload: { exp: far-future, role: "MANAGER" }
-const FAKE_TOKEN = (() => {
-  const payload = Buffer.from(
-    JSON.stringify({ exp: 9999999999, role: "MANAGER" })
-  ).toString("base64");
-  return `eyJhbGciOiJub25lIn0.${payload}.fake-sig`;
-})();
+import { setupAuth } from "./helpers";
 
 // ── Mock data ────────────────────────────────────────────────────────────────
 
@@ -53,49 +44,6 @@ const COMPOSITE_PAYLOAD = {
   },
   fallback_text: "Cash flow chart for next quarter.",
 };
-
-// ── Auth setup helpers ───────────────────────────────────────────────────────
-
-async function setupAuth(page: Page, context: BrowserContext) {
-  await context.addCookies([
-    {
-      name: "fg_session",
-      value: "1",
-      domain: "localhost",
-      path: "/",
-      sameSite: "Lax",
-    },
-    // fg_csrf is the non-HttpOnly session marker read by tokenManager.hasSession()
-    // after the HttpOnly-cookie migration.
-    {
-      name: "fg_csrf",
-      value: "e2e-csrf-token",
-      domain: "localhost",
-      path: "/",
-      sameSite: "Strict",
-    },
-  ]);
-  await page.addInitScript((token: string) => {
-    localStorage.setItem("fg_access_token", token);
-  }, FAKE_TOKEN);
-
-  // The auth context hydrates the user from GET /me on mount; must resolve.
-  await page.route("**/api/v1/identity/me", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        id: "user-e2e",
-        email: "manager@finguard.io",
-        full_name: "E2E Manager",
-        role: "manager",
-        is_active: true,
-        is_verified: true,
-        created_at: "2026-01-01T00:00:00Z",
-      }),
-    })
-  );
-}
 
 // ── Route helpers ────────────────────────────────────────────────────────────
 

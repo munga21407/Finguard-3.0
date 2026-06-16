@@ -31,9 +31,8 @@ import numpy as np
 from langchain_core.messages import AIMessage
 from sqlalchemy import text
 
-from src.core.config import settings
 from src.core.logging import logger
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_text_content
 from src.domains.intelligence.schemas import (
     AgentGOutput,
     CompositeGenUIPayload,
@@ -436,12 +435,7 @@ Write a strategic_narrative (3-5 sentences) that:
 """
 
         try:
-            client = get_gemini_client()
-            resp = await client.aio.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=narrative_prompt,
-            )
-            narrative: str = (resp.text or "").strip()
+            narrative: str = (await generate_text_content(narrative_prompt)).strip()
         except Exception as exc:
             logger.warning("Agent G: Gemini narrative failed", error=str(exc))
             net_trend = "improving" if (fc_revenue[-1] - fc_revenue[0]) > 0 else "declining"

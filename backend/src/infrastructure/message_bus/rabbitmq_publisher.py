@@ -34,6 +34,16 @@ async def close_rabbitmq() -> None:
         await _connection.close()
 
 
+def is_rabbitmq_connected() -> bool:
+    """True when the robust connection is initialised and open.
+
+    Used by the readiness probe. Cheap and synchronous — aio-pika's robust
+    connection auto-reconnects in the background, so this reflects current link
+    health without issuing a network round-trip.
+    """
+    return _connection is not None and not _connection.is_closed
+
+
 async def publish(exchange_name: str, routing_key: str, payload: dict[str, Any]) -> None:
     if _connection is None or _connection.is_closed:
         logger.error(

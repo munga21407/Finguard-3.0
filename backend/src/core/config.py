@@ -55,6 +55,7 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_EMBEDDING_MODEL: str = "text-embedding-004"  # tax-RAG retrieval embeddings
     # Per-agent LLM cost attribution is now model-keyed and externally
     # configurable via the LLM_PRICING_JSON env var — see
     # src/domains/intelligence/llm/pricing.py. The old hardcoded single-rate
@@ -66,11 +67,13 @@ class Settings(BaseSettings):
     METRICS_AUTH_SECRET: str = ""
 
     # External financial API credentials (Agent I — External Integrator)
-    MPESA_CONSUMER_KEY: str = ""
+    MPESA_CONSUMER_KEY: str = ""       # Safaricom Daraja sandbox — free self-service keys
     MPESA_CONSUMER_SECRET: str = ""
     MPESA_SHORTCODE: str = ""          # Business short code for STK Push
-    CBK_FX_API_KEY: str = ""           # Central Bank of Kenya FX rates API
-    METROPOL_API_KEY: str = ""         # Metropol credit bureau API
+    # FX rates: free, keyless public provider (USD-based; *_KES derived as cross-rates).
+    # CBK has no public developer FX API — substitute any equivalent source here.
+    FX_API_URL: str = "https://open.er-api.com/v6/latest/USD"
+    METROPOL_API_KEY: str = ""         # Metropol credit bureau API (commercial — deferred)
     KRA_ECITIZEN_API_KEY: str = ""     # KRA e-Citizen VAT/tax status API
 
     @field_validator("JWT_SECRET_KEY", mode="before")

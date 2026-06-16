@@ -20,12 +20,10 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from google.genai import types
 from langchain_core.messages import AIMessage
 
-from src.core.config import settings
 from src.core.logging import logger
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_text_content
 from src.domains.intelligence.schemas import OrchestratorState, ReceiptExtraction
 from src.domains.intelligence.tools.vision_ocr import extract_receipt
 
@@ -129,15 +127,13 @@ def make_receipt_classifier_node() -> Any:
 
         suggested = "other"
         try:
-            client = get_gemini_client()
-            response = await client.aio.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=_CLASSIFIER_PROMPT.format(
+            response_text = await generate_text_content(
+                _CLASSIFIER_PROMPT.format(
                     merchant=merchant, items=items, total=total, currency=currency
                 ),
-                config=types.GenerateContentConfig(temperature=0.0),
+                temperature=0.0,
             )
-            candidate = (response.text or "").strip().lower()
+            candidate = response_text.strip().lower()
             # Guard: only accept a value from the allowed set; default otherwise.
             suggested = candidate if candidate in RECEIPT_CATEGORIES else "other"
         except Exception as exc:  # noqa: BLE001 — categorisation is best-effort

@@ -1,14 +1,14 @@
 """Provider-agnostic LLM client interface.
 
-Agents that only need "prompt in → structured/text out" depend on this ABC, not
-on any vendor SDK, so the provider can be swapped (Gemini → Anthropic → OpenAI)
-by registering a different implementation in ``llm_client.get_llm_client``.
+Agents depend on this ABC, not on any vendor SDK, so the provider can be swapped
+(Gemini → Anthropic → OpenAI) by registering a different implementation in
+``llm_client.get_llm_client``. The interface covers the capabilities the agent
+graph actually uses: structured output, free-form text, multimodal (vision)
+structured output, and embeddings.
 
-``raw()`` is a deliberate escape hatch: several agents still use vendor-specific
-features (vision, embeddings, native ``response_schema``, thinking budgets) that
-are not yet part of this neutral interface.  They call ``raw()`` to reach the
-underlying SDK client.  New code should prefer the abstract methods; migrating
-the remaining ``raw()`` call sites is tracked as follow-up work.
+``raw()`` remains a deliberate escape hatch for genuinely vendor-specific paths
+not modelled here (e.g. the multi-turn streaming chat in ``service.py`` with
+roles + system instruction). The LangGraph agents and tools do not use it.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from pydantic import BaseModel
 class BaseLLMClient(ABC):
     @abstractmethod
     async def generate_structured[T: BaseModel](
-        self, prompt: str, response_schema: type[T]
+        self, prompt: str, response_schema: type[T], *, temperature: float | None = None
     ) -> T:
         """Return a schema-validated structured response for ``prompt``.
 
@@ -30,13 +30,35 @@ class BaseLLMClient(ABC):
         """
 
     @abstractmethod
-    async def generate_text(self, prompt: str) -> str:
+    async def generate_text(self, prompt: str, *, temperature: float | None = None) -> str:
         """Return a free-form text completion for ``prompt``."""
+
+    @abstractmethod
+    async def generate_vision_structured[T: BaseModel](
+        self,
+        prompt: str,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        response_schema: type[T],
+        temperature: float | None = None,
+    ) -> T:
+        """Return a schema-validated structured response over an image + prompt."""
+
+    @abstractmethod
+    async def embed(
+        self,
+        text: str,
+        *,
+        task_type: str | None = None,
+        output_dimensionality: int | None = None,
+    ) -> list[float]:
+        """Return the embedding vector for ``text``."""
 
     @abstractmethod
     def raw(self) -> Any:
         """Return the underlying vendor SDK client (escape hatch).
 
-        Used by call sites relying on provider-specific capabilities not yet
-        exposed through this interface.
+        Used only by genuinely vendor-specific paths not modelled by the methods
+        above (e.g. role-based multi-turn chat). Agents/tools must not use it.
         """

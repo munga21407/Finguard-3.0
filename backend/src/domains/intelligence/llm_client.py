@@ -90,7 +90,7 @@ def get_gemini_client() -> genai.Client:
 # ---------------------------------------------------------------------------
 
 async def generate_structured_content[T: BaseModel](
-    prompt: str, response_schema: type[T]
+    prompt: str, response_schema: type[T], *, temperature: float | None = None
 ) -> T:
     """Call the configured LLM with native structured-output mode.
 
@@ -98,16 +98,56 @@ async def generate_structured_content[T: BaseModel](
         LLMUnavailableError — on timeout or exhausted retry budget. LangGraph
             nodes should catch this via ``llm_degraded_node_result()``.
     """
-    return await get_llm_client().generate_structured(prompt, response_schema)
+    return await get_llm_client().generate_structured(
+        prompt, response_schema, temperature=temperature
+    )
 
 
-async def generate_text_content(prompt: str) -> str:
+async def generate_text_content(prompt: str, *, temperature: float | None = None) -> str:
     """Call the configured LLM for free-form text.
 
     Raises:
         LLMUnavailableError — on timeout or exhausted retry budget.
     """
-    return await get_llm_client().generate_text(prompt)
+    return await get_llm_client().generate_text(prompt, temperature=temperature)
+
+
+async def generate_vision_content[T: BaseModel](
+    prompt: str,
+    *,
+    image_bytes: bytes,
+    mime_type: str,
+    response_schema: type[T],
+    temperature: float | None = None,
+) -> T:
+    """Call the configured LLM with an image + prompt → structured output.
+
+    Raises:
+        LLMUnavailableError — on timeout or exhausted retry budget.
+    """
+    return await get_llm_client().generate_vision_structured(
+        prompt,
+        image_bytes=image_bytes,
+        mime_type=mime_type,
+        response_schema=response_schema,
+        temperature=temperature,
+    )
+
+
+async def generate_embedding(
+    text: str,
+    *,
+    task_type: str | None = None,
+    output_dimensionality: int | None = None,
+) -> list[float]:
+    """Return the embedding vector for ``text`` from the configured provider.
+
+    Raises:
+        LLMUnavailableError — on timeout or exhausted retry budget.
+    """
+    return await get_llm_client().embed(
+        text, task_type=task_type, output_dimensionality=output_dimensionality
+    )
 
 
 # ---------------------------------------------------------------------------

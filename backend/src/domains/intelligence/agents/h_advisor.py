@@ -20,9 +20,8 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from src.core.config import settings
 from src.core.logging import logger
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.schemas import OrchestratorState
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
@@ -201,17 +200,7 @@ Return JSON with fields: recommendations (array), advice_tier (string), overall_
 """
 
         try:
-            client = get_gemini_client()
-            from google.genai import types as genai_types
-            resp = await client.aio.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=_AdvisorOutput,
-                ),
-            )
-            advisor_out = _AdvisorOutput.model_validate_json(resp.text or "")
+            advisor_out = await generate_structured_content(prompt, _AdvisorOutput)
         except Exception as exc:
             logger.warning("Agent H: Gemini advisory failed", error=str(exc))
             advisor_out = _AdvisorOutput(

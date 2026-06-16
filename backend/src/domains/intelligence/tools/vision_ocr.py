@@ -8,10 +8,7 @@ prompt and Gemini configuration never drift between the sync and async paths.
 """
 from __future__ import annotations
 
-from google.genai import types
-
-from src.core.config import settings
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_vision_content
 from src.domains.intelligence.schemas import ReceiptExtraction
 
 # Canonical receipt-extraction prompt.  Tuned for Kenyan SME receipts where the
@@ -73,19 +70,10 @@ async def extract_receipt(
         the caller decides whether confidence is high enough to act on.
     """
     mime = mime_type or detect_image_mime(image_bytes)
-    client = get_gemini_client()
-    response = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        # google-genai stubs type `contents` with an invariant list union, so a
-        # plain list[Part] is rejected even though it is valid at runtime.
-        contents=[  # type: ignore[arg-type]
-            types.Part.from_bytes(data=image_bytes, mime_type=mime),
-            types.Part.from_text(text=RECEIPT_OCR_PROMPT),
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ReceiptExtraction,
-            temperature=0.0,
-        ),
+    return await generate_vision_content(
+        RECEIPT_OCR_PROMPT,
+        image_bytes=image_bytes,
+        mime_type=mime,
+        response_schema=ReceiptExtraction,
+        temperature=0.0,
     )
-    return ReceiptExtraction.model_validate_json(response.text or "{}")

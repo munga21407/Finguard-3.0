@@ -28,14 +28,12 @@ from typing import Any
 
 import numpy as np
 import structlog
-from google.genai import types
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.config import settings
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.d_forecaster import (
     FORECASTER_COVE_AUDITOR_SYSTEM,
     FORECASTER_COVE_DRAFTER_SYSTEM,
@@ -239,17 +237,7 @@ async def _detect_regime(
         "advisory warnings, and a narrative."
     )
 
-    client = get_gemini_client()
-    response = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=RegimeAnalysis,
-            temperature=0.2,
-        ),
-    )
-    return RegimeAnalysis.model_validate_json(response.text or "{}")
+    return await generate_structured_content(prompt, RegimeAnalysis, temperature=0.2)
 
 
 # ---------------------------------------------------------------------------
@@ -266,24 +254,13 @@ async def _cove_text_to_sql(user_query: str) -> CoVeSQLQuery:
     If the Auditor approves (intent_preserved=True, confidence ≥ 0.70), the
     query is executed via the read-only sql_executor; results are attached.
     """
-    client = get_gemini_client()
-
     # ── Step 1: Draft ─────────────────────────────────────────────────────────
     draft_prompt = (
         f"{FORECASTER_COVE_DRAFTER_SYSTEM}\n\n"
         f"User question: {user_query}\n\n"
         "Write the PostgreSQL SELECT query."
     )
-    draft_resp = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        contents=draft_prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=_CoVeDraft,
-            temperature=0.0,
-        ),
-    )
-    draft = _CoVeDraft.model_validate_json(draft_resp.text or "{}")
+    draft = await generate_structured_content(draft_prompt, _CoVeDraft, temperature=0.0)
 
     # ── Step 2: Explain ───────────────────────────────────────────────────────
     explain_prompt = (
@@ -291,16 +268,9 @@ async def _cove_text_to_sql(user_query: str) -> CoVeSQLQuery:
         f"Query:\n{draft.sql_query}\n\n"
         "Describe what this query retrieves in one paragraph."
     )
-    explain_resp = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        contents=explain_prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=_CoVeExplanation,
-            temperature=0.0,
-        ),
+    explanation = await generate_structured_content(
+        explain_prompt, _CoVeExplanation, temperature=0.0
     )
-    explanation = _CoVeExplanation.model_validate_json(explain_resp.text or "{}")
 
     # ── Step 3: Audit ─────────────────────────────────────────────────────────
     audit_prompt = (
@@ -311,16 +281,7 @@ async def _cove_text_to_sql(user_query: str) -> CoVeSQLQuery:
         "Verify correctness, safety, and completeness. "
         "Set intent_preserved = true only if the SQL correctly answers the question."
     )
-    audit_resp = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        contents=audit_prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=_CoVeAudit,
-            temperature=0.0,
-        ),
-    )
-    audit = _CoVeAudit.model_validate_json(audit_resp.text or "{}")
+    audit = await generate_structured_content(audit_prompt, _CoVeAudit, temperature=0.0)
 
     # ── Execute if approved ────────────────────────────────────────────────────
     results: list[dict[str, Any]] | None = None

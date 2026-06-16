@@ -7,7 +7,6 @@ vision OCR + categoriser so the test is hermetic and deterministic.
 from __future__ import annotations
 
 from collections.abc import Callable
-from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
@@ -62,15 +61,12 @@ async def test_scan_happy_path_returns_extraction_and_category(
             confidence=0.95,
         )
 
-    # Mock the categoriser's Gemini call to deterministically return "supplies".
-    def _fake_client() -> object:
-        async def _gen(*args: object, **kwargs: object) -> object:
-            return SimpleNamespace(text="supplies")
-
-        return SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=_gen)))
+    # Mock the categoriser's LLM call to deterministically return "supplies".
+    async def _fake_text(*args: object, **kwargs: object) -> str:
+        return "supplies"
 
     monkeypatch.setattr(scanner, "extract_receipt", _fake_extract)
-    monkeypatch.setattr(scanner, "get_gemini_client", _fake_client)
+    monkeypatch.setattr(scanner, "generate_text_content", _fake_text)
 
     res = await client.post(
         "/api/v1/intelligence/receipts/scan",
@@ -97,14 +93,11 @@ async def test_scan_degrades_to_empty_form_on_ocr_failure(
     async def _boom(image_bytes: bytes, mime_type: str | None = None) -> ReceiptExtraction:
         raise RuntimeError("gemini timeout")
 
-    def _fake_client() -> object:
-        async def _gen(*args: object, **kwargs: object) -> object:
-            return SimpleNamespace(text="other")
-
-        return SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=_gen)))
+    async def _fake_text(*args: object, **kwargs: object) -> str:
+        return "other"
 
     monkeypatch.setattr(scanner, "extract_receipt", _boom)
-    monkeypatch.setattr(scanner, "get_gemini_client", _fake_client)
+    monkeypatch.setattr(scanner, "generate_text_content", _fake_text)
 
     res = await client.post(
         "/api/v1/intelligence/receipts/scan",

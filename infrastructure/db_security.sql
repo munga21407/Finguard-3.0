@@ -5,8 +5,13 @@
 -- This role is used exclusively by the Text-to-SQL engine (Agent D CoVe)
 -- to prevent LLM-generated queries from ever mutating data.
 --
--- Usage:
+-- Usage (manual / production):
 --   psql -U postgres -d finguard -f infrastructure/db_security.sql
+--   (run AFTER `alembic upgrade head` so GRANT SELECT ON ALL TABLES sees them)
+--
+-- Local dev provisions this role automatically on first DB init via
+-- infrastructure/scripts/init-readonly-role.sh (wired in docker-compose.dev.yml).
+-- Keep the two in sync when editing grants.
 -- ============================================================================
 
 -- 1. Create the role (LOGIN so a connection string can use it directly).

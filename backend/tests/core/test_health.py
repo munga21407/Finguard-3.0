@@ -20,5 +20,7 @@ async def test_readiness_reports_checks(client: AsyncClient) -> None:
     assert res.status_code in (200, 503)
     body = res.json()
     assert body["status"] in ("ready", "degraded")
-    assert "postgres" in body["checks"]
-    assert "redis" in body["checks"]
+    # All four backing services are enumerated (Mongo + RabbitMQ were previously
+    # unchecked — a degraded broker/store would have shown a false "ready").
+    for dep in ("postgres", "redis", "mongodb", "rabbitmq"):
+        assert dep in body["checks"]

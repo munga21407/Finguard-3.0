@@ -46,7 +46,7 @@ AI-powered financial operations platform for small-to-medium enterprises, with d
 | Messaging | RabbitMQ 3.13, aio-pika |
 | Workers | Celery 5.4, Celery Beat |
 | ML | scikit-learn (Isolation Forest), statsmodels (Holt-Winters) |
-| Auth | JWT (HS256), bcrypt, slowapi rate limiting |
+| Auth | JWT (HS256) in HttpOnly cookies, double-submit CSRF, bcrypt, slowapi rate limiting |
 | Observability | Prometheus, Grafana, Structlog |
 | Proxy | Nginx 1.27 |
 | Containers | Docker + Docker Compose |
@@ -206,7 +206,7 @@ All agents are LangGraph nodes in a Supervisor/ReAct loop: the supervisor routes
 | F | Tax Auditor | Supervisor | Deterministic Kenya tax + pgvector RAG | 1d |
 | G | Credit Strategist | Supervisor | Holt-Winters + bankability score + NLG | 1d |
 | H | Financial Advisor | Supervisor | Gemini multi-step reasoning + RBAC clip | 1h |
-| I | External Integrator | Supervisor | httpx (M-Pesa / CBK / Metropol / KRA) + SSRF guard | 1h |
+| I | External Integrator | Supervisor | httpx (M-Pesa sandbox / free FX / Metropol / KRA) + SSRF guard; explicit live/manual/mock/unavailable status | 1h |
 | J | Executive Summarizer | Last before FINISH | Gemini ≤5-bullet locale-aware summary | 30m |
 
 **Receipt Scanner** — a standalone two-node vision graph (`receipt_ocr → receipt_classifier`) backing `POST /intelligence/receipts/scan`. It is *not* part of the supervisor loop: it OCRs an uploaded receipt with Gemini vision and suggests an expense category for the user to review, then `POST /finance/receipts` persists the confirmed expense.
@@ -224,7 +224,7 @@ All agents are LangGraph nodes in a Supervisor/ReAct loop: the supervisor routes
 
 ## Authentication & RBAC
 
-JWT-based auth (access: 30 min, refresh: 7 days) with Redis-backed token blacklist, refresh-token rotation, login lockout, and rate limiting. Permissions are enforced per-route via a `Permission` enum and a role→permission matrix (default-deny).
+JWT-based auth (access: 30 min, refresh: 7 days) delivered as **HttpOnly, `SameSite=Strict` cookies** (access tokens are invisible to JS; `Authorization: Bearer` is still accepted for API clients). State-changing requests are protected by a **double-submit CSRF** token (global `CSRFMiddleware`, `CSRF_ENABLED`). Backed by a Redis token blacklist, refresh-token rotation, login lockout, and rate limiting. Permissions are enforced per-route via a `Permission` enum and a role→permission matrix (default-deny).
 
 | Role | Access |
 |---|---|
@@ -247,15 +247,17 @@ REDIS_URL=redis://:finguard@redis:6379/0
 RABBITMQ_URL=amqp://finguard:finguard@rabbitmq:5672/
 
 # Auth
-SECRET_KEY=<64+ char secret>
+SECRET_KEY=<64+ char secret>     # general secret + legacy-HS256 VC verification
+JWT_SECRET_KEY=                  # auth-token signing; defaults to SECRET_KEY if empty
+CSRF_ENABLED=true                # double-submit CSRF on mutations (never disable in prod)
+FINGUARD_CA_PRIVATE_KEY_HEX=    # Ed25519 CA key (64 hex chars); required in production
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 REFRESH_TOKEN_EXPIRE_DAYS=7
 
 # AI
 GEMINI_API_KEY=<key>
 GEMINI_MODEL=gemini-2.5-flash
-GEMINI_INPUT_USD_PER_MTOK=0.30   # list-price estimate → per-agent cost metric
-GEMINI_OUTPUT_USD_PER_MTOK=2.50
+LLM_PRICING_JSON=                # optional model-keyed cost override → per-agent cost metric
 
 # Background workers
 ENABLE_EXPENSE_EVENT_CONSUMER=true

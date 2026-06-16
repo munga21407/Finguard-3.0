@@ -149,10 +149,15 @@ async def health_ready() -> Response:
     from sqlalchemy import text
 
     from src.infrastructure.cache.redis import get_redis
+    from src.infrastructure.database.mongodb import get_mongo_db
     from src.infrastructure.database.postgres import engine
+    from src.infrastructure.message_bus.rabbitmq_publisher import is_rabbitmq_connected
 
     checks: dict[str, str] = {}
     ok = True
+    # Hard dependencies — failure pulls the instance from rotation (503). These
+    # back the request-serving read paths (Postgres: everything; Redis: auth
+    # blacklist/lockout/sessions; MongoDB: the intelligence hub + trust_log).
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
@@ -166,6 +171,17 @@ async def health_ready() -> Response:
     except Exception as exc:  # noqa: BLE001
         checks["redis"] = f"error: {type(exc).__name__}"
         ok = False
+    try:
+        await get_mongo_db().command("ping")
+        checks["mongodb"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        checks["mongodb"] = f"error: {type(exc).__name__}"
+        ok = False
+
+    # Soft dependency — reported but does NOT gate readiness. publish() degrades
+    # gracefully (the outbox retries), so a broker blip must not pull every
+    # instance from rotation and cause a full outage for read traffic.
+    checks["rabbitmq"] = "ok" if is_rabbitmq_connected() else "error: not connected"
 
     import json
 

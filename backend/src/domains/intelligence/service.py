@@ -20,6 +20,10 @@ class IntelligenceService:
         self._session = session
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
+        # Intentional BaseLLMClient.raw() escape hatch: role-based multi-turn
+        # chat (Content/Part history + system_instruction + max_output_tokens) is
+        # not modelled by the neutral interface. The agent graph uses the
+        # interface; only this standalone chat service touches the SDK directly.
         client = get_gemini_client()
 
         # Map messages to Gemini Content objects (role must be "user" or "model")

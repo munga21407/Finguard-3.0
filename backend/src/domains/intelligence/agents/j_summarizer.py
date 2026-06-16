@@ -20,9 +20,8 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
-from src.core.config import settings
 from src.core.logging import logger
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_text_content
 from src.domains.intelligence.schemas import OrchestratorState
 
 # Agent output keys inspected for the summary, in logical report order.
@@ -125,12 +124,7 @@ Rules:
 """
 
         try:
-            client = get_gemini_client()
-            resp = await client.aio.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=prompt,
-            )
-            summary_text: str = (resp.text or "").strip()
+            summary_text: str = (await generate_text_content(prompt)).strip()
         except Exception as exc:
             logger.warning("Agent J: Gemini summarisation failed", error=str(exc))
             lines: list[str] = []
