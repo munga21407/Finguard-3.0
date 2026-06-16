@@ -895,7 +895,7 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/expenses` | `finance:write` | Create expense (publishes via outbox) |
 | GET | `/expenses` | `finance:read` | List expenses |
 | POST | `/receipts` | `finance:write` | Persist a reviewed receipt scan as an expense (budget burn-down + `expenses.created`) |
-| POST | `/mpesa/callback` | — | M-Pesa Daraja STK callback (strict MpesaStkCallback validation; stores raw_payload) |
+| POST | `/mpesa/callback` | IP allowlist (+ optional HMAC) | M-Pesa Daraja STK callback; `verify_mpesa_signature` authenticates the origin against `MPESA_CALLBACK_ALLOWED_IPS` (fail-closed 503 if no control configured), then strict MpesaStkCallback validation; stores raw_payload |
 | POST | `/payments/cash` | `finance:write` | Record cash payment (row-locked for UPDATE) |
 | POST | `/budgets` | `finance:write` | Create budget |
 | GET | `/budgets` | `finance:read` | List budgets |
@@ -1070,7 +1070,7 @@ Exchange: finguard.events  (type=TOPIC, durable=true)
 
 Both tokens are signed with `JWT_SECRET_KEY` (which defaults to `SECRET_KEY` when unset, so a single-secret deployment still works but the auth key can be rotated independently).
 
-**Transport (cookie-first, Bearer fallback).** Login/refresh set the access token as an **HttpOnly, `SameSite=Strict` cookie** (`fg_access_token`, invisible to JS — XSS-exfiltration safe) and the refresh token as an HttpOnly cookie path-scoped to `/api/v1/identity`. The access token is also returned in the JSON body for non-browser clients. `get_current_user` reads the access cookie first and falls back to `Authorization: Bearer`. A non-HttpOnly `fg_session` marker is set for the Next.js Edge middleware, and a non-HttpOnly `fg_csrf` cookie drives the double-submit CSRF check (below).
+**Transport (cookie-first, Bearer fallback).** Login/refresh set the access token as an **HttpOnly, `SameSite=Strict` cookie** (`fg_access_token`, invisible to JS — XSS-exfiltration safe) and the refresh token as an HttpOnly cookie path-scoped to `/api/v1/identity`. The access token is also returned in the JSON body for non-browser clients. `get_current_user` reads the access cookie first and falls back to `Authorization: Bearer`. Because both token kinds are signed with the same key, `get_current_user` also enforces the `type` claim — it rejects any token whose `type` is not `access`, so a longer-lived refresh token cannot be replayed in the access cookie/Bearer header (token-type confusion). A non-HttpOnly `fg_session` marker is set for the Next.js Edge middleware, and a non-HttpOnly `fg_csrf` cookie drives the double-submit CSRF check (below).
 
 Both tokens carry a `jti` (JWT ID). On logout or refresh rotation, the consumed `jti` is written to Redis `blacklist:{jti}` with TTL = remaining token lifetime. `get_current_user` checks the blacklist on every request.
 
@@ -1101,7 +1101,9 @@ class Permission(enum.StrEnum):
 
 ### Login Lockout
 
-After `MAX_LOGIN_ATTEMPTS` (default 5) consecutive failures for the same email, `TooManyRequestsError (429)` is raised and subsequent attempts are blocked for `LOCKOUT_DURATION_MINUTES` (default 30). Counter stored in Redis `login_attempts:{email}`. Cleared on successful login.
+After `MAX_LOGIN_ATTEMPTS` (default 5) consecutive failures, `TooManyRequestsError (429)` is raised and subsequent attempts are blocked for `LOCKOUT_DURATION_MINUTES` (default 30). The counter is keyed per **(email, source IP)** — Redis `login_attempts:{email}:{ip}` — not per email alone: an email-only key let any anonymous attacker lock a victim out of their own account by submitting bad passwords (a targeted denial of service), whereas the IP component confines a lockout to the offending client. The per-endpoint slowapi rate limit (5/min/IP) and nginx `limit_req` remain the brute-force backstop. The source IP is taken from the left-most `X-Forwarded-For` entry, which nginx **sets** (not appends) to the real peer address so it cannot be spoofed (see Design Pattern 23 — Trusted Client IP). Cleared on successful login.
+
+**Account-enumeration hardening.** Login always runs bcrypt — against the user's stored hash, or a fixed dummy hash when the email is unknown — so response latency does not reveal whether an account exists (timing side-channel). The credentials error is generic (`Invalid credentials`) regardless of which factor failed.
 
 ### User Lifecycle
 
@@ -1115,18 +1117,23 @@ After `MAX_LOGIN_ATTEMPTS` (default 5) consecutive failures for the same email, 
 |---|---|
 | CORS | Origin whitelist via `ALLOWED_ORIGINS` |
 | Rate limiting | slowapi per-IP on login/register (nginx also enforces `limit_req_zone`) |
-| Account lockout | Redis `login_attempts:{email}` counter; 429 after N attempts |
+| Account lockout | Redis `login_attempts:{email}:{ip}` counter (per email + source IP, so an attacker cannot lock out a victim); 429 after N attempts |
+| Account enumeration | Login always runs bcrypt (dummy hash on unknown email) to equalise timing; generic `Invalid credentials` error |
+| Token-type confusion | `get_current_user` rejects any token whose `type` ≠ `access` — a refresh token cannot authenticate as an access token |
 | JWT blacklist | `blacklist:{jti}` Redis key; checked in `get_current_user` |
 | Refresh rotation | Consumed `jti` blacklisted on every `/token/refresh`; reuse returns 401 |
 | HttpOnly access cookie | Access token delivered as `fg_access_token` (HttpOnly, `SameSite=Strict`) — not readable by JS; `Authorization: Bearer` still accepted for API clients |
-| CSRF (double-submit) | Global `CSRFMiddleware` enforces a matching `fg_csrf` cookie + `X-CSRF-Token` header on every unsafe method; gated by `CSRF_ENABLED`. Exempt allowlist: `/finance/mpesa/callback` (signed webhook), `/identity/token`, `/identity/register` |
+| CSRF (double-submit) | Global `CSRFMiddleware` enforces a matching `fg_csrf` cookie + `X-CSRF-Token` header on every unsafe method; gated by `CSRF_ENABLED`. Exempt allowlist: `/finance/mpesa/callback` (IP-allowlisted webhook), `/identity/token`, `/identity/register` |
+| M-Pesa callback auth | Source-IP allowlist (`MPESA_CALLBACK_ALLOWED_IPS`) of Safaricom's callback ranges; optional HMAC-SHA256 body signature layered on top; **fail-closed** (503) when neither is configured |
+| Trusted client IP | nginx **sets** `X-Forwarded-For` to `$remote_addr` (not append) on API routes, so the source IP behind the per-IP lockout and the M-Pesa allowlist cannot be spoofed |
 | Password hashing | Direct `bcrypt.hashpw` / `bcrypt.checkpw` — passlib not used (bcrypt ≥5.0 incompatibility) |
 | Verifiable Credentials | **Ed25519-signed** compact tokens (`header.payload.signature`) — Audit VCs (365-day) and Task-Scoped VCs (5-min) in MongoDB `trust_log`. Legacy HS256 tokens still verify via a fallback branch |
 | Internal CA (Ed25519) | `security/key_manager.py` — production: `FINGUARD_CA_PRIVATE_KEY_HEX` (required, fail-fast); dev: a fixed dev-only seed **decoupled from `SECRET_KEY`** |
 | Metrics endpoint auth | `GET /metrics` guarded by `METRICS_AUTH_SECRET` Bearer token |
 | Text-to-SQL role | `finguard_readonly` PostgreSQL role; `DATABASE_READONLY_URL` fail-closed in production |
 | SQL injection prevention | Two-stage: regex pre-filter + sqlglot AST validation; 100-row `LIMIT` cap |
-| SSRF prevention | `_assert_public_url()` in `http_caller.py`: DNS resolution + private/loopback/link-local IP block; `follow_redirects=False` |
+| SQL table allowlist | `execute_readonly_sql` structurally rejects any query touching a table outside the allowlist (`ledger_entries`, `invoices`, `budgets`, `expenses`) — blocks `users`/`knowledge_base`/`outbox_events`/catalog reads even though prompt-level schema masking only shapes the LLM context |
+| SSRF prevention | `_resolve_and_pin()` in `http_caller.py`: resolves DNS once, blocks private/loopback/link-local/reserved IPs, then **pins the socket to the validated IP** (defeats DNS-rebinding TOCTOU); `follow_redirects=False` |
 | IDOR prevention | `task_owner:{session_id}` Redis key; `conversation_status` returns 404 on owner mismatch |
 | Production fail-fast | `config.py` `model_validator`: enforces `DEBUG=False`, strong `SECRET_KEY`, `DATABASE_READONLY_URL` set, `METRICS_AUTH_SECRET` set, no wildcard `ALLOWED_ORIGINS` when `ENVIRONMENT=production` |
 | AML flag | Agent F auto-injects `AML_REPORTING_REQUIRED` when any transaction exceeds KRA AML threshold |
@@ -1299,7 +1306,7 @@ Agents D/E/F/G build `CompositeGenUIPayload` with deterministic `props` and LLM-
 **File**: `frontend/src/components/dashboard/intelligence/CompositeInsightSkeleton.tsx`
 
 ### 20. SSRF Prevention (Agent I / External HTTP)
-`_assert_public_url()` in `http_caller.py` DNS-resolves the target hostname and blocks any resolved IP that is private, loopback, link-local, or multicast. `follow_redirects=False` prevents redirect-based bypass.
+`_resolve_and_pin()` in `http_caller.py` DNS-resolves the target hostname once and rejects the call if **any** resolved address is private, loopback, link-local, reserved, multicast, or unspecified. It then returns a single cleared IP, and the request runs through a pinned transport (`_PinnedTransport` / `_PinnedIPBackend`) that dials exactly that IP — so the socket cannot re-resolve to an internal address between the check and the connect (DNS-rebinding TOCTOU). TLS SNI and certificate verification still use the original hostname, so HTTPS stays correctly validated. `follow_redirects=False` blocks redirect-based bypass.
 **File**: `domains/intelligence/tools/http_caller.py`
 
 ### 21. IDOR Guard on Conversation Status
