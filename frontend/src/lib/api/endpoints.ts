@@ -27,6 +27,11 @@ export const ENDPOINTS = {
     CUSTOMER: (id: string) => `/api/v1/crm/customers/${id}`,
   },
 
+  // Health (unauthenticated; not under /api/v1)
+  HEALTH: {
+    READY: "/health/ready",
+  },
+
   // Intelligence
   INTELLIGENCE: {
     INSIGHTS: "/api/v1/intelligence/ai-insights",
