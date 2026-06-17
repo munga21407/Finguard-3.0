@@ -170,20 +170,26 @@ Finguard-3.0/
 │       │   ├── layout.tsx
 │       │   ├── globals.css
 │       │   ├── page.tsx
-│       │   ├── login/page.tsx
-│       │   ├── register/page.tsx
-│       │   ├── settings/page.tsx      # Real profile page (name/email/role from /me) + server-revoking logout
+│       │   ├── (auth)/                 # Route group: login + signup (no URL segment)
+│       │   │   ├── login/page.tsx
+│       │   │   └── signup/page.tsx
+│       │   ├── settings/page.tsx       # Real profile page (name/email/role from /me) + server-revoking logout
+│       │   ├── support/page.tsx        # Help & contact surface (root-level shell, mirrors /settings)
 │       │   └── dashboard/
 │       │       ├── layout.tsx
 │       │       ├── page.tsx
 │       │       ├── overview/page.tsx
 │       │       ├── intelligence/page.tsx
-│       │       ├── invoices/page.tsx
+│       │       ├── invoices/
+│       │       │   ├── page.tsx
+│       │       │   └── new/page.tsx    # New-invoice form (CustomerPicker + createInvoice)
 │       │       ├── budgets/page.tsx
 │       │       ├── transactions/page.tsx
 │       │       ├── receivables/page.tsx
+│       │       ├── operations/page.tsx # Operations control surface (live System Health card)
 │       │       └── payables/
 │       │           ├── page.tsx
+│       │           ├── queue/page.tsx  # Approval queue (static mock — no backend endpoint yet)
 │       │           └── alerts/page.tsx
 │       ├── components/
 │       │   ├── auth/
@@ -216,6 +222,8 @@ Finguard-3.0/
 │       │   │   │   └── InvoiceGenerator.tsx   # Wired to real backend (Agent A extraction + CRM + finance API)
 │       │   │   ├── transactions/
 │       │   │   │   └── ReceiptScanner.tsx     # Upload receipt → scanReceipt() OCR → review → createReceiptExpense()
+│       │   │   ├── operations/
+│       │   │   │   └── SystemHealthCard.tsx   # Live /health/ready poll (Postgres/Redis/Mongo/RabbitMQ; RabbitMQ soft)
 │       │   │   ├── alerts/
 │       │   │   ├── payables/
 │       │   │   └── receivables/
@@ -227,18 +235,21 @@ Finguard-3.0/
 │       │   │   ├── http-client.ts     # Axios (withCredentials); X-CSRF-Token on mutations; 401 silent refresh;
 │       │   │   │                      # cookie auth (no Bearer); idempotency key scoped to /ai-insights + /ai-actions
 │       │   │   ├── endpoints.ts       # Typed URL constants
-│       │   │   ├── finance.ts         # listCustomers, createCustomer, createInvoice, resolveCustomerId,
-│       │   │   │                      # createReceiptExpense (POST /finance/receipts)
+│       │   │   ├── finance.ts         # list{Customers,Invoices,Expenses,Budgets}, createCustomer,
+│       │   │   │                      # createInvoice, createReceiptExpense (POST /finance/receipts)
 │       │   │   ├── intelligence.ts    # dispatchConversation, checkConversationStatus, extractInvoice,
 │       │   │   │                      # scanReceipt (POST /intelligence/receipts/scan);
 │       │   │   │                      # KeyFinding, GenUIPayload, ExtractedInvoice, ReceiptScanResult interfaces
+│       │   │   ├── health.ts          # getReadiness() → GET /health/ready (accepts 200 + 503)
 │       │   │   └── auth-client.ts     # login, logout (revokes refresh token), getMe()
 │       │   ├── auth/
 │       │   │   ├── auth-context.tsx   # Hydrates user via GET /me (not JWT decode); proactive refresh
 │       │   │   └── token-manager.ts   # reads fg_csrf / fg_session markers (access token is HttpOnly — not JS-readable)
 │       │   ├── hooks/
 │       │   │   ├── useAuth.ts
-│       │   │   └── useRole.ts
+│       │   │   ├── useRole.ts
+│       │   │   ├── useFinanceData.ts  # useInvoices/useExpenses/useBudgets/useCustomers (live dashboard data)
+│       │   │   └── useHealth.ts       # useReadiness() — polls /health/ready (15s)
 │       │   └── utils/cn.ts
 │       └── types/
 │           ├── index.ts
@@ -930,18 +941,22 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | Route | Purpose |
 |---|---|
 | `/` | Root redirect → `/dashboard` |
-| `/login` | JWT login form |
-| `/register` | User registration |
-| `/settings` | Account profile (name/email/role from `/me`) + server-revoking logout |
+| `/login` | JWT login form (`(auth)` route group) |
+| `/signup` | User registration (`(auth)` route group) |
+| `/settings` | Account profile (name/email/role from `/me`) + server-revoking logout (root-level shell, no sidebar) |
+| `/support` | Help & contact surface — contact channels + documentation links (root-level shell, mirrors `/settings`) |
 | `/dashboard` | Root dashboard redirect |
 | `/dashboard/overview` | Main KPI overview |
 | `/dashboard/intelligence` | AI chat (AgentChatWindow) + composite GenUI blocks |
 | `/dashboard/invoices` | Invoice list + InvoiceGenerator (wired to real backend) |
+| `/dashboard/invoices/new` | New-invoice form; CustomerPicker (select/create) + `createInvoice` |
 | `/dashboard/budgets` | Budget management |
-| `/dashboard/transactions` | Transaction list + ReceiptScanner (upload → OCR → review → create expense) |
-| `/dashboard/receivables` | AR: InvoiceTable, AgentStatus |
-| `/dashboard/payables` | AP: DepartmentBudgets, RecentOutgoing, AgentIntegrations |
+| `/dashboard/transactions` | Transaction list + ReceiptScanner (upload → OCR → review → create expense). Target of the sidebar "New Transaction" CTA |
+| `/dashboard/receivables` | AR: InvoiceTable (live `useInvoices`/`useCustomers`), AgentStatus |
+| `/dashboard/payables` | AP: DepartmentBudgets (live `useBudgets`), RecentOutgoing (live `useExpenses`), AgentIntegrations |
+| `/dashboard/payables/queue` | Approval queue UI (invoice review states) — static mock; no backend approval endpoint yet |
 | `/dashboard/payables/alerts` | Budget alerts |
+| `/dashboard/operations` | Operations control surface — live System Health card (`/health/ready` poll) + links to queue/alerts; Audit Trail card pending |
 
 ### Chat Pipeline (AgentChatWindow)
 
@@ -985,9 +1000,12 @@ User types free-text description
 |---|---|
 | `lib/api/http-client.ts` | Axios singleton (`withCredentials`): cookie auth, `X-CSRF-Token` on mutations, 401 silent refresh, idempotency key (scoped to `/ai-insights` + `/ai-actions` only) |
 | `lib/api/endpoints.ts` | Typed URL constants |
-| `lib/api/finance.ts` | `listCustomers`, `createCustomer`, `createInvoice`, `resolveCustomerId`, `createReceiptExpense` |
+| `lib/api/finance.ts` | `listCustomers`, `listInvoices`, `listExpenses`, `listBudgets`, `createCustomer`, `createInvoice`, `createReceiptExpense` |
 | `lib/api/intelligence.ts` | `dispatchConversation`, `checkConversationStatus`, `extractInvoice`, `scanReceipt`; `KeyFinding`, `GenUIPayload`, `ExtractedInvoice`, `ReceiptExtraction`, `ReceiptScanResult` types |
+| `lib/api/health.ts` | `getReadiness()` → `GET /health/ready`; accepts both 200 (`ready`) and 503 (`degraded`) via per-request `validateStatus` so the degraded body is parsed, not thrown |
 | `lib/api/auth-client.ts` | `login`, `logout` (sends refresh token to revoke), `getMe()` |
+| `lib/hooks/useFinanceData.ts` | TanStack Query hooks `useInvoices`/`useExpenses`/`useBudgets`/`useCustomers` over finance+CRM REST; centralised `financeKeys` for cache invalidation. Source of the live dashboard widgets |
+| `lib/hooks/useHealth.ts` | `useReadiness()` — polls `/health/ready` every 15s (10s `staleTime`); backs the Operations System Health card |
 | `lib/auth/auth-context.tsx` | React context; hydrates `user` via `GET /me` (not JWT decode); proactive refresh on expiry |
 | `lib/auth/token-manager.ts` | reads `fg_csrf` (CSRF header source) + `fg_session` markers; clears them on logout. Access/refresh tokens are HttpOnly cookies (not JS-readable) |
 | `lib/hooks/useRole.ts` | `hasRole(minRole)` RBAC helper using 5-tier hierarchy |
