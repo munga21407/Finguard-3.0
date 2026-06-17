@@ -77,10 +77,11 @@ SECRET_KEY=<64+ char random string>
 
 # Optional: M-Pesa (Daraja)
 MPESA_CONSUMER_KEY=
-MPESA_CONSUMER_SECRET=
+MPESA_CONSUMER_SECRET=            # also the HMAC key for inbound callback signatures
 MPESA_SHORTCODE=
 MPESA_PASSKEY=
 MPESA_CALLBACK_URL=
+MPESA_CALLBACK_ALLOWED_IPS=      # Safaricom callback CIDRs/IPs; required to accept callbacks (fail-closed)
 
 # Optional: Email (SendGrid or Gmail)
 SENDGRID_API_KEY=
@@ -225,6 +226,8 @@ All agents are LangGraph nodes in a Supervisor/ReAct loop: the supervisor routes
 ## Authentication & RBAC
 
 JWT-based auth (access: 30 min, refresh: 7 days) delivered as **HttpOnly, `SameSite=Strict` cookies** (access tokens are invisible to JS; `Authorization: Bearer` is still accepted for API clients). State-changing requests are protected by a **double-submit CSRF** token (global `CSRFMiddleware`, `CSRF_ENABLED`). Backed by a Redis token blacklist, refresh-token rotation, login lockout, and rate limiting. Permissions are enforced per-route via a `Permission` enum and a role→permission matrix (default-deny).
+
+The inbound M-Pesa Daraja STK callback (`POST /finance/mpesa/callback`) is authenticated by a **source-IP allowlist** of Safaricom's published callback ranges (`MPESA_CALLBACK_ALLOWED_IPS`), with an optional HMAC-SHA256 body signature (keyed on `MPESA_CONSUMER_SECRET`) layered on top when a signature header is present. It is **fail-closed**: with no allowlist or HMAC configured the endpoint returns 503 rather than trusting an unauthenticated webhook. Nginx **sets** (not appends) `X-Forwarded-For` to the real peer address on API routes so the source IP behind both this allowlist and the per-IP login lockout cannot be spoofed.
 
 | Role | Access |
 |---|---|

@@ -1235,8 +1235,8 @@ Every agent unconditionally returns to supervisor after executing. Supervisor te
 **Files**: `orchestrator.py`, `agents/supervisor.py`
 
 ### 2. Gemini Native Structured Output
-`generate_structured_content(prompt, ResponseSchema)` uses `response_schema` in the Gemini API request — no fallback parsing needed.
-**File**: `llm_client.py`
+`generate_structured_content(prompt, ResponseSchema)` uses `response_schema` in the Gemini API request — no fallback parsing needed. All call sites go through the provider-neutral `BaseLLMClient` surface (`generate_structured`, `generate_text`, `generate_vision_structured`, `embed`, `raw`); `llm_client.py` is a back-compat facade preserving the original module-level helpers. Every method accepts an optional `temperature` kwarg, and deterministic agents pin it (`temperature=0.0` for classification, reconciliation scoring, receipt OCR, and the CoVe draft/explain/audit passes; `0.2` for regime analysis) so structured financial extraction does not drift between runs.
+**Files**: `domains/intelligence/llm/base.py` (`BaseLLMClient`), `domains/intelligence/llm/gemini.py`, `domains/intelligence/llm_client.py` (facade)
 
 ### 3. Hub-First Read-Through Cache
 Every agent writes an `InsightArtifact` to MongoDB `intelligence_hub` with a per-agent TTL. Downstream consumers read the hub first.
@@ -1379,7 +1379,7 @@ Runs on every push and pull request (plus a nightly `schedule` for the eval job)
 
 | Job | What it does |
 |---|---|
-| `test` | Spins up `pgvector/pgvector:pg16`, MongoDB, RabbitMQ services; creates `finguard_test` DB; runs `pytest` (167 tests); uploads coverage. Includes the **deterministic Agent-F tax eval gate** (`tests/evals/` — golden VAT/CIT/AML scenarios + pinned regulatory constants), so wrong tax math fails the build |
+| `test` | Spins up `pgvector/pgvector:pg16`, MongoDB, RabbitMQ services; creates `finguard_test` DB; runs `pytest` (250+ tests across 49 files); uploads coverage. Includes the **deterministic Agent-F tax eval gate** (`tests/evals/` — golden VAT/CIT/AML scenarios + pinned regulatory constants), so wrong tax math fails the build |
 | `lint` | `ruff check`, `mypy` |
 | `migration-check` | Runs `alembic upgrade head` against the test DB to ensure migrations are not broken |
 | `llm-evals` | **Nightly + non-blocking** (`if: schedule`, `continue-on-error`): runs the LLM-as-judge narrative evals (`pytest tests/evals -m llm_judge`, `RUN_LLM_EVALS=1`, needs `GEMINI_API_KEY` secret). Judges narrative grounding only — never gates a PR |
@@ -1484,4 +1484,4 @@ ENABLE_OUTBOX_PROJECTOR=true         # Starts PostgreSQL outbox → MongoDB proj
 
 ---
 
-*Last updated: 2026-06-14*
+*Last updated: 2026-06-17*
