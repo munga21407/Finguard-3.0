@@ -30,6 +30,8 @@ x-backend-env: &backend-env
   MONGODB_URL: mongodb://${MONGO_USER:-finguard}:${MONGO_PASSWORD:-finguard}@mongodb:27017
   MONGO_URI: mongodb://${MONGO_USER:-finguard}:${MONGO_PASSWORD:-finguard}@mongodb:27017
   REDIS_URL: redis://:${REDIS_PASSWORD:-finguard}@redis:6379/0
+  AUTH_REDIS_URL: redis://:${REDIS_PASSWORD:-finguard}@redis:6379/1
+  RATE_LIMIT_REDIS_URL: redis://:${REDIS_PASSWORD:-finguard}@redis:6379/2
   RABBITMQ_URL: amqp://${RABBITMQ_USER:-finguard}:${RABBITMQ_PASSWORD:-finguard}@rabbitmq:5672/
   SECRET_KEY: ${SECRET_KEY}
   ENVIRONMENT: ${ENVIRONMENT:-production}
@@ -66,7 +68,7 @@ services:
   # base file — services reach them over the internal Docker network only.
   # docker-compose.dev.yml re-exposes them for local tooling.
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-finguard}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-finguard}

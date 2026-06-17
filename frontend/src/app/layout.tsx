@@ -16,6 +16,9 @@ import { Providers } from "@/components/layouts/Providers";
 export const metadata: Metadata = {
   title: "FinCorp AI — Enterprise Finance",
   description: "Multi-agent financial command center",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
