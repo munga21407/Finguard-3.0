@@ -14,8 +14,8 @@ services:
     # same read-only Text-to-SQL boundary as production (gap #2b dev parity).
     environment:
       POSTGRES_READONLY_PASSWORD: ${POSTGRES_READONLY_PASSWORD:-finguard_readonly}
-    volumes:
-      - ./scripts/init-readonly-role.sh:/docker-entrypoint-initdb.d/10-readonly-role.sh:ro
+    # volumes: 
+    #   - ./scripts/init-readonly-role.sh:/docker-entrypoint-initdb.d/10-readonly-role.sh:ro
     ports:
       - "5432:5432"
 
