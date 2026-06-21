@@ -201,6 +201,17 @@ class BankStatementRepository:
             await self._session.refresh(line)
         return lines
 
+    async def existing_external_refs(self, refs: list[str]) -> set[str]:
+        """Subset of ``refs`` already present — the import idempotency check."""
+        if not refs:
+            return set()
+        result = await self._session.execute(
+            select(BankStatementLine.external_ref).where(
+                BankStatementLine.external_ref.in_(refs)
+            )
+        )
+        return {row[0] for row in result.all() if row[0] is not None}
+
 
 class BudgetRepository:
     def __init__(self, session: AsyncSession) -> None:

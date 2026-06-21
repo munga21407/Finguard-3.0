@@ -637,19 +637,63 @@ class FinanceService:
         return payment
 
     async def import_bank_statement_lines(
-        self, lines: list[BankStatementLineImport]
+        self, lines: list[BankStatementLineImport], current_user: User | None = None
     ) -> list[BankStatementLine]:
-        """Ingest bank statement lines (unreconciled) for Agent C to match later."""
-        rows = [
-            BankStatementLine(
-                amount=line.amount,
-                date=line.date,
-                reference_text=line.reference_text,
-                is_reconciled=False,
+        """Ingest bank statement lines (unreconciled) for Agent C to match later.
+
+        Idempotent on the required ``external_ref`` (the bank's line reference): a
+        line whose ``external_ref`` is already in the request or already persisted
+        is skipped, so re-uploading the same statement cannot create duplicate lines
+        — and therefore cannot drive a duplicate reconciliation / double-payment.
+
+        Imported bank data auto-reconciles and marks invoices paid, so the importer
+        (``current_user``) is stamped on each line and a ``finance.bank_statement.
+        imported`` audit event is emitted.  Returns only the newly-created lines.
+        """
+        imported_by = current_user.id if current_user else None
+        already_persisted = await self._bank_repo.existing_external_refs(
+            [ln.external_ref for ln in lines]
+        )
+
+        rows: list[BankStatementLine] = []
+        seen_in_request: set[str] = set()
+        for line in lines:
+            ref = line.external_ref
+            if ref in already_persisted or ref in seen_in_request:
+                continue  # duplicate of an existing or earlier-in-request line
+            seen_in_request.add(ref)
+            rows.append(
+                BankStatementLine(
+                    amount=line.amount,
+                    date=line.date,
+                    reference_text=line.reference_text,
+                    external_ref=ref,
+                    imported_by=imported_by,
+                    is_reconciled=False,
+                )
             )
-            for line in lines
-        ]
+
+        if not rows:
+            return []
+
         rows = await self._bank_repo.bulk_create(rows)
+        # Audit trail: who imported how many settlement lines (and their refs).
+        self._session.add(
+            OutboxEvent(
+                exchange="finguard.events",
+                routing_key="finance.bank_statement.imported",
+                payload={
+                    "event_name": "finance.bank_statement.imported",
+                    "emitted_at": datetime.now(UTC).isoformat(),
+                    "payload": {
+                        "imported_by": str(imported_by) if imported_by else None,
+                        "line_count": len(rows),
+                        "external_refs": [r.external_ref for r in rows],
+                        "total_amount": float(sum((r.amount for r in rows), Decimal("0"))),
+                    },
+                },
+            )
+        )
         await self._session.commit()
         return rows
 
@@ -662,10 +706,26 @@ class FinanceService:
 
         Net-zero to total cash: it shifts ``amount`` from ``from_vault`` to
         ``to_vault``.  An optional ``fee`` is booked as a separate Expense on the
-        source vault (reusing ``_apply_expense_side_effects`` for budget burn-down +
-        ``expenses.created`` outbox) and linked via ``fee_expense_id``.  The transfer,
-        the fee expense, the budget update and both outbox events commit atomically.
+        source vault and linked via ``fee_expense_id`` — it reduces the source vault
+        balance and total cash (it is genuine cash out), but it is NOT run through
+        ``_apply_expense_side_effects``, so a transfer fee never burns a category
+        budget (it is a financing cost, not operational spend).
+
+        Overdraw guard: the transfer is rejected if ``amount + fee`` exceeds the
+        current source-vault balance — you cannot move more money than a vault holds.
         """
+        # Cannot move more than the source vault currently holds.
+        balances = await self.get_vault_balances()
+        from_balance = next(
+            (b.balance for b in balances.balances if b.vault == data.from_vault),
+            Decimal("0"),
+        )
+        if data.amount + data.fee > from_balance:
+            raise UnprocessableError(
+                f"Transfer of {data.amount} (+ fee {data.fee}) exceeds the "
+                f"{data.from_vault.value} balance of {from_balance}"
+            )
+
         transfer = VaultTransfer(
             from_vault=data.from_vault,
             to_vault=data.to_vault,
@@ -678,6 +738,8 @@ class FinanceService:
         transfer = await self._vault_transfer_repo.create(transfer)
 
         if data.fee > 0:
+            # Recorded as an expense so it reduces the source vault / total cash, but
+            # WITHOUT _apply_expense_side_effects — no budget burn-down for a fee.
             fee_expense = Expense(
                 category="Transfer fee",
                 amount=data.fee,
@@ -687,7 +749,6 @@ class FinanceService:
                 ),
             )
             fee_expense = await self._expense_repo.create(fee_expense)
-            await self._apply_expense_side_effects(fee_expense, source="vault.transfer")
             transfer.fee_expense_id = fee_expense.id
 
         self._session.add(

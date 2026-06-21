@@ -351,8 +351,13 @@ export interface paths {
          * Import Bank Statements
          * @description Ingest bank statement lines for Agent C to reconcile against open invoices.
          *
+         *     Requires ``finance:reconcile`` (manager+), not just ``finance:write`` — importing
+         *     settlement data auto-marks invoices paid, so it is separated from ordinary
+         *     finance operators (an Accountant cannot import settlements unilaterally).
+         *
          *     Lines land unreconciled; the batch bank-reconciliation job (or the Agent C
          *     LangGraph node) later matches them to invoices and records a Payment(vault=BANK).
+         *     The importing user is recorded on each line for auditability.
          */
         post: operations["import_bank_statements_api_v1_finance_reconciliation_bank_statements_import_post"];
         delete?: never;
@@ -1085,6 +1090,11 @@ export interface components {
          *
          *     Lines land unreconciled; Agent C later matches them to open invoices (amount
          *     + date + reference_text ↔ invoice_number) and records a Payment(vault=BANK).
+         *
+         *     ``external_ref`` is the bank's own line/transaction reference and is REQUIRED:
+         *     it is the import idempotency key, so re-importing a line whose ``external_ref``
+         *     already exists is skipped and the same statement can be uploaded twice without
+         *     duplicating lines (or double-paying invoices).
          */
         BankStatementLineImport: {
             /** Amount */
@@ -1096,6 +1106,8 @@ export interface components {
             date: string;
             /** Reference Text */
             reference_text?: string | null;
+            /** External Ref */
+            external_ref: string;
         };
         /** BankStatementLineResponse */
         BankStatementLineResponse: {
@@ -1113,6 +1125,10 @@ export interface components {
             date: string;
             /** Reference Text */
             reference_text: string | null;
+            /** External Ref */
+            external_ref: string;
+            /** Imported By */
+            imported_by: string | null;
             /** Is Reconciled */
             is_reconciled: boolean;
             /**

@@ -107,6 +107,9 @@ def require_permission(
 # authenticated User after enforcing the named permission.
 RequireFinanceRead = Annotated[User, Depends(require_permission(Permission.FINANCE_READ))]
 RequireFinanceWrite = Annotated[User, Depends(require_permission(Permission.FINANCE_WRITE))]
+RequireFinanceReconcile = Annotated[
+    User, Depends(require_permission(Permission.FINANCE_RECONCILE))
+]
 RequireCrmRead = Annotated[User, Depends(require_permission(Permission.CRM_READ))]
 RequireCrmWrite = Annotated[User, Depends(require_permission(Permission.CRM_WRITE))]
 RequireIntelligenceRead = Annotated[

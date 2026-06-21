@@ -36,7 +36,11 @@ from src.domains.finance.schemas import (
     VaultTransferResponse,
 )
 from src.domains.finance.service import FinanceService
-from src.domains.identity.dependencies import RequireFinanceRead, RequireFinanceWrite
+from src.domains.identity.dependencies import (
+    RequireFinanceRead,
+    RequireFinanceReconcile,
+    RequireFinanceWrite,
+)
 from src.infrastructure.database.postgres import get_db
 
 router = APIRouter()
@@ -275,14 +279,19 @@ async def reconciliation_flow(
     status_code=201,
 )
 async def import_bank_statements(
-    lines: list[BankStatementLineImport], db: DBSession, _: RequireFinanceWrite
+    lines: list[BankStatementLineImport], db: DBSession, current_user: RequireFinanceReconcile
 ) -> list[BankStatementLineResponse]:
     """Ingest bank statement lines for Agent C to reconcile against open invoices.
 
+    Requires ``finance:reconcile`` (manager+), not just ``finance:write`` — importing
+    settlement data auto-marks invoices paid, so it is separated from ordinary
+    finance operators (an Accountant cannot import settlements unilaterally).
+
     Lines land unreconciled; the batch bank-reconciliation job (or the Agent C
     LangGraph node) later matches them to invoices and records a Payment(vault=BANK).
+    The importing user is recorded on each line for auditability.
     """
-    rows = await FinanceService(db).import_bank_statement_lines(lines)
+    rows = await FinanceService(db).import_bank_statement_lines(lines, current_user)
     return [BankStatementLineResponse.model_validate(r) for r in rows]
 
 

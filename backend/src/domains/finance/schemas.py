@@ -264,11 +264,17 @@ class BankStatementLineImport(BaseModel):
 
     Lines land unreconciled; Agent C later matches them to open invoices (amount
     + date + reference_text ↔ invoice_number) and records a Payment(vault=BANK).
+
+    ``external_ref`` is the bank's own line/transaction reference and is REQUIRED:
+    it is the import idempotency key, so re-importing a line whose ``external_ref``
+    already exists is skipped and the same statement can be uploaded twice without
+    duplicating lines (or double-paying invoices).
     """
 
     amount: Decimal = Field(gt=0)
     date: datetime
     reference_text: str | None = None
+    external_ref: str = Field(min_length=1, max_length=255)
 
 
 class BankStatementLineResponse(BaseModel):
@@ -276,6 +282,8 @@ class BankStatementLineResponse(BaseModel):
     amount: Decimal
     date: datetime
     reference_text: str | None
+    external_ref: str
+    imported_by: uuid.UUID | None
     is_reconciled: bool
     created_at: datetime
 

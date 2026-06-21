@@ -25,6 +25,10 @@ from src.domains.identity.models import UserRole
 class Permission(enum.StrEnum):
     FINANCE_READ = "finance:read"
     FINANCE_WRITE = "finance:write"
+    # Importing external settlement data (bank statements) auto-reconciles and marks
+    # invoices paid — a higher-trust action than ordinary finance writes, so it is a
+    # separate grant held by reviewers (manager+), not every operator.
+    FINANCE_RECONCILE = "finance:reconcile"
     CRM_READ = "crm:read"
     CRM_WRITE = "crm:write"
     INTELLIGENCE_READ = "intelligence:read"      # read-only insights / cached reads
@@ -40,7 +44,11 @@ _OPERATOR: frozenset[Permission] = _READ_ONLY | frozenset(
     {Permission.FINANCE_WRITE, Permission.CRM_WRITE, Permission.INTELLIGENCE_ACT}
 )
 
-_ADMIN: frozenset[Permission] = _OPERATOR | frozenset({Permission.USER_MANAGE})
+# Manager tier adds reconciliation authority — separation of duties from the
+# Accountant, who can record invoices/payments but cannot import settlements.
+_MANAGER: frozenset[Permission] = _OPERATOR | frozenset({Permission.FINANCE_RECONCILE})
+
+_ADMIN: frozenset[Permission] = _MANAGER | frozenset({Permission.USER_MANAGE})
 
 
 # Default-deny: any role absent here (should never happen — enum is exhaustive)
@@ -48,7 +56,7 @@ _ADMIN: frozenset[Permission] = _OPERATOR | frozenset({Permission.USER_MANAGE})
 _ROLE_PERMISSIONS: dict[UserRole, frozenset[Permission]] = {
     UserRole.VIEWER: _READ_ONLY,
     UserRole.ACCOUNTANT: _OPERATOR,
-    UserRole.MANAGER: _OPERATOR,
+    UserRole.MANAGER: _MANAGER,
     UserRole.ADMIN: _ADMIN,
     UserRole.OWNER: _ADMIN,
 }
