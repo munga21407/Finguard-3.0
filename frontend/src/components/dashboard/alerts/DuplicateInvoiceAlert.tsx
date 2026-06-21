@@ -40,23 +40,6 @@ export interface DuplicateInvoiceAlertProps {
   canAct?: boolean;
 }
 
-// ── Default mock data — used when no GenUI props are supplied ─────────────────
-
-const DEFAULT_A: InvoiceSnapshot = {
-  id: "#INV-0024",
-  vendor: "Acme Software",
-  amount: 1_250,
-  date: "Oct 24, 2023",
-  currency: "KES",
-};
-const DEFAULT_B: InvoiceSnapshot = {
-  id: "#INV-0019",
-  vendor: "Acme Software",
-  amount: 1_250,
-  date: "Sept 22, 2023",
-  currency: "KES",
-};
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtAmount(n: number, currency = "KES") {
@@ -70,15 +53,15 @@ function pct(n: number) {
 // ── DuplicateInvoiceAlert ─────────────────────────────────────────────────────
 
 export function DuplicateInvoiceAlert({
-  anomaly_detected = true,
-  anomaly_score = 0.88,
-  is_duplicate = true,
-  duplicate_match_score = 0.97,
+  anomaly_detected = false,
+  anomaly_score = 0,
+  is_duplicate = false,
+  duplicate_match_score = 0,
   vc_id,
   summary,
   current_state,
-  invoice_a = DEFAULT_A,
-  invoice_b = DEFAULT_B,
+  invoice_a,
+  invoice_b,
   canAct: canActProp,
 }: DuplicateInvoiceAlertProps) {
   const { hasRole } = useRole();
@@ -90,6 +73,7 @@ export function DuplicateInvoiceAlert({
   const [flagLoading, setFlagLoading] = useState(false);
   const [flagDone, setFlagDone] = useState(false);
 
+  // No agent data → no alert (replaces the old built-in mock duplicate).
   if (dismissed || !anomaly_detected) return null;
 
   const similarityLabel = `${pct(duplicate_match_score)} similarity`;
@@ -103,8 +87,8 @@ export function DuplicateInvoiceAlert({
         intent: "FLAG_DUPLICATE_ANOMALY",
         payload: {
           vc_id,
-          invoice_a_id: invoice_a.id,
-          invoice_b_id: invoice_b.id,
+          invoice_a_id: invoice_a?.id,
+          invoice_b_id: invoice_b?.id,
           duplicate_match_score,
           anomaly_score,
         },
@@ -164,11 +148,13 @@ export function DuplicateInvoiceAlert({
         </button>
       </div>
 
-      {/* ── Invoice comparison ───────────────────────────────────────────────── */}
-      <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <InvoiceCard label="Pending Invoice" invoice={invoice_a} accent="error" />
-        <InvoiceCard label="Previously Cleared" invoice={invoice_b} accent="neutral" />
-      </div>
+      {/* ── Invoice comparison (only when the agent supplied both snapshots) ─── */}
+      {invoice_a && invoice_b && (
+        <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <InvoiceCard label="Pending Invoice" invoice={invoice_a} accent="error" />
+          <InvoiceCard label="Previously Cleared" invoice={invoice_b} accent="neutral" />
+        </div>
+      )}
 
       {/* ── Action buttons ───────────────────────────────────────────────────── */}
       <div className="px-5 pb-4 flex flex-wrap gap-2 items-center">
@@ -232,11 +218,13 @@ export function DuplicateInvoiceAlert({
         <div className="border-l-2 border-lf-primary/30 pl-3 mb-3 space-y-2 text-sm text-lf-on-surface-variant italic">
           {summary ? (
             <p>&quot;{summary}&quot;</p>
-          ) : (
+          ) : invoice_b ? (
             <>
               <p>&quot;This invoice matches {pct(duplicate_match_score)} similarity with {invoice_b.id} processed previously. Vendor, amount, and line items are identical.&quot;</p>
               <p>&quot;Historical pattern analysis shows no recurring monthly billing arrangement. Risk score: <strong className="text-lf-on-surface not-italic">{riskScore}/100</strong>.&quot;</p>
             </>
+          ) : (
+            <p>&quot;Risk score: <strong className="text-lf-on-surface not-italic">{riskScore}/100</strong>.&quot;</p>
           )}
         </div>
         <div className="flex items-start gap-2 bg-lf-surface-container-lowest rounded-lg p-3 border border-lf-outline-variant/20">

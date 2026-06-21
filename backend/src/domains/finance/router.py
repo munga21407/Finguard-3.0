@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import settings
 from src.core.exceptions import UnprocessableError
 from src.domains.finance.schemas import (
+    BankStatementLineImport,
+    BankStatementLineResponse,
     BudgetCreate,
     BudgetResponse,
     ExpenseCreate,
@@ -20,6 +22,7 @@ from src.domains.finance.schemas import (
     InvoiceEventResponse,
     InvoiceReconstructionResponse,
     InvoiceResponse,
+    InvoiceSettleRequest,
     InvoiceUpdate,
     LedgerEntryCreate,
     LedgerEntryResponse,
@@ -27,6 +30,10 @@ from src.domains.finance.schemas import (
     PaymentCreate,
     PaymentResponse,
     ReceiptExpenseCreate,
+    ReconciliationFlowResponse,
+    VaultBalancesResponse,
+    VaultTransferCreate,
+    VaultTransferResponse,
 )
 from src.domains.finance.service import FinanceService
 from src.domains.identity.dependencies import RequireFinanceRead, RequireFinanceWrite
@@ -185,9 +192,20 @@ async def update_invoice(
 
 @router.post("/invoices/{invoice_id}/pay", response_model=InvoiceResponse)
 async def mark_invoice_paid(
-    invoice_id: uuid.UUID, db: DBSession, _: RequireFinanceWrite
+    invoice_id: uuid.UUID,
+    db: DBSession,
+    current_user: RequireFinanceWrite,
+    data: InvoiceSettleRequest | None = None,
 ) -> InvoiceResponse:
-    invoice = await FinanceService(db).mark_invoice_paid(invoice_id)
+    """Settle an invoice's outstanding balance on the chosen rail.
+
+    The optional body picks the settlement ``vault`` (M-Pesa / Cash / Bank); the
+    money is recorded as a Payment on that vault.  Defaults to CASH when omitted.
+    """
+    settle = data or InvoiceSettleRequest()
+    invoice = await FinanceService(db).mark_invoice_paid(
+        invoice_id, current_user, vault=settle.vault, reference_note=settle.reference_note
+    )
     return InvoiceResponse.model_validate(invoice)
 
 
@@ -232,6 +250,76 @@ async def reconstruct_invoice(
         matches_projection=matches,
         events=[InvoiceEventResponse.model_validate(e) for e in events],
     )
+
+
+# ── Reconciliation ────────────────────────────────────────────────────────────
+
+@router.get("/reconciliation-flow", response_model=ReconciliationFlowResponse)
+async def reconciliation_flow(
+    db: DBSession, _: RequireFinanceRead
+) -> ReconciliationFlowResponse:
+    """Invoice-lifecycle → settlement-rail Sankey for the Overview dashboard.
+
+    Stage 1 (Total Billed) → Stage 2 (current invoice status, the projection of
+    the append-only ``invoice_events`` fold) → Stage 3 (settlement rail). Stage 3
+    reads the per-invoice ``Payment`` rows produced by Agent C reconciliation
+    (M-Pesa / Bank) and cash/manual settlement — every collected shilling is backed
+    by a Payment, so the rails fully account for each status's collected total.
+    """
+    return await FinanceService(db).get_reconciliation_flow()
+
+
+@router.post(
+    "/reconciliation/bank-statements/import",
+    response_model=list[BankStatementLineResponse],
+    status_code=201,
+)
+async def import_bank_statements(
+    lines: list[BankStatementLineImport], db: DBSession, _: RequireFinanceWrite
+) -> list[BankStatementLineResponse]:
+    """Ingest bank statement lines for Agent C to reconcile against open invoices.
+
+    Lines land unreconciled; the batch bank-reconciliation job (or the Agent C
+    LangGraph node) later matches them to invoices and records a Payment(vault=BANK).
+    """
+    rows = await FinanceService(db).import_bank_statement_lines(lines)
+    return [BankStatementLineResponse.model_validate(r) for r in rows]
+
+
+# ── Vault transfers + balances (treasury) ─────────────────────────────────────
+
+@router.get("/vault-balances", response_model=VaultBalancesResponse)
+async def vault_balances(db: DBSession, _: RequireFinanceRead) -> VaultBalancesResponse:
+    """Live balance of each vault (M-Pesa / Cash / Bank) and the total cash position.
+
+    Derived from payments (in), expenses (out), and vault transfers (in/out) — see
+    ``FinanceService.get_vault_balances``.
+    """
+    return await FinanceService(db).get_vault_balances()
+
+
+@router.post("/vault-transfers", response_model=VaultTransferResponse, status_code=201)
+async def create_vault_transfer(
+    data: VaultTransferCreate, db: DBSession, current_user: RequireFinanceWrite
+) -> VaultTransferResponse:
+    """Move the business's own money between vaults (net-zero to total cash).
+
+    An optional ``fee`` is booked as an Expense on the source vault.
+    """
+    transfer = await FinanceService(db).create_vault_transfer(data, current_user)
+    return VaultTransferResponse.model_validate(transfer)
+
+
+@router.get("/vault-transfers", response_model=list[VaultTransferResponse])
+async def list_vault_transfers(
+    db: DBSession,
+    _: RequireFinanceRead,
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> list[VaultTransferResponse]:
+    """Recent vault transfers, newest first."""
+    transfers = await FinanceService(db).list_vault_transfers(limit=limit, offset=offset)
+    return [VaultTransferResponse.model_validate(t) for t in transfers]
 
 
 # ── Expenses ──────────────────────────────────────────────────────────────────

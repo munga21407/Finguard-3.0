@@ -13,6 +13,7 @@
 import { useState } from "react";
 import { useRole } from "@/lib/hooks/useRole";
 import { cn } from "@/lib/utils/cn";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -37,24 +38,6 @@ export interface AuditorInsightsProps {
   // ── RBAC forwarded from chat window ───────────────────────────────────────
   canAct?: boolean;
 }
-
-// ── Default static items ──────────────────────────────────────────────────────
-
-const DEFAULT_ITEMS: AuditorInsightItem[] = [
-  {
-    id: "1",
-    type: "flag",
-    timeAgo: "2h ago",
-    body: "Discrepancy detected in cross-border transfer pricing documentation for EU entities.",
-    actionLabel: "Review Documentation",
-  },
-  {
-    id: "2",
-    type: "clear",
-    timeAgo: "1d ago",
-    body: "Q2 VAT returns have been successfully validated against regional thresholds.",
-  },
-];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -99,7 +82,7 @@ export function AuditorInsights({
   }
 
   // Static mode
-  const displayItems = items ?? DEFAULT_ITEMS;
+  const displayItems = items ?? [];
 
   return (
     <div className="bg-lf-surface-container-low rounded-xl shadow-[0px_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 p-6 flex flex-col hover:shadow-[0px_8px_24px_rgba(107,56,212,0.08)] hover:border-lf-secondary-fixed transition-all">
@@ -119,6 +102,11 @@ export function AuditorInsights({
       <h4 className="text-xl font-semibold tracking-tight text-lf-on-surface mb-4">Auditor Insights</h4>
 
       <div className="space-y-4 flex-1 overflow-y-auto pr-1">
+        {displayItems.length === 0 && (
+          <EmptyState
+            message="No auditor insights yet. Run a tax or compliance query in the assistant to populate this card."
+          />
+        )}
         {displayItems.map((item) => (
           <div key={item.id}
             className={cn("p-4 bg-lf-surface rounded-lg shadow-sm border-l-4",

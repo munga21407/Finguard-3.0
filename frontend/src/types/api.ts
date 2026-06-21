@@ -93,6 +93,18 @@ export type ApiPayment           = S["PaymentResponse"];
 export type ApiPaymentCreate     = S["PaymentCreate"];
 export type ApiTransactionType   = S["TransactionType"];
 export type ApiVaultType         = S["VaultType"];
+// Invoice-lifecycle → settlement-rail Sankey for the Overview dashboard.
+export type ApiReconciliationFlow = S["ReconciliationFlowResponse"];
+export type ApiSankeyNode         = S["SankeyNode"];
+export type ApiSankeyLink         = S["SankeyLink"];
+// Bank statement reconciliation (Agent C source).
+export type ApiBankStatementImport = S["BankStatementLineImport"];
+export type ApiBankStatementLine   = S["BankStatementLineResponse"];
+// Treasury — per-vault balances + internal transfers.
+export type ApiVaultTransfer       = S["VaultTransferResponse"];
+export type ApiVaultTransferCreate = S["VaultTransferCreate"];
+export type ApiVaultBalance        = S["VaultBalance"];
+export type ApiVaultBalances       = S["VaultBalancesResponse"];
 
 // ── Intelligence ──────────────────────────────────────────────────────────────
 export type ApiInsightRequest        = S["InsightRequest"];
@@ -105,6 +117,19 @@ export type ApiReceiptExtraction     = S["ReceiptExtraction"];
 export type ApiConversationRequest   = S["ConversationRequest"];
 export type ApiConversationResponse  = S["ConversationResponse"];
 export type ApiTaskStatus            = S["TaskStatusResponse"];
+// Dashboard feeds — cheap structured reads over persisted orchestration runs.
+export type ApiInsightFeedItem       = S["InsightFeedItem"];
+export type ApiActionFeedItem        = S["ActionFeedItem"];
+export type ApiNotificationItem      = S["NotificationItem"];
+export type ApiAgentTelemetry        = S["AgentTelemetry"];
+
+// ── Alerts ──────────────────────────────────────────────────────────────────────
+export type ApiAlert         = S["AlertResponse"];
+export type ApiAlertCreate   = S["AlertCreate"];
+export type ApiAlertKpis     = S["AlertKpis"];
+export type ApiAlertType     = S["AlertType"];
+export type ApiAlertSeverity = S["AlertSeverity"];
+export type ApiAlertStatus   = S["AlertStatus"];
 
 // NOTE: Agent structured-output models (ExtractedInvoice, WatchdogAnalysis,
 // CashFlowForecast, AgentF/G outputs, AgentRun*, etc.) are intentionally NOT

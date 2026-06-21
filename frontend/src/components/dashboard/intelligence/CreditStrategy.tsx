@@ -10,6 +10,7 @@
 
 import { useRole } from "@/lib/hooks/useRole";
 import { cn } from "@/lib/utils/cn";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,12 @@ export function CreditStrategy({
   const score = bankability_score ?? 0;
   const tierStyle = risk_tier ? TIER_STYLES[risk_tier] : TIER_STYLES.MEDIUM;
 
+  const hasContent =
+    bankability_score !== undefined ||
+    quarterly_revenue_kes !== undefined ||
+    quarterly_opex_kes !== undefined ||
+    !!strategic_narrative;
+
   return (
     <div className="bg-lf-surface-container-lowest rounded-xl border border-lf-outline-variant/20 overflow-hidden">
       {/* Header */}
@@ -77,6 +84,9 @@ export function CreditStrategy({
       </div>
 
       <div className="p-4 space-y-4">
+        {!hasContent && (
+          <EmptyState message="No credit strategy yet. Ask Agent G for a bankability assessment." />
+        )}
         {/* Score display */}
         {bankability_score !== undefined && (
           <div className="bg-lf-surface-container-low rounded-lg p-3 border border-lf-outline-variant/20">

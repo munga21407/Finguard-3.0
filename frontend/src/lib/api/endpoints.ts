@@ -17,6 +17,10 @@ export const ENDPOINTS = {
     EXPENSES: "/api/v1/finance/expenses",
     RECEIPTS: "/api/v1/finance/receipts",
     BUDGETS: "/api/v1/finance/budgets",
+    RECONCILIATION_FLOW: "/api/v1/finance/reconciliation-flow",
+    BANK_STATEMENTS_IMPORT: "/api/v1/finance/reconciliation/bank-statements/import",
+    VAULT_BALANCES: "/api/v1/finance/vault-balances",
+    VAULT_TRANSFERS: "/api/v1/finance/vault-transfers",
     PAYMENTS_CASH: "/api/v1/finance/payments/cash",
     MPESA_CALLBACK: "/api/v1/finance/mpesa/callback",
   },
@@ -36,10 +40,23 @@ export const ENDPOINTS = {
   INTELLIGENCE: {
     INSIGHTS: "/api/v1/intelligence/ai-insights",
     ACTIONS: "/api/v1/intelligence/ai-actions",
+    // Cheap GET feeds over persisted orchestration runs (dashboard widgets).
+    INSIGHTS_FEED: "/api/v1/intelligence/insights",
+    ACTIONS_FEED: "/api/v1/intelligence/actions",
+    NOTIFICATIONS: "/api/v1/intelligence/notifications",
+    AGENTS: "/api/v1/intelligence/agents",
     INTENT: "/api/v1/intelligence/intent",
     RECEIPT_SCAN: "/api/v1/intelligence/receipts/scan",
     CONVERSATION: "/api/v1/intelligence/conversation",
     CONVERSATION_STATUS: (sessionId: string) =>
       `/api/v1/intelligence/conversation/${sessionId}/status`,
+  },
+
+  // Alerts (agent-raised finance/compliance alerts)
+  ALERTS: {
+    ROOT: "/api/v1/alerts",
+    RESOLVED: "/api/v1/alerts/resolved",
+    KPIS: "/api/v1/alerts/kpis",
+    RESOLVE: (id: string) => `/api/v1/alerts/${id}/resolve`,
   },
 } as const;

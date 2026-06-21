@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from src.domains.finance.models import InvoiceEventType, InvoiceStatus, TransactionType
 from src.domains.finance.types import VaultType
@@ -47,6 +47,18 @@ class InvoiceUpdate(BaseModel):
     status: InvoiceStatus | None = None
     notes: str | None = None
     paid_at: datetime | None = None
+
+
+class InvoiceSettleRequest(BaseModel):
+    """Body for ``POST /invoices/{id}/pay`` — settle the outstanding balance.
+
+    ``vault`` is the settlement rail the money came in on; it is recorded on the
+    resulting Payment so the cash lands in the right vault.  Defaults to CASH (the
+    typical manual settlement) when the body is omitted.
+    """
+
+    vault: VaultType = VaultType.CASH
+    reference_note: str | None = None
 
 
 class InvoiceResponse(BaseModel):
@@ -235,7 +247,139 @@ class PaymentResponse(BaseModel):
     vault: VaultType
     reference_note: str | None
     payment_date: datetime
-    recorded_by: uuid.UUID
+    # NULL for agent-applied reconciliation payments (no human actor).
+    recorded_by: uuid.UUID | None
+    # Provenance of a reconciled payment (NULL for manual cash).
+    mpesa_trans_id: uuid.UUID | None = None
+    bank_line_id: uuid.UUID | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── Bank statement import (Agent C reconciliation source) ─────────────────────
+
+class BankStatementLineImport(BaseModel):
+    """One bank statement line submitted to POST /finance/reconciliation/bank-statements/import.
+
+    Lines land unreconciled; Agent C later matches them to open invoices (amount
+    + date + reference_text ↔ invoice_number) and records a Payment(vault=BANK).
+    """
+
+    amount: Decimal = Field(gt=0)
+    date: datetime
+    reference_text: str | None = None
+
+
+class BankStatementLineResponse(BaseModel):
+    id: uuid.UUID
+    amount: Decimal
+    date: datetime
+    reference_text: str | None
+    is_reconciled: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ── Reconciliation flow (Sankey) ──────────────────────────────────────────────
+
+class SankeyNode(BaseModel):
+    """A single node in the invoice-lifecycle → settlement Sankey diagram."""
+
+    name: str
+    # Stage tag the frontend uses for colour-coding the three columns.
+    kind: Literal["source", "status", "rail"]
+
+
+class SankeyLink(BaseModel):
+    """A weighted flow between two nodes, referenced by their index in ``nodes``."""
+
+    source: int
+    target: int
+    value: Decimal
+
+
+class ReconciliationFlowResponse(BaseModel):
+    """Sankey-ready Accounts-Receivable flow for the Overview dashboard.
+
+    Three stages:
+
+      Stage 1  ``Total Billed`` — Σ invoice.total over non-cancelled invoices.
+      Stage 2  Invoice status (Draft / Sent / Overdue / Partially Paid / Paid).
+               These amounts are the *projection* of folding the append-only
+               ``invoice_events`` log (the materialized ``invoices`` row is kept
+               in sync with that fold), so the column reflects the lifecycle
+               transitions draft → sent → paid / partially_paid / overdue.
+      Stage 3  Settlement rail, read from the per-invoice ``Payment`` rows grouped
+               by their invoice's status and rail (vault): ``M-Pesa`` / ``Bank``
+               (the reconciled rails, produced by Agent C) and ``Cash``.  Every
+               settlement creates a Payment, so the rails fully account for each
+               status's collected total.
+
+    Both stages are exact.  ``nodes``/``links`` are empty when nothing has been
+    billed yet.
+    """
+
+    nodes: list[SankeyNode]
+    links: list[SankeyLink]
+    currency: str
+    total_billed: Decimal
+    total_collected: Decimal
+    reconciled_total: Decimal
+
+
+# ── Vault transfers + per-vault balances (treasury) ───────────────────────────
+
+class VaultTransferCreate(BaseModel):
+    """Record an internal movement of the business's own money between vaults.
+
+    ``fee`` (optional M-Pesa/bank charge) is booked as a separate Expense on the
+    source vault, so it reduces the source balance and shows up in spend.
+    """
+
+    from_vault: VaultType
+    to_vault: VaultType
+    amount: Decimal = Field(gt=0)
+    fee: Decimal = Field(ge=0, default=Decimal("0"))
+    reference_note: str | None = None
+    occurred_at: datetime
+
+    @model_validator(mode="after")
+    def _distinct_vaults(self) -> "VaultTransferCreate":
+        if self.from_vault == self.to_vault:
+            raise ValueError("from_vault and to_vault must differ")
+        return self
+
+
+class VaultTransferResponse(BaseModel):
+    id: uuid.UUID
+    from_vault: VaultType
+    to_vault: VaultType
+    amount: Decimal
+    fee: Decimal
+    reference_note: str | None
+    occurred_at: datetime
+    recorded_by: uuid.UUID | None
+    fee_expense_id: uuid.UUID | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class VaultBalance(BaseModel):
+    vault: VaultType
+    balance: Decimal
+
+
+class VaultBalancesResponse(BaseModel):
+    """Live balance of each vault, derived from payments, expenses and transfers.
+
+    ``balance = Σ payments_in + Σ transfers_in − Σ expenses − Σ transfers_out``
+    (transfer fees are captured by the expense term).  Always lists every
+    ``VaultType`` member; ``total`` is the sum (the overall cash position).
+    """
+
+    balances: list[VaultBalance]
+    currency: str
+    total: Decimal

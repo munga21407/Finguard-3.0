@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { KpiCard } from "@/components/dashboard/KpiCard";
+import { ReceivablesKpiCards } from "@/components/dashboard/receivables/ReceivablesKpiCards";
 import { AgentStatus } from "@/components/dashboard/receivables/AgentStatus";
 import { InvoiceTable } from "@/components/dashboard/receivables/InvoiceTable";
 
@@ -26,29 +26,8 @@ export default function ReceivablesPage() {
       {/* Bento grid */}
       <div className="grid grid-cols-12 gap-5">
         {/* KPIs */}
-        <div className="col-span-12 md:col-span-4">
-          <KpiCard
-            title="Outstanding Invoices"
-            value="$1.24M"
-            trend={{ value: "+4.2%", direction: "up", variant: "negative" }}
-            subtext="vs last month"
-          />
-        </div>
-        <div className="col-span-12 md:col-span-4">
-          <KpiCard
-            title="Average Days to Pay"
-            value="32 Days"
-            trend={{ value: "-2 Days", direction: "down", variant: "positive" }}
-            subtext="vs last month"
-          />
-        </div>
-        <div className="col-span-12 md:col-span-4">
-          <KpiCard
-            title="Cash Inflow (MTD)"
-            value="$845k"
-            trend={{ value: "+12%", direction: "up", variant: "positive" }}
-            subtext="vs last month"
-          />
+        <div className="col-span-12">
+          <ReceivablesKpiCards />
         </div>
 
         {/* Agent + Table */}

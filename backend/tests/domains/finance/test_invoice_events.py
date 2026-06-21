@@ -15,15 +15,19 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from src.domains.finance.events import fold_invoice_events
 from src.domains.finance.models import (
     Invoice,
     InvoiceEvent,
     InvoiceEventType,
     InvoiceStatus,
+    Payment,
 )
 from src.domains.finance.schemas import InvoiceCreate, PaymentCreate
 from src.domains.finance.service import FinanceService
+from src.domains.finance.types import VaultType
 from src.domains.identity.models import User, UserRole
 
 
@@ -205,6 +209,45 @@ async def test_mark_invoice_paid_appends_settlement_event(
     assert events[1].payload.get("reason") == "manual_settlement"
     assert inv.status == InvoiceStatus.PAID
     assert inv.balance_due == state.balance_due == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_mark_invoice_paid_creates_backing_cash_payment(
+    db_session: AsyncSession, seed_customer: str
+) -> None:
+    """Manual settlement is backed by a CASH Payment — no 'unlinked' amount_paid."""
+    svc = FinanceService(db_session)
+    invoice = await _make_invoice(svc, seed_customer, subtotal="750")
+
+    await svc.mark_invoice_paid(invoice.id)
+
+    payments = (
+        await db_session.execute(select(Payment).where(Payment.invoice_id == invoice.id))
+    ).scalars().all()
+    assert len(payments) == 1
+    assert payments[0].vault == VaultType.CASH
+    assert payments[0].amount == Decimal("750")
+    # amount_paid is fully backed by Payment rows — the unlinked gap is zero.
+    inv = await db_session.get(Invoice, invoice.id)
+    assert inv is not None
+    assert sum(p.amount for p in payments) == inv.amount_paid
+
+
+@pytest.mark.asyncio
+async def test_mark_invoice_paid_records_chosen_rail(
+    db_session: AsyncSession, seed_customer: str
+) -> None:
+    """The /pay caller can pick the settlement rail; the Payment lands on it."""
+    svc = FinanceService(db_session)
+    invoice = await _make_invoice(svc, seed_customer, subtotal="900")
+
+    await svc.mark_invoice_paid(invoice.id, vault=VaultType.MPESA)
+
+    payment = (
+        await db_session.execute(select(Payment).where(Payment.invoice_id == invoice.id))
+    ).scalar_one()
+    assert payment.vault == VaultType.MPESA
+    assert payment.amount == Decimal("900")
 
 
 @pytest.mark.asyncio

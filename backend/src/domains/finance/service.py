@@ -10,17 +10,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.exceptions import ConflictError, NotFoundError, UnprocessableError
 from src.domains.finance.events import InvoiceState, fold_invoice_events
 from src.domains.finance.models import (
+    BankStatementLine,
     Budget,
     Expense,
     Invoice,
     InvoiceEvent,
     InvoiceEventType,
+    InvoiceStatus,
     LedgerEntry,
     MpesaTransaction,
     OutboxEvent,
     Payment,
+    VaultTransfer,
 )
 from src.domains.finance.repository import (
+    BankStatementRepository,
     BudgetRepository,
     ExpenseRepository,
     InvoiceEventRepository,
@@ -28,8 +32,10 @@ from src.domains.finance.repository import (
     LedgerRepository,
     MpesaRepository,
     PaymentRepository,
+    VaultTransferRepository,
 )
 from src.domains.finance.schemas import (
+    BankStatementLineImport,
     BudgetCreate,
     ExpenseCreate,
     InvoiceCreate,
@@ -40,6 +46,12 @@ from src.domains.finance.schemas import (
     MpesaTransactionResponse,
     PaymentCreate,
     ReceiptExpenseCreate,
+    ReconciliationFlowResponse,
+    SankeyLink,
+    SankeyNode,
+    VaultBalance,
+    VaultBalancesResponse,
+    VaultTransferCreate,
 )
 from src.domains.finance.types import VaultType
 from src.domains.identity.models import User
@@ -56,6 +68,8 @@ class FinanceService:
         self._mpesa_repo = MpesaRepository(session)
         self._payment_repo = PaymentRepository(session)
         self._invoice_event_repo = InvoiceEventRepository(session)
+        self._bank_repo = BankStatementRepository(session)
+        self._vault_transfer_repo = VaultTransferRepository(session)
         self._session = session
 
     async def post_ledger_entry(self, data: LedgerEntryCreate) -> LedgerEntry:
@@ -129,17 +143,37 @@ class FinanceService:
         await self._session.commit()
         return invoice
 
-    async def mark_invoice_paid(self, invoice_id: uuid.UUID) -> Invoice:
+    async def mark_invoice_paid(
+        self,
+        invoice_id: uuid.UUID,
+        current_user: User | None = None,
+        vault: VaultType = VaultType.CASH,
+        reference_note: str | None = None,
+    ) -> Invoice:
         invoice = await self._invoice_repo.get_by_id_for_update(invoice_id)
         if not invoice:
             raise NotFoundError("Invoice not found")
-        # Settle by appending a payment_applied event for the outstanding balance,
-        # then re-projecting — so the event log stays the single source of truth
-        # and the row never drifts from ck_invoices_balance_due_consistent. A
-        # no-op when the invoice is already fully settled.
+        # Settle by recording a Payment for the outstanding balance on the chosen
+        # rail (``vault``) and appending the matching payment_applied event, then
+        # re-projecting — so the event log stays the single source of truth, the
+        # row never drifts from ck_invoices_balance_due_consistent, AND every
+        # shilling of amount_paid is backed by a Payment row (which keeps the
+        # reconciliation Sankey free of an "unlinked" rail and lands the cash in the
+        # right vault). A no-op when the invoice is already fully settled.
         remaining = invoice.balance_due
         if remaining > Decimal("0"):
             now = datetime.now(UTC)
+            recorded_by = current_user.id if current_user else None
+            payment = await self._payment_repo.create(
+                Payment(
+                    invoice_id=invoice.id,
+                    amount=remaining,
+                    vault=vault,
+                    reference_note=reference_note or "Manual settlement",
+                    payment_date=now,
+                    recorded_by=recorded_by,
+                )
+            )
             sequence = await self._invoice_event_repo.next_sequence(invoice.id)
             await self._invoice_event_repo.append(
                 InvoiceEvent(
@@ -147,8 +181,13 @@ class FinanceService:
                     sequence=sequence,
                     event_type=InvoiceEventType.PAYMENT_APPLIED,
                     amount=remaining,
-                    payload={"reason": "manual_settlement"},
+                    payload={
+                        "reason": "manual_settlement",
+                        "payment_id": str(payment.id),
+                        "vault": vault.value,
+                    },
                     occurred_at=now,
+                    recorded_by=recorded_by,
                 )
             )
             await self._project_invoice_from_events(invoice)
@@ -381,6 +420,327 @@ class FinanceService:
         events = await self._invoice_event_repo.list_by_invoice(invoice_id)
         state = fold_invoice_events(events)
         return invoice, state, events
+
+    async def get_reconciliation_flow(self) -> ReconciliationFlowResponse:
+        """Build the invoice-lifecycle → settlement-rail Sankey for the Overview.
+
+        Stage 1 (Total Billed) → Stage 2 (current invoice status, the projection
+        of the append-only ``invoice_events`` fold) → Stage 3 (settlement rail).
+
+        Both stages are exact.  Stage 2 → 3 reads ``Payment`` rows grouped by their
+        invoice's status and their rail (vault), so each collected shilling flows
+        to the rail it actually settled on — M-Pesa / Bank (the reconciled rails,
+        produced by Agent C) or Cash.  Every settlement path (cash, reconciliation,
+        manual settlement) creates a Payment, so the rails fully account for each
+        status's collected total.
+        """
+        status_rows = await self._invoice_repo.status_aggregates()
+        rail_rows = await self._payment_repo.rail_aggregates()
+
+        billed_by_status = {status: total for status, total, _ in status_rows}
+        collected_by_status = {status: paid for status, _, paid in status_rows}
+
+        total_billed = sum(billed_by_status.values(), Decimal("0"))
+        total_collected = sum(collected_by_status.values(), Decimal("0"))
+
+        # Nothing billed → empty diagram (the frontend renders an honest empty state).
+        if total_billed <= 0:
+            return ReconciliationFlowResponse(
+                nodes=[],
+                links=[],
+                currency="KES",
+                total_billed=Decimal("0"),
+                total_collected=Decimal("0"),
+                reconciled_total=Decimal("0"),
+            )
+
+        nodes: list[SankeyNode] = []
+        node_index: dict[str, int] = {}
+
+        def node(name: str, kind: str) -> int:
+            if name not in node_index:
+                node_index[name] = len(nodes)
+                nodes.append(SankeyNode(name=name, kind=kind))  # type: ignore[arg-type]
+            return node_index[name]
+
+        def money(value: Decimal) -> Decimal:
+            return value.quantize(Decimal("0.01"))
+
+        links: list[SankeyLink] = []
+
+        # ── Stage 1 → 2: Total Billed split by current status ─────────────────
+        # Lifecycle order so the column reads draft → … → paid top-to-bottom.
+        status_labels = {
+            InvoiceStatus.DRAFT: "Draft",
+            InvoiceStatus.SENT: "Sent",
+            InvoiceStatus.OVERDUE: "Overdue",
+            InvoiceStatus.PARTIALLY_PAID: "Partially Paid",
+            InvoiceStatus.PAID: "Paid",
+        }
+        source_idx = node("Total Billed", "source")
+        for status, label in status_labels.items():
+            amount = billed_by_status.get(status, Decimal("0"))
+            if amount > 0:
+                links.append(
+                    SankeyLink(source=source_idx, target=node(label, "status"), value=money(amount))
+                )
+
+        # ── Stage 2 → 3: exact per-invoice settlement rails from Payment rows ──
+        # Each Payment is grouped by its invoice's status and its rail (vault),
+        # so every collected shilling flows to the rail it actually settled on —
+        # no proportional estimate.  The MPESA/BANK rails are the reconciled ones.
+        rail_labels = {
+            VaultType.MPESA: "M-Pesa",
+            VaultType.BANK: "Bank",
+            VaultType.CASH: "Cash",
+        }
+        rail_by_status: dict[InvoiceStatus, dict[str, Decimal]] = {}
+        reconciled_total = Decimal("0")
+        for status, vault, amount in rail_rows:
+            label = rail_labels.get(vault)
+            if label is None or amount <= 0:
+                continue
+            rail_by_status.setdefault(status, {})
+            rail_by_status[status][label] = rail_by_status[status].get(label, Decimal("0")) + amount
+            if vault in (VaultType.MPESA, VaultType.BANK):
+                reconciled_total += amount
+
+        # Every shilling of amount_paid is backed by a Payment row (cash,
+        # reconciliation and manual settlement all create one), so the rails fully
+        # account for each status's collected total — there is no "unlinked" rail.
+        for status, label in status_labels.items():
+            if billed_by_status.get(status, Decimal("0")) <= 0:
+                continue
+            rails = rail_by_status.get(status, {})
+            status_idx = node(label, "status")
+            for rail_label, amount in rails.items():
+                links.append(
+                    SankeyLink(source=status_idx, target=node(rail_label, "rail"), value=money(amount))
+                )
+
+        return ReconciliationFlowResponse(
+            nodes=nodes,
+            links=links,
+            currency="KES",
+            total_billed=money(total_billed),
+            total_collected=money(total_collected),
+            reconciled_total=money(reconciled_total),
+        )
+
+    # ── Reconciliation: link settlements to invoices as Payment rows ───────────
+
+    async def apply_reconciled_payment(
+        self,
+        *,
+        invoice_id: uuid.UUID | str,
+        amount: Decimal | float,
+        vault: VaultType,
+        occurred_at: datetime,
+        mpesa_trans_id: uuid.UUID | str | None = None,
+        bank_line_id: uuid.UUID | str | None = None,
+    ) -> Payment | None:
+        """Apply a reconciliation match as a first-class Payment, event-sourced.
+
+        Mirrors :meth:`record_cash_payment` (Payment row + ``payment_applied``
+        event + re-projection) so a reconciled M-Pesa/bank settlement links to its
+        invoice exactly like a manual cash payment — keeping the event log complete
+        and ``reconstruct_invoice`` drift-free.  ``recorded_by`` is NULL (no human
+        actor) and the source settlement row is marked reconciled.
+
+        Flush-only: the caller (Agent C, inside ``session.begin()``) owns the
+        commit/rollback.  Returns ``None`` if the invoice is already fully settled.
+        """
+        inv_uuid = invoice_id if isinstance(invoice_id, uuid.UUID) else uuid.UUID(str(invoice_id))
+        invoice = await self._invoice_repo.get_by_id_for_update(inv_uuid)
+        if not invoice:
+            raise NotFoundError("Invoice not found")
+
+        # Never over-credit: clamp the applied amount to the outstanding balance so
+        # amount_paid ≤ total and balance_due ≥ 0 hold (the cash path errors here;
+        # automated reconciliation simply applies what the invoice can absorb).
+        applied = min(Decimal(str(amount)), invoice.balance_due)
+        if applied <= 0:
+            return None
+
+        mpesa_uuid = (
+            None if mpesa_trans_id is None
+            else mpesa_trans_id if isinstance(mpesa_trans_id, uuid.UUID)
+            else uuid.UUID(str(mpesa_trans_id))
+        )
+        bank_uuid = (
+            None if bank_line_id is None
+            else bank_line_id if isinstance(bank_line_id, uuid.UUID)
+            else uuid.UUID(str(bank_line_id))
+        )
+
+        payment = Payment(
+            invoice_id=invoice.id,
+            amount=applied,
+            vault=vault,
+            reference_note=f"Auto-reconciled ({vault.value})",
+            payment_date=occurred_at,
+            recorded_by=None,
+            mpesa_trans_id=mpesa_uuid,
+            bank_line_id=bank_uuid,
+        )
+        payment = await self._payment_repo.create(payment)
+
+        sequence = await self._invoice_event_repo.next_sequence(invoice.id)
+        await self._invoice_event_repo.append(
+            InvoiceEvent(
+                invoice_id=invoice.id,
+                sequence=sequence,
+                event_type=InvoiceEventType.PAYMENT_APPLIED,
+                amount=applied,
+                payload={
+                    "payment_id": str(payment.id),
+                    "vault": vault.value,
+                    "source": "reconciliation",
+                    "mpesa_trans_id": str(mpesa_uuid) if mpesa_uuid else None,
+                    "bank_line_id": str(bank_uuid) if bank_uuid else None,
+                },
+                occurred_at=occurred_at,
+                recorded_by=None,
+            )
+        )
+        await self._project_invoice_from_events(invoice)
+
+        # Mark the raw settlement record reconciled (mirrors the old _apply_match).
+        if mpesa_uuid is not None:
+            await self._session.execute(
+                text("UPDATE mpesa_transactions SET is_reconciled = TRUE WHERE id = :id::uuid"),
+                {"id": str(mpesa_uuid)},
+            )
+        if bank_uuid is not None:
+            await self._session.execute(
+                text("UPDATE bank_statement_lines SET is_reconciled = TRUE WHERE id = :id::uuid"),
+                {"id": str(bank_uuid)},
+            )
+
+        self._session.add(
+            OutboxEvent(
+                exchange="finguard.events",
+                routing_key="payments.reconciled",
+                payload={
+                    "event_name": "payments.reconciled",
+                    "emitted_at": datetime.now(UTC).isoformat(),
+                    "payload": {
+                        "payment_id": str(payment.id),
+                        "invoice_id": str(invoice.id),
+                        "amount": float(applied),
+                        "vault": vault.value,
+                        "balance_due_after": float(invoice.balance_due),
+                    },
+                },
+            )
+        )
+        return payment
+
+    async def import_bank_statement_lines(
+        self, lines: list[BankStatementLineImport]
+    ) -> list[BankStatementLine]:
+        """Ingest bank statement lines (unreconciled) for Agent C to match later."""
+        rows = [
+            BankStatementLine(
+                amount=line.amount,
+                date=line.date,
+                reference_text=line.reference_text,
+                is_reconciled=False,
+            )
+            for line in lines
+        ]
+        rows = await self._bank_repo.bulk_create(rows)
+        await self._session.commit()
+        return rows
+
+    # ── Vault transfers + balances (treasury) ──────────────────────────────────
+
+    async def create_vault_transfer(
+        self, data: VaultTransferCreate, current_user: User
+    ) -> VaultTransfer:
+        """Record an internal vault-to-vault movement of the business's own money.
+
+        Net-zero to total cash: it shifts ``amount`` from ``from_vault`` to
+        ``to_vault``.  An optional ``fee`` is booked as a separate Expense on the
+        source vault (reusing ``_apply_expense_side_effects`` for budget burn-down +
+        ``expenses.created`` outbox) and linked via ``fee_expense_id``.  The transfer,
+        the fee expense, the budget update and both outbox events commit atomically.
+        """
+        transfer = VaultTransfer(
+            from_vault=data.from_vault,
+            to_vault=data.to_vault,
+            amount=data.amount,
+            fee=data.fee,
+            reference_note=data.reference_note,
+            occurred_at=data.occurred_at,
+            recorded_by=current_user.id,
+        )
+        transfer = await self._vault_transfer_repo.create(transfer)
+
+        if data.fee > 0:
+            fee_expense = Expense(
+                category="Transfer fee",
+                amount=data.fee,
+                vault=data.from_vault,
+                description=(
+                    f"Fee: {data.from_vault.value} → {data.to_vault.value} transfer"
+                ),
+            )
+            fee_expense = await self._expense_repo.create(fee_expense)
+            await self._apply_expense_side_effects(fee_expense, source="vault.transfer")
+            transfer.fee_expense_id = fee_expense.id
+
+        self._session.add(
+            OutboxEvent(
+                exchange="finguard.events",
+                routing_key="finance.vault_transfer.recorded",
+                payload={
+                    "event_name": "finance.vault_transfer.recorded",
+                    "emitted_at": datetime.now(UTC).isoformat(),
+                    "payload": {
+                        "transfer_id": str(transfer.id),
+                        "from_vault": data.from_vault.value,
+                        "to_vault": data.to_vault.value,
+                        "amount": float(data.amount),
+                        "fee": float(data.fee),
+                        "recorded_by": str(current_user.id),
+                    },
+                },
+            )
+        )
+        await self._session.commit()
+        return transfer
+
+    async def list_vault_transfers(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[VaultTransfer]:
+        return await self._vault_transfer_repo.list_all(limit=limit, offset=offset)
+
+    async def get_vault_balances(self) -> VaultBalancesResponse:
+        """Derive each vault's live balance from payments, expenses and transfers.
+
+        ``balance = Σ payments_in + Σ transfers_in − Σ expenses − Σ transfers_out``;
+        transfer fees are already inside the expense term (booked on the source
+        vault), so they are not subtracted twice.  Every ``VaultType`` is listed.
+        """
+        payments_in = await self._payment_repo.totals_by_vault()
+        expenses_out = await self._expense_repo.totals_by_vault()
+        transfers_in = await self._vault_transfer_repo.in_totals_by_vault()
+        transfers_out = await self._vault_transfer_repo.out_totals_by_vault()
+
+        balances: list[VaultBalance] = []
+        total = Decimal("0")
+        for vault in VaultType:
+            balance = (
+                payments_in.get(vault, Decimal("0"))
+                + transfers_in.get(vault, Decimal("0"))
+                - expenses_out.get(vault, Decimal("0"))
+                - transfers_out.get(vault, Decimal("0"))
+            ).quantize(Decimal("0.01"))
+            balances.append(VaultBalance(vault=vault, balance=balance))
+            total += balance
+
+        return VaultBalancesResponse(balances=balances, currency="KES", total=total)
 
     async def create_budget(self, data: BudgetCreate) -> Budget:
         budget = Budget(**data.model_dump())

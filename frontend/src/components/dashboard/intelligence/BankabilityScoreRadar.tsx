@@ -15,6 +15,7 @@ import {
 } from "recharts";
 import { useRole } from "@/lib/hooks/useRole";
 import { cn } from "@/lib/utils/cn";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -66,13 +67,13 @@ const CustomTooltip = ({
 // ── BankabilityScoreRadar ─────────────────────────────────────────────────────
 
 export function BankabilityScoreRadar({
-  bankability_score = 0,
-  risk_tier = "HIGH",
+  bankability_score,
+  risk_tier,
   strategic_narrative,
-  trend_score = 0,
-  ratio_score = 0,
-  consistency_score = 0,
-  runway_score = 0,
+  trend_score,
+  ratio_score,
+  consistency_score,
+  runway_score,
   quarterly_revenue_kes,
   quarterly_opex_kes,
   canAct: canActProp,
@@ -80,16 +81,34 @@ export function BankabilityScoreRadar({
   const { hasRole } = useRole();
   const canAct = canActProp !== undefined ? canActProp : hasRole("MANAGER");
 
+  // Without any Agent G output there is nothing to assess — show empty, not zeros.
+  const hasData =
+    bankability_score !== undefined ||
+    trend_score !== undefined ||
+    ratio_score !== undefined ||
+    consistency_score !== undefined ||
+    runway_score !== undefined ||
+    !!strategic_narrative;
+  if (!hasData) {
+    return (
+      <EmptyState
+        title="No bankability assessment yet"
+        message="Ask Agent G to assess bankability to populate this radar."
+      />
+    );
+  }
+
+  const score = bankability_score ?? 0;
   // Normalize each sub-score to 0–100 for equal radar axis scaling
   const radarData = [
-    { axis: "Revenue Trend",  value: Math.round((trend_score / 30) * 100),       fullMark: 30 },
-    { axis: "Expense Ratio",  value: Math.round((ratio_score / 30) * 100),        fullMark: 30 },
-    { axis: "CF Consistency", value: Math.round((consistency_score / 20) * 100),  fullMark: 20 },
-    { axis: "Solvency",       value: Math.round((runway_score / 20) * 100),       fullMark: 20 },
+    { axis: "Revenue Trend",  value: Math.round(((trend_score ?? 0) / 30) * 100),       fullMark: 30 },
+    { axis: "Expense Ratio",  value: Math.round(((ratio_score ?? 0) / 30) * 100),        fullMark: 30 },
+    { axis: "CF Consistency", value: Math.round(((consistency_score ?? 0) / 20) * 100),  fullMark: 20 },
+    { axis: "Solvency",       value: Math.round(((runway_score ?? 0) / 20) * 100),       fullMark: 20 },
   ];
 
-  const tierStyle = TIER_STYLES[risk_tier] ?? TIER_STYLES.HIGH;
-  const scoreColor = bankability_score >= 75 ? "#22c55e" : bankability_score >= 45 ? "#f59e0b" : "#ba1a1a";
+  const tierStyle = TIER_STYLES[risk_tier ?? "HIGH"] ?? TIER_STYLES.HIGH;
+  const scoreColor = score >= 75 ? "#22c55e" : score >= 45 ? "#f59e0b" : "#ba1a1a";
 
   // Q1 values for display (accept single number or array)
   const q1Rev = Array.isArray(quarterly_revenue_kes)
@@ -129,14 +148,14 @@ export function BankabilityScoreRadar({
             <p className="text-[9px] font-bold tracking-widest uppercase text-lf-on-surface-variant mb-1">Score</p>
             <div className="flex items-end gap-1">
               <span className="text-3xl font-bold leading-none" style={{ color: scoreColor }}>
-                {bankability_score}
+                {score}
               </span>
               <span className="text-xs text-lf-on-surface-variant mb-0.5">/100</span>
             </div>
             <div className="w-full h-1.5 rounded-full bg-lf-surface-container-high mt-2 overflow-hidden">
               <div
                 className="h-full rounded-full transition-all"
-                style={{ width: `${bankability_score}%`, backgroundColor: scoreColor }}
+                style={{ width: `${score}%`, backgroundColor: scoreColor }}
               />
             </div>
           </div>

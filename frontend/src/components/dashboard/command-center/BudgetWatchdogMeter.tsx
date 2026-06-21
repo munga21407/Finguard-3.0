@@ -13,6 +13,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { useRole } from "@/lib/hooks/useRole";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -44,8 +45,8 @@ function gaugeFill(score: number): string {
 // ── BudgetWatchdogMeter ───────────────────────────────────────────────────────
 
 export function BudgetWatchdogMeter({
-  anomaly_score = 0,
-  current_state = "HEALTHY",
+  anomaly_score,
+  current_state,
   state_probabilities = {},
   anomaly_detected = false,
   is_duplicate = false,
@@ -55,8 +56,27 @@ export function BudgetWatchdogMeter({
   const { hasRole } = useRole();
   const canAct = canActProp !== undefined ? canActProp : hasRole("MANAGER");
 
-  const fill = gaugeFill(anomaly_score);
-  const scorePercent = Math.round(anomaly_score * 100);
+  // Without Agent E watchdog output there is no reading — show empty, not a
+  // misleading "0 / HEALTHY" gauge.
+  const hasData =
+    anomaly_score !== undefined ||
+    Object.keys(state_probabilities).length > 0 ||
+    !!summary ||
+    anomaly_detected ||
+    is_duplicate ||
+    current_state !== undefined;
+  if (!hasData) {
+    return (
+      <EmptyState
+        title="No watchdog reading yet"
+        message="Ask Agent E to run an anomaly check to populate this gauge."
+      />
+    );
+  }
+
+  const score = anomaly_score ?? 0;
+  const fill = gaugeFill(score);
+  const scorePercent = Math.round(score * 100);
 
   // RadialBarChart data — value drives the arc fill (0–100 domain)
   const gaugeData = [{ value: scorePercent }];
@@ -80,12 +100,14 @@ export function BudgetWatchdogMeter({
             Anomaly Detection · HMM Analysis
           </p>
         </div>
-        <span
-          className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded-full border"
-          style={{ color: fill, borderColor: `${fill}40`, backgroundColor: `${fill}12` }}
-        >
-          {current_state}
-        </span>
+        {current_state && (
+          <span
+            className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded-full border"
+            style={{ color: fill, borderColor: `${fill}40`, backgroundColor: `${fill}12` }}
+          >
+            {current_state}
+          </span>
+        )}
       </div>
 
       <div className="p-4 space-y-4">

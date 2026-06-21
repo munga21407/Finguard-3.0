@@ -1,30 +1,27 @@
-interface Insight {
-  id: string;
-  icon: "trending_up" | "shield";
-  agentLabel: string;
-  title: string;
-  body: string;
-  linkText: string;
-}
+"use client";
 
-const insights: Insight[] = [
-  {
-    id: "1",
-    icon: "trending_up",
-    agentLabel: "Agent F",
-    title: "Revenue Forecast Adjusted",
-    body: "Based on Q3 pipeline velocity, projected EOY revenue has been adjusted upward by 4.2%. Recommend reviewing budget allocations for Q4 marketing.",
-    linkText: "View Analysis",
-  },
-  {
-    id: "2",
-    icon: "shield",
-    agentLabel: "Agent G",
-    title: "Compliance Update Required",
-    body: "New tax regulations (Directive 2024-B) affect 3 active international vendor contracts. Required addendums have been drafted for review.",
-    linkText: "Review Drafts",
-  },
-];
+import { formatDistanceToNow } from "date-fns";
+import { QueryState } from "@/components/ui/QueryState";
+import { useAiInsights } from "@/lib/hooks/useIntelligenceData";
+
+// Friendly labels + an icon hint for the raw backend agent identifiers.
+const AGENT_META: Record<string, { label: string; icon: "trend" | "shield" }> = {
+  a_generator:  { label: "Invoice Gen",   icon: "trend" },
+  b_classifier: { label: "Classifier",    icon: "trend" },
+  c_reconciler: { label: "Reconciler",    icon: "trend" },
+  d_forecaster: { label: "Forecaster",    icon: "trend" },
+  e_watchdog:   { label: "Watchdog",      icon: "shield" },
+  f_auditor:    { label: "Auditor",       icon: "shield" },
+  g_reporter:   { label: "Reporter",      icon: "shield" },
+  h_advisor:    { label: "Advisor",       icon: "trend" },
+  i_integrator: { label: "Integrator",    icon: "trend" },
+  j_summarizer: { label: "Summarizer",    icon: "trend" },
+  supervisor:   { label: "Supervisor",    icon: "trend" },
+};
+
+function agentMeta(agent: string) {
+  return AGENT_META[agent] ?? { label: agent, icon: "trend" as const };
+}
 
 function TrendIcon() {
   return (
@@ -42,39 +39,48 @@ function ShieldIcon() {
 }
 
 export function IntelligenceInsights() {
+  const { data, isLoading, isError, refetch } = useAiInsights();
+  const insights = data ?? [];
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-      {insights.map((item) => (
-        <div
-          key={item.id}
-          className="bg-lf-surface-container-lowest rounded-xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 flex gap-4 items-start"
-        >
-          <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-            item.icon === "trending_up"
-              ? "bg-lf-secondary-fixed text-lf-on-secondary-fixed"
-              : "bg-lf-tertiary-fixed text-lf-on-tertiary-fixed"
-          }`}>
-            {item.icon === "trending_up" ? <TrendIcon /> : <ShieldIcon />}
-          </div>
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <h4 className="text-sm font-bold text-lf-on-surface">{item.title}</h4>
-              <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                item.icon === "trending_up" ? "text-lf-secondary" : "text-lf-tertiary"
+    <QueryState
+      isLoading={isLoading}
+      isError={isError}
+      isEmpty={insights.length === 0}
+      onRetry={() => refetch()}
+      loadingLabel="Loading insights…"
+      errorLabel="Couldn't load insights."
+      emptyLabel="No insights yet. Ask the assistant a question to generate one."
+    >
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        {insights.map((item) => {
+          const meta = agentMeta(item.agent);
+          const isTrend = meta.icon === "trend";
+          return (
+            <div
+              key={item.id}
+              className="bg-lf-surface-container-lowest rounded-xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 flex gap-4 items-start"
+            >
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                isTrend
+                  ? "bg-lf-secondary-fixed text-lf-on-secondary-fixed"
+                  : "bg-lf-tertiary-fixed text-lf-on-tertiary-fixed"
               }`}>
-                {item.agentLabel}
-              </span>
+                {isTrend ? <TrendIcon /> : <ShieldIcon />}
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <h4 className="text-sm font-bold text-lf-on-surface">{meta.label}</h4>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-lf-on-surface-variant">
+                    {formatDistanceToNow(new Date(item.created_at), { addSuffix: true })}
+                  </span>
+                </div>
+                <p className="text-sm text-lf-on-surface-variant leading-relaxed">{item.summary}</p>
+              </div>
             </div>
-            <p className="text-sm text-lf-on-surface-variant leading-relaxed">{item.body}</p>
-            <a href="#" className="inline-flex items-center gap-1 text-xs text-lf-primary font-semibold mt-2 hover:underline">
-              {item.linkText}
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
-              </svg>
-            </a>
-          </div>
-        </div>
-      ))}
-    </div>
+          );
+        })}
+      </div>
+    </QueryState>
   );
 }

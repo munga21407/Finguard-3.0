@@ -12,6 +12,22 @@ export function formatMoney(amount: string | number, currency = "KES"): string {
   })}`;
 }
 
+/**
+ * Format a money amount in compact notation, e.g. "KES 1.24M" / "KES 845K".
+ * For axis labels, KPI tiles and chart tooltips where full precision is noise.
+ */
+export function formatKESCompact(amount: string | number): string {
+  const n = typeof amount === "string" ? Number(amount) : amount;
+  if (Number.isNaN(n)) return "KES 0";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) {
+    return `${sign}KES ${(abs / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`;
+  }
+  if (abs >= 1_000) return `${sign}KES ${Math.round(abs / 1_000)}K`;
+  return `${sign}KES ${Math.round(abs)}`;
+}
+
 /** Format an ISO date/datetime as "Oct 24, 2023" (null-safe → "—"). */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "—";

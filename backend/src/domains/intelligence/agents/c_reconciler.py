@@ -31,6 +31,8 @@ from rapidfuzz import fuzz
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.domains.finance.service import FinanceService
+from src.domains.finance.types import VaultType
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.c_reconciler import RECONCILER_PASS2_SYSTEM
 from src.domains.intelligence.schemas import (
@@ -247,33 +249,34 @@ async def _pass2_semantic(
 # DB persistence
 # ---------------------------------------------------------------------------
 
-async def _apply_match(session: AsyncSession, match: ReconciliationMatch) -> None:
-    update_inv = text("""
-        UPDATE invoices
-        SET
-            status          = :status,
-            amount_paid     = LEAST(amount_paid + :payment, total),
-            balance_due     = GREATEST(balance_due - :payment, 0),
-            paid_at         = CASE WHEN :status = 'paid' THEN NOW() AT TIME ZONE 'UTC'
-                                   ELSE paid_at END,
-            updated_at      = NOW() AT TIME ZONE 'UTC'
-        WHERE id = :invoice_id::uuid
-    """)
-    await session.execute(
-        update_inv,
-        {
-            "status": match.new_invoice_status,
-            "payment": match.amount,
-            "invoice_id": match.invoice_id,
-        },
-    )
+async def _apply_match(
+    session: AsyncSession, match: ReconciliationMatch, occurred_at: datetime
+) -> None:
+    """Persist a confirmed match as an event-sourced Payment linked to the invoice.
 
-    update_txn = text("""
-        UPDATE mpesa_transactions
-        SET is_reconciled = TRUE
-        WHERE id = :txn_id::uuid
-    """)
-    await session.execute(update_txn, {"txn_id": match.transaction_id})
+    Delegates to ``FinanceService.apply_reconciled_payment`` so the settlement
+    creates a Payment row (tagged with its rail) + a ``payment_applied`` event and
+    re-projects the invoice — identical bookkeeping to a manual cash payment — and
+    marks the raw settlement (M-Pesa txn / bank line) reconciled.  Runs inside the
+    caller's ``session.begin()``; no commit here.
+    """
+    service = FinanceService(session)
+    if match.source == "bank":
+        await service.apply_reconciled_payment(
+            invoice_id=match.invoice_id,
+            amount=match.amount,
+            vault=VaultType.BANK,
+            occurred_at=occurred_at,
+            bank_line_id=match.transaction_id,
+        )
+    else:
+        await service.apply_reconciled_payment(
+            invoice_id=match.invoice_id,
+            amount=match.amount,
+            vault=VaultType.MPESA,
+            occurred_at=occurred_at,
+            mpesa_trans_id=match.transaction_id,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -356,9 +359,12 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
             # ── Persist — all writes or none ──────────────────────────────────
             # If _apply_match raises on any single match, session.begin() rolls
             # back the entire batch automatically; no partial state is committed.
+            txn_dates = {t["id"]: t["created_at"] for t in transactions}
             for match in all_matches:
                 try:
-                    await _apply_match(session, match)
+                    await _apply_match(
+                        session, match, txn_dates.get(match.transaction_id) or datetime.now(UTC)
+                    )
                 except Exception as exc:
                     # Log the offending invoice before re-raising so operators
                     # can identify the problematic record in structured logs
@@ -391,6 +397,118 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
     )
     logger.info(
         "c_reconciler: run complete",
+        total=report.total_transactions,
+        exact=report.matched_exact,
+        fuzzy=report.matched_fuzzy,
+        unmatched=report.unmatched,
+    )
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Bank statement reconciliation — bank_statement_lines → invoices
+# ---------------------------------------------------------------------------
+
+async def run_bank_reconciliation(session: AsyncSession) -> ReconciliationReport:
+    """Reconcile imported bank statement lines against open invoices.
+
+    Mirrors :func:`run_reconciliation` but reads ``bank_statement_lines`` instead
+    of ``mpesa_transactions``.  Each line is mapped to the same dict shape the
+    two-pass matchers already consume (``reference_text`` → ``bill_ref``, ``date``
+    → ``created_at``, no phone), so ``_pass1_exact`` / ``_pass2_semantic`` are
+    reused unchanged.  Confirmed matches are persisted via the shared
+    event-sourced ``_apply_match`` with ``source="bank"`` → ``Payment(vault=BANK)``.
+    Same single-transaction atomicity and ``FOR UPDATE SKIP LOCKED`` guarantees.
+    """
+    run_at = datetime.now(UTC).isoformat()
+
+    async with session.begin():
+        line_sql = text("""
+            SELECT id::text, amount::float, reference_text, date
+            FROM bank_statement_lines
+            WHERE is_reconciled = FALSE
+            ORDER BY date ASC
+            LIMIT :lim
+            FOR UPDATE SKIP LOCKED
+        """)
+        line_result = await session.execute(line_sql, {"lim": _TXN_BATCH})
+        # Adapt bank lines to the transaction dict shape the matchers expect.
+        transactions = [
+            {
+                "id": row[0],
+                "amount": row[1],
+                "bill_ref": row[2],
+                "created_at": row[3],
+                "phone": "",
+            }
+            for row in line_result.fetchall()
+        ]
+
+        inv_sql = text("""
+            SELECT id::text, invoice_number, status::text, total::float,
+                   amount_paid::float, balance_due::float, due_date, customer_id::text
+            FROM invoices
+            WHERE status IN ('sent', 'overdue')
+              AND balance_due > 0
+            ORDER BY due_date ASC NULLS LAST
+            LIMIT :lim
+            FOR UPDATE SKIP LOCKED
+        """)
+        inv_result = await session.execute(inv_sql, {"lim": _INV_LIMIT})
+        invoices = [
+            dict(zip(inv_result.keys(), row, strict=False))
+            for row in inv_result.fetchall()
+        ]
+
+        if transactions and invoices:
+            exact_matches, matched_txn_ids, matched_inv_ids = _pass1_exact(
+                transactions, invoices
+            )
+            semantic_matches = await _pass2_semantic(
+                transactions, invoices, matched_txn_ids, matched_inv_ids
+            )
+            for m in semantic_matches:
+                matched_txn_ids.add(m.transaction_id)
+                matched_inv_ids.add(m.invoice_id)
+
+            all_matches = exact_matches + semantic_matches
+            # Tag every match so _apply_match records Payment(vault=BANK).
+            for m in all_matches:
+                m.source = "bank"
+
+            line_dates = {t["id"]: t["created_at"] for t in transactions}
+            for match in all_matches:
+                try:
+                    await _apply_match(
+                        session, match, line_dates.get(match.transaction_id) or datetime.now(UTC)
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "c_reconciler: bank _apply_match failed — rolling back entire batch",
+                        invoice_id=match.invoice_id,
+                        bank_line_id=match.transaction_id,
+                        match_type=match.match_type,
+                        match_score=match.match_score,
+                        error=str(exc),
+                        exc_info=True,
+                    )
+                    raise
+        else:
+            exact_matches = []
+            matched_txn_ids = set()
+            all_matches = []
+
+    fuzzy_count = sum(1 for m in all_matches if m.match_type != "exact")
+    report = ReconciliationReport(
+        total_transactions=len(transactions),
+        matched_exact=len(exact_matches),
+        matched_fuzzy=fuzzy_count,
+        unmatched=len(transactions) - len(matched_txn_ids),
+        matches=all_matches,
+        run_at=run_at,
+    )
+    logger.info(
+        "c_reconciler: bank run complete",
         total=report.total_transactions,
         exact=report.matched_exact,
         fuzzy=report.matched_fuzzy,

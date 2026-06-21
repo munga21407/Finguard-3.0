@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -221,7 +222,15 @@ class Expense(Base):
 
 
 class Payment(Base):
-    """Manual cash payment recorded against an invoice."""
+    """A payment recorded against an invoice — the immutable money-movement row.
+
+    Created by every settlement path: manual cash (``record_cash_payment``) and
+    automated reconciliation of M-Pesa transactions / bank statement lines
+    (Agent C → ``apply_reconciled_payment``).  ``vault`` is the settlement rail;
+    ``mpesa_trans_id`` / ``bank_line_id`` link back to the raw settlement record
+    that produced it (NULL for manual cash).  ``recorded_by`` is NULL for
+    agent-applied payments (no human actor), mirroring ``InvoiceEvent.recorded_by``.
+    """
 
     __tablename__ = "payments"
 
@@ -233,7 +242,15 @@ class Payment(Base):
     vault: Mapped[VaultType] = mapped_column(Enum(VaultType), nullable=False)
     reference_note: Mapped[str | None] = mapped_column(Text)
     payment_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    recorded_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Provenance: which raw settlement record reconciliation matched to this
+    # invoice (NULL for manual cash payments).
+    mpesa_trans_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mpesa_transactions.id"), index=True
+    )
+    bank_line_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("bank_statement_lines.id"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -257,6 +274,40 @@ class BankStatementLine(Base):
     reference_text: Mapped[str | None] = mapped_column(Text)
     is_reconciled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class VaultTransfer(Base):
+    """An internal treasury movement of the business's own money between vaults.
+
+    Distinct from a Payment (customer inflow) or Expense (outflow): a transfer is
+    net-zero to total cash — it only shifts money from ``from_vault`` to
+    ``to_vault``.  An optional ``fee`` (M-Pesa/bank charge) is a real cost, booked
+    as a separate ``Expense`` (vault = source) and linked via ``fee_expense_id``;
+    the per-vault balance fold therefore subtracts the fee through the expense, not
+    here.  Balances are derived (Σ payments + transfers_in − expenses − transfers_out),
+    so this table is never the source of a stored balance.
+    """
+
+    __tablename__ = "vault_transfers"
+    __table_args__ = (
+        CheckConstraint("from_vault <> to_vault", name="ck_vault_transfers_distinct_vaults"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    from_vault: Mapped[VaultType] = mapped_column(Enum(VaultType), nullable=False)
+    to_vault: Mapped[VaultType] = mapped_column(Enum(VaultType), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    fee: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), nullable=False)
+    reference_note: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # The Expense row that captured the transfer fee (NULL when fee == 0).
+    fee_expense_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("expenses.id"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

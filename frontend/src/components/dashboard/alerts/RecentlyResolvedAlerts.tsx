@@ -1,30 +1,13 @@
 "use client";
 
 import { useState } from "react";
-
-const resolved = [
-  {
-    id: "#INV-0021",
-    summary: "Vendor mismatched address correction applied.",
-    resolvedBy: "Sarah J.",
-    time: "2 hours ago",
-  },
-  {
-    id: "#INV-0018",
-    summary: "Duplicate payment voided and vendor notified.",
-    resolvedBy: "Agent E",
-    time: "Yesterday",
-  },
-  {
-    id: "#INV-0015",
-    summary: "Amount discrepancy corrected after PO reconciliation.",
-    resolvedBy: "Michael T.",
-    time: "3 days ago",
-  },
-];
+import { formatDistanceToNow } from "date-fns";
+import { useResolvedAlerts } from "@/lib/hooks/useAlerts";
 
 export function RecentlyResolvedAlerts() {
   const [open, setOpen] = useState(false);
+  const { data, isLoading, isError } = useResolvedAlerts();
+  const resolved = data ?? [];
 
   return (
     <div className="bg-lf-surface-container-lowest rounded-xl border border-lf-outline-variant/30 shadow-[0_4px_20px_rgba(0,0,0,0.03)] overflow-hidden">
@@ -48,6 +31,15 @@ export function RecentlyResolvedAlerts() {
 
       {open && (
         <div className="border-t border-lf-outline-variant/20 divide-y divide-lf-outline-variant/10">
+          {isLoading && (
+            <p className="px-5 py-4 text-sm text-lf-on-surface-variant">Loading…</p>
+          )}
+          {isError && !isLoading && (
+            <p className="px-5 py-4 text-sm text-lf-error">Couldn&apos;t load resolved alerts.</p>
+          )}
+          {!isLoading && !isError && resolved.length === 0 && (
+            <p className="px-5 py-4 text-sm text-lf-on-surface-variant">No resolved alerts yet.</p>
+          )}
           {resolved.map((item) => (
             <div key={item.id} className="px-5 py-3 flex items-start justify-between gap-3">
               <div className="flex items-start gap-3">
@@ -57,12 +49,16 @@ export function RecentlyResolvedAlerts() {
                   </svg>
                 </div>
                 <div>
-                  <span className="text-xs font-bold text-lf-primary">{item.id}</span>
-                  <p className="text-sm text-lf-on-surface-variant mt-0.5">{item.summary}</p>
-                  <span className="text-[11px] text-lf-tertiary">Resolved by {item.resolvedBy}</span>
+                  <p className="text-sm font-semibold text-lf-on-surface">{item.title}</p>
+                  <p className="text-sm text-lf-on-surface-variant mt-0.5">{item.body}</p>
+                  {item.resolution_note && (
+                    <span className="text-[11px] text-lf-tertiary">{item.resolution_note}</span>
+                  )}
                 </div>
               </div>
-              <span className="text-[11px] text-lf-on-surface-variant whitespace-nowrap shrink-0">{item.time}</span>
+              <span className="text-[11px] text-lf-on-surface-variant whitespace-nowrap shrink-0">
+                {item.resolved_at ? formatDistanceToNow(new Date(item.resolved_at), { addSuffix: true }) : ""}
+              </span>
             </div>
           ))}
         </div>

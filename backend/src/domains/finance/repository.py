@@ -1,17 +1,22 @@
 import uuid
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domains.finance.models import (
+    BankStatementLine,
     Budget,
     Expense,
     Invoice,
     InvoiceEvent,
+    InvoiceStatus,
     LedgerEntry,
     MpesaTransaction,
     Payment,
+    VaultTransfer,
 )
+from src.domains.finance.types import VaultType
 
 
 class LedgerRepository:
@@ -76,6 +81,24 @@ class InvoiceRepository:
         await self._session.refresh(invoice)
         return invoice
 
+    async def status_aggregates(self) -> list[tuple[InvoiceStatus, Decimal, Decimal]]:
+        """``(status, Σ total, Σ amount_paid)`` over non-cancelled invoices.
+
+        Feeds the reconciliation-flow Sankey: the materialized ``invoices`` row is
+        the synchronous projection of the ``invoice_events`` fold, so grouping it
+        by status yields the lifecycle distribution without replaying every event.
+        """
+        result = await self._session.execute(
+            select(
+                Invoice.status,
+                func.coalesce(func.sum(Invoice.total), 0),
+                func.coalesce(func.sum(Invoice.amount_paid), 0),
+            )
+            .where(Invoice.status != InvoiceStatus.CANCELLED)
+            .group_by(Invoice.status)
+        )
+        return [(row[0], Decimal(row[1]), Decimal(row[2])) for row in result.all()]
+
 
 class InvoiceEventRepository:
     """Append-only access to the invoice event log.
@@ -131,6 +154,18 @@ class ExpenseRepository:
     async def get_by_id(self, expense_id: uuid.UUID) -> Expense | None:
         return await self._session.get(Expense, expense_id)
 
+    async def totals_by_vault(self) -> dict[VaultType, Decimal]:
+        """Σ expense amount per vault — the outflow side of each vault balance.
+
+        Includes transfer fees (booked as expenses on the source vault).
+        """
+        result = await self._session.execute(
+            select(Expense.vault, func.coalesce(func.sum(Expense.amount), 0)).group_by(
+                Expense.vault
+            )
+        )
+        return {row[0]: Decimal(row[1]) for row in result.all()}
+
 
 class MpesaRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -152,6 +187,19 @@ class MpesaRepository:
         await self._session.flush()
         await self._session.refresh(txn)
         return txn
+
+
+class BankStatementRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def bulk_create(self, lines: list[BankStatementLine]) -> list[BankStatementLine]:
+        """Insert imported bank statement lines (left unreconciled for Agent C)."""
+        self._session.add_all(lines)
+        await self._session.flush()
+        for line in lines:
+            await self._session.refresh(line)
+        return lines
 
 
 class BudgetRepository:
@@ -188,3 +236,65 @@ class PaymentRepository:
             .order_by(Payment.payment_date.desc())
         )
         return list(result.scalars().all())
+
+    async def rail_aggregates(self) -> list[tuple[InvoiceStatus, VaultType, Decimal]]:
+        """``(invoice.status, payment.vault, Σ amount)`` over non-cancelled invoices.
+
+        The exact, per-invoice settlement-rail split feeding the reconciliation
+        Sankey's Stage 2 → Stage 3: every Payment is joined to its invoice and
+        grouped by the invoice's current status and the payment's rail.
+        """
+        result = await self._session.execute(
+            select(Invoice.status, Payment.vault, func.coalesce(func.sum(Payment.amount), 0))
+            .join(Invoice, Invoice.id == Payment.invoice_id)
+            .where(Invoice.status != InvoiceStatus.CANCELLED)
+            .group_by(Invoice.status, Payment.vault)
+        )
+        return [(row[0], row[1], Decimal(row[2])) for row in result.all()]
+
+    async def totals_by_vault(self) -> dict[VaultType, Decimal]:
+        """Σ payment amount per vault — the inflow side of each vault balance."""
+        result = await self._session.execute(
+            select(Payment.vault, func.coalesce(func.sum(Payment.amount), 0)).group_by(
+                Payment.vault
+            )
+        )
+        return {row[0]: Decimal(row[1]) for row in result.all()}
+
+
+class VaultTransferRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create(self, transfer: VaultTransfer) -> VaultTransfer:
+        self._session.add(transfer)
+        await self._session.flush()
+        await self._session.refresh(transfer)
+        return transfer
+
+    async def list_all(self, limit: int = 100, offset: int = 0) -> list[VaultTransfer]:
+        result = await self._session.execute(
+            select(VaultTransfer)
+            .order_by(VaultTransfer.occurred_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(result.scalars().all())
+
+    async def in_totals_by_vault(self) -> dict[VaultType, Decimal]:
+        """Σ transfer amount received per ``to_vault``."""
+        result = await self._session.execute(
+            select(
+                VaultTransfer.to_vault, func.coalesce(func.sum(VaultTransfer.amount), 0)
+            ).group_by(VaultTransfer.to_vault)
+        )
+        return {row[0]: Decimal(row[1]) for row in result.all()}
+
+    async def out_totals_by_vault(self) -> dict[VaultType, Decimal]:
+        """Σ transfer amount sent per ``from_vault`` (the fee is a separate expense)."""
+        result = await self._session.execute(
+            select(
+                VaultTransfer.from_vault, func.coalesce(func.sum(VaultTransfer.amount), 0)
+            ).group_by(VaultTransfer.from_vault)
+        )
+        return {row[0]: Decimal(row[1]) for row in result.all()}

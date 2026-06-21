@@ -6,6 +6,8 @@
 import httpClient from "@/lib/api/http-client";
 import { ENDPOINTS } from "@/lib/api/endpoints";
 import type {
+  ApiBankStatementImport,
+  ApiBankStatementLine,
   ApiBudget,
   ApiCustomer,
   ApiCustomerCreate,
@@ -13,6 +15,10 @@ import type {
   ApiInvoice,
   ApiInvoiceCreate,
   ApiReceiptExpenseCreate,
+  ApiReconciliationFlow,
+  ApiVaultBalances,
+  ApiVaultTransfer,
+  ApiVaultTransferCreate,
 } from "@/types/api";
 
 export async function listCustomers(): Promise<ApiCustomer[]> {
@@ -32,6 +38,59 @@ export async function listExpenses(): Promise<ApiExpense[]> {
 
 export async function listBudgets(): Promise<ApiBudget[]> {
   const { data } = await httpClient.get<ApiBudget[]>(ENDPOINTS.FINANCE.BUDGETS);
+  return data;
+}
+
+/**
+ * Invoice-lifecycle → settlement-rail Sankey flow (Total Billed → status →
+ * reconciled M-Pesa / Bank rails), computed server-side from invoice_events and
+ * Agent C reconciliation. Powers the Overview reconciliation diagram.
+ */
+export async function getReconciliationFlow(): Promise<ApiReconciliationFlow> {
+  const { data } = await httpClient.get<ApiReconciliationFlow>(
+    ENDPOINTS.FINANCE.RECONCILIATION_FLOW
+  );
+  return data;
+}
+
+/**
+ * Import bank statement lines for Agent C to reconcile against open invoices.
+ * Lines land unreconciled; the batch job later matches them and records a
+ * Payment(vault=BANK), which then surfaces on the Overview reconciliation Sankey.
+ */
+export async function importBankStatements(
+  lines: ApiBankStatementImport[]
+): Promise<ApiBankStatementLine[]> {
+  const { data } = await httpClient.post<ApiBankStatementLine[]>(
+    ENDPOINTS.FINANCE.BANK_STATEMENTS_IMPORT,
+    lines
+  );
+  return data;
+}
+
+/** Live balance of each vault (M-Pesa / Cash / Bank) + the total cash position. */
+export async function getVaultBalances(): Promise<ApiVaultBalances> {
+  const { data } = await httpClient.get<ApiVaultBalances>(
+    ENDPOINTS.FINANCE.VAULT_BALANCES
+  );
+  return data;
+}
+
+export async function listVaultTransfers(): Promise<ApiVaultTransfer[]> {
+  const { data } = await httpClient.get<ApiVaultTransfer[]>(
+    ENDPOINTS.FINANCE.VAULT_TRANSFERS
+  );
+  return data;
+}
+
+/** Move the business's own money between vaults (optional fee booked as an expense). */
+export async function createVaultTransfer(
+  body: ApiVaultTransferCreate
+): Promise<ApiVaultTransfer> {
+  const { data } = await httpClient.post<ApiVaultTransfer>(
+    ENDPOINTS.FINANCE.VAULT_TRANSFERS,
+    body
+  );
   return data;
 }
 

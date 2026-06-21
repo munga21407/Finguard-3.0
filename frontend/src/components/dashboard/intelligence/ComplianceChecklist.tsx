@@ -1,3 +1,5 @@
+import { EmptyState } from "@/components/ui/EmptyState";
+
 interface ComplianceItem {
   id: string;
   label: string;
@@ -5,19 +7,12 @@ interface ComplianceItem {
   status: "done" | "urgent" | "upcoming";
 }
 
-const defaultItems: ComplianceItem[] = [
-  { id: "1", label: "Q2 State Franchise Tax",   dueLabel: "Filed Jul 15, 2023", status: "done" },
-  { id: "2", label: "Q3 Federal Estimated",      dueLabel: "Due in 3 days",     status: "urgent" },
-  { id: "3", label: "Annual Report (Delaware)",  dueLabel: "Due Mar 1, 2024",   status: "upcoming" },
-  { id: "4", label: "1099 Vendor Issuance",      dueLabel: "Due Jan 31, 2024",  status: "upcoming" },
-];
-
 interface ComplianceChecklistProps {
   items?: ComplianceItem[];
   progress?: number;
 }
 
-export function ComplianceChecklist({ items = defaultItems, progress = 25 }: ComplianceChecklistProps) {
+export function ComplianceChecklist({ items = [], progress = 0 }: ComplianceChecklistProps) {
   return (
     <div className="bg-lf-surface-container-lowest rounded-xl shadow-[0px_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 flex flex-col overflow-hidden hover:shadow-[0px_8px_24px_rgba(107,56,212,0.08)] hover:border-lf-secondary-fixed transition-all">
       <div className="p-6 bg-lf-surface-container-low border-b border-lf-surface-variant">
@@ -26,6 +21,9 @@ export function ComplianceChecklist({ items = defaultItems, progress = 25 }: Com
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        {items.length === 0 && (
+          <EmptyState message="No filing obligations tracked yet." />
+        )}
         {items.map((item) => (
           <div
             key={item.id}

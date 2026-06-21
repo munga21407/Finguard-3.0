@@ -18,6 +18,7 @@ from src.core.config import settings
 from src.core.csrf import CSRFMiddleware
 from src.core.exceptions import register_exception_handlers
 from src.core.logging import configure_logging
+from src.domains.alerts.router import router as alerts_router
 from src.domains.crm.router import router as crm_router
 from src.domains.finance.router import router as finance_router
 from src.domains.identity.router import limiter
@@ -133,6 +134,7 @@ app.include_router(identity_router, prefix="/api/v1/identity", tags=["identity"]
 app.include_router(crm_router, prefix="/api/v1/crm", tags=["crm"])
 app.include_router(finance_router, prefix="/api/v1/finance", tags=["finance"])
 app.include_router(intelligence_router, prefix="/api/v1/intelligence", tags=["intelligence"])
+app.include_router(alerts_router, prefix="/api/v1/alerts", tags=["alerts"])
 
 
 @app.get("/health")

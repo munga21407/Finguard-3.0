@@ -254,7 +254,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Mark Invoice Paid */
+        /**
+         * Mark Invoice Paid
+         * @description Settle an invoice's outstanding balance on the chosen rail.
+         *
+         *     The optional body picks the settlement ``vault`` (M-Pesa / Cash / Bank); the
+         *     money is recorded as a Payment on that vault.  Defaults to CASH when omitted.
+         */
         post: operations["mark_invoice_paid_api_v1_finance_invoices__invoice_id__pay_post"];
         delete?: never;
         options?: never;
@@ -300,6 +306,104 @@ export interface paths {
         get: operations["reconstruct_invoice_api_v1_finance_invoices__invoice_id__reconstruction_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/reconciliation-flow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reconciliation Flow
+         * @description Invoice-lifecycle → settlement-rail Sankey for the Overview dashboard.
+         *
+         *     Stage 1 (Total Billed) → Stage 2 (current invoice status, the projection of
+         *     the append-only ``invoice_events`` fold) → Stage 3 (settlement rail). Stage 3
+         *     reads the per-invoice ``Payment`` rows produced by Agent C reconciliation
+         *     (M-Pesa / Bank) and cash/manual settlement — every collected shilling is backed
+         *     by a Payment, so the rails fully account for each status's collected total.
+         */
+        get: operations["reconciliation_flow_api_v1_finance_reconciliation_flow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/reconciliation/bank-statements/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Bank Statements
+         * @description Ingest bank statement lines for Agent C to reconcile against open invoices.
+         *
+         *     Lines land unreconciled; the batch bank-reconciliation job (or the Agent C
+         *     LangGraph node) later matches them to invoices and records a Payment(vault=BANK).
+         */
+        post: operations["import_bank_statements_api_v1_finance_reconciliation_bank_statements_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/vault-balances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Vault Balances
+         * @description Live balance of each vault (M-Pesa / Cash / Bank) and the total cash position.
+         *
+         *     Derived from payments (in), expenses (out), and vault transfers (in/out) — see
+         *     ``FinanceService.get_vault_balances``.
+         */
+        get: operations["vault_balances_api_v1_finance_vault_balances_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/vault-transfers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Vault Transfers
+         * @description Recent vault transfers, newest first.
+         */
+        get: operations["list_vault_transfers_api_v1_finance_vault_transfers_get"];
+        put?: never;
+        /**
+         * Create Vault Transfer
+         * @description Move the business's own money between vaults (net-zero to total cash).
+         *
+         *     An optional ``fee`` is booked as an Expense on the source vault.
+         */
+        post: operations["create_vault_transfer_api_v1_finance_vault_transfers_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -485,6 +589,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/intelligence/insights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Insights
+         * @description Recent read-only analysis items for the dashboard insights feed.
+         *
+         *     Cheap structured read over persisted ``/ai-insights`` runs — does NOT
+         *     re-run the orchestrator. Empty until insight orchestrations have run.
+         */
+        get: operations["list_insights_api_v1_intelligence_insights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Actions
+         * @description Recent actionable items for the dashboard action centre.
+         *
+         *     Cheap structured read over persisted ``/ai-actions`` runs — does NOT
+         *     re-run the orchestrator. Empty until action orchestrations have run.
+         */
+        get: operations["list_actions_api_v1_intelligence_actions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Notifications
+         * @description Recent agent activity for the top-bar notification bell.
+         */
+        get: operations["list_notifications_api_v1_intelligence_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Agent Telemetry
+         * @description Per-agent run statistics for the agent-status widgets.
+         */
+        get: operations["list_agent_telemetry_api_v1_intelligence_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/intelligence/receipts/scan": {
         parameters: {
             query?: never;
@@ -582,6 +772,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Active Alerts
+         * @description Active (unresolved) alerts for the alerts dashboard.
+         */
+        get: operations["list_active_alerts_api_v1_alerts_get"];
+        put?: never;
+        /**
+         * Create Alert
+         * @description Raise a new alert. The integration point for the Agent E watchdog.
+         */
+        post: operations["create_alert_api_v1_alerts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alerts/resolved": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Resolved Alerts
+         * @description Recently resolved alerts.
+         */
+        get: operations["list_resolved_alerts_api_v1_alerts_resolved_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alerts/kpis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Alert Kpis
+         * @description Summary counts for the alert KPI cards.
+         */
+        get: operations["alert_kpis_api_v1_alerts_kpis_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alerts/{alert_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Alert
+         * @description Mark an alert resolved (MANAGER+ via the intelligence-act permission).
+         */
+        post: operations["resolve_alert_api_v1_alerts__alert_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -664,6 +938,27 @@ export interface components {
              */
             token_type: string;
         };
+        /**
+         * ActionFeedItem
+         * @description One actionable item for the AiActionCenter widget.
+         */
+        ActionFeedItem: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Agent */
+            agent: string;
+            /** Summary */
+            summary: string;
+            status: components["schemas"]["AgentRunStatus"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** ActionRequest */
         ActionRequest: {
             /** Intent */
@@ -674,6 +969,157 @@ export interface components {
             };
             /** User Id */
             user_id?: string | null;
+        };
+        /**
+         * AgentRunStatus
+         * @enum {string}
+         */
+        AgentRunStatus: "pending" | "running" | "completed" | "failed";
+        /**
+         * AgentTelemetry
+         * @description Per-agent run statistics for the AgentStatus / AgentIntegrations widgets.
+         */
+        AgentTelemetry: {
+            /** Agent */
+            agent: string;
+            /** Total Runs */
+            total_runs: number;
+            /** Completed */
+            completed: number;
+            /** Failed */
+            failed: number;
+            /** Running */
+            running: number;
+            last_status: components["schemas"]["AgentRunStatus"] | null;
+            /** Last Run At */
+            last_run_at: string | null;
+        };
+        /** AlertCreate */
+        AlertCreate: {
+            type: components["schemas"]["AlertType"];
+            severity: components["schemas"]["AlertSeverity"];
+            /** Title */
+            title: string;
+            /** Body */
+            body: string;
+            /** Source Agent */
+            source_agent?: string | null;
+            /** Vc Id */
+            vc_id?: string | null;
+            /** Metadata Payload */
+            metadata_payload?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * AlertKpis
+         * @description Summary counts for the AlertKpiCards widget.
+         */
+        AlertKpis: {
+            /** Active */
+            active: number;
+            /** Critical */
+            critical: number;
+            /** Resolved Last 7D */
+            resolved_last_7d: number;
+            /** Avg Resolution Hours */
+            avg_resolution_hours: number | null;
+        };
+        /** AlertResolve */
+        AlertResolve: {
+            /** Resolution Note */
+            resolution_note?: string | null;
+        };
+        /** AlertResponse */
+        AlertResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            type: components["schemas"]["AlertType"];
+            severity: components["schemas"]["AlertSeverity"];
+            status: components["schemas"]["AlertStatus"];
+            /** Title */
+            title: string;
+            /** Body */
+            body: string;
+            /** Source Agent */
+            source_agent: string | null;
+            /** Vc Id */
+            vc_id: string | null;
+            /** Metadata Payload */
+            metadata_payload: {
+                [key: string]: unknown;
+            };
+            /** Resolved By */
+            resolved_by: string | null;
+            /** Resolved At */
+            resolved_at: string | null;
+            /** Resolution Note */
+            resolution_note: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * AlertSeverity
+         * @enum {string}
+         */
+        AlertSeverity: "critical" | "warning" | "info";
+        /**
+         * AlertStatus
+         * @enum {string}
+         */
+        AlertStatus: "active" | "resolved";
+        /**
+         * AlertType
+         * @enum {string}
+         */
+        AlertType: "duplicate_invoice" | "anomaly" | "vendor_activity" | "budget_overspend";
+        /**
+         * BankStatementLineImport
+         * @description One bank statement line submitted to POST /finance/reconciliation/bank-statements/import.
+         *
+         *     Lines land unreconciled; Agent C later matches them to open invoices (amount
+         *     + date + reference_text ↔ invoice_number) and records a Payment(vault=BANK).
+         */
+        BankStatementLineImport: {
+            /** Amount */
+            amount: number | string;
+            /**
+             * Date
+             * Format: date-time
+             */
+            date: string;
+            /** Reference Text */
+            reference_text?: string | null;
+        };
+        /** BankStatementLineResponse */
+        BankStatementLineResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Amount */
+            amount: string;
+            /**
+             * Date
+             * Format: date-time
+             */
+            date: string;
+            /** Reference Text */
+            reference_text: string | null;
+            /** Is Reconciled */
+            is_reconciled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** Body_scan_receipt_api_v1_intelligence_receipts_scan_post */
         Body_scan_receipt_api_v1_intelligence_receipts_scan_post: {
@@ -904,6 +1350,26 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * InsightFeedItem
+         * @description One read-only analysis item for the IntelligenceInsights widget.
+         */
+        InsightFeedItem: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Agent */
+            agent: string;
+            /** Summary */
+            summary: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** InsightRequest */
         InsightRequest: {
             /** Query */
@@ -1090,6 +1556,20 @@ export interface components {
             created_at: string;
         };
         /**
+         * InvoiceSettleRequest
+         * @description Body for ``POST /invoices/{id}/pay`` — settle the outstanding balance.
+         *
+         *     ``vault`` is the settlement rail the money came in on; it is recorded on the
+         *     resulting Payment so the cash lands in the right vault.  Defaults to CASH (the
+         *     typical manual settlement) when the body is omitted.
+         */
+        InvoiceSettleRequest: {
+            /** @default CASH */
+            vault: components["schemas"]["VaultType"];
+            /** Reference Note */
+            reference_note?: string | null;
+        };
+        /**
          * InvoiceStatus
          * @enum {string}
          */
@@ -1163,6 +1643,26 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * NotificationItem
+         * @description One bell-feed notification for the TopNavBar, from a recent agent run.
+         */
+        NotificationItem: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Agent */
+            agent: string;
+            /** Message */
+            message: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** OrchestrationResponse */
         OrchestrationResponse: {
             /** Session Id */
@@ -1226,11 +1726,12 @@ export interface components {
              * Format: date-time
              */
             payment_date: string;
-            /**
-             * Recorded By
-             * Format: uuid
-             */
-            recorded_by: string;
+            /** Recorded By */
+            recorded_by: string | null;
+            /** Mpesa Trans Id */
+            mpesa_trans_id?: string | null;
+            /** Bank Line Id */
+            bank_line_id?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -1311,6 +1812,66 @@ export interface components {
             suggested_category: string;
             /** Error */
             error?: string | null;
+        };
+        /**
+         * ReconciliationFlowResponse
+         * @description Sankey-ready Accounts-Receivable flow for the Overview dashboard.
+         *
+         *     Three stages:
+         *
+         *       Stage 1  ``Total Billed`` — Σ invoice.total over non-cancelled invoices.
+         *       Stage 2  Invoice status (Draft / Sent / Overdue / Partially Paid / Paid).
+         *                These amounts are the *projection* of folding the append-only
+         *                ``invoice_events`` log (the materialized ``invoices`` row is kept
+         *                in sync with that fold), so the column reflects the lifecycle
+         *                transitions draft → sent → paid / partially_paid / overdue.
+         *       Stage 3  Settlement rail, read from the per-invoice ``Payment`` rows grouped
+         *                by their invoice's status and rail (vault): ``M-Pesa`` / ``Bank``
+         *                (the reconciled rails, produced by Agent C) and ``Cash``.  Every
+         *                settlement creates a Payment, so the rails fully account for each
+         *                status's collected total.
+         *
+         *     Both stages are exact.  ``nodes``/``links`` are empty when nothing has been
+         *     billed yet.
+         */
+        ReconciliationFlowResponse: {
+            /** Nodes */
+            nodes: components["schemas"]["SankeyNode"][];
+            /** Links */
+            links: components["schemas"]["SankeyLink"][];
+            /** Currency */
+            currency: string;
+            /** Total Billed */
+            total_billed: string;
+            /** Total Collected */
+            total_collected: string;
+            /** Reconciled Total */
+            reconciled_total: string;
+        };
+        /**
+         * SankeyLink
+         * @description A weighted flow between two nodes, referenced by their index in ``nodes``.
+         */
+        SankeyLink: {
+            /** Source */
+            source: number;
+            /** Target */
+            target: number;
+            /** Value */
+            value: string;
+        };
+        /**
+         * SankeyNode
+         * @description A single node in the invoice-lifecycle → settlement Sankey diagram.
+         */
+        SankeyNode: {
+            /** Name */
+            name: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "source" | "status" | "rail";
         };
         /** TaskStatusResponse */
         TaskStatusResponse: {
@@ -1412,12 +1973,93 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /** VaultBalance */
+        VaultBalance: {
+            vault: components["schemas"]["VaultType"];
+            /** Balance */
+            balance: string;
+        };
+        /**
+         * VaultBalancesResponse
+         * @description Live balance of each vault, derived from payments, expenses and transfers.
+         *
+         *     ``balance = Σ payments_in + Σ transfers_in − Σ expenses − Σ transfers_out``
+         *     (transfer fees are captured by the expense term).  Always lists every
+         *     ``VaultType`` member; ``total`` is the sum (the overall cash position).
+         */
+        VaultBalancesResponse: {
+            /** Balances */
+            balances: components["schemas"]["VaultBalance"][];
+            /** Currency */
+            currency: string;
+            /** Total */
+            total: string;
+        };
+        /**
+         * VaultTransferCreate
+         * @description Record an internal movement of the business's own money between vaults.
+         *
+         *     ``fee`` (optional M-Pesa/bank charge) is booked as a separate Expense on the
+         *     source vault, so it reduces the source balance and shows up in spend.
+         */
+        VaultTransferCreate: {
+            from_vault: components["schemas"]["VaultType"];
+            to_vault: components["schemas"]["VaultType"];
+            /** Amount */
+            amount: number | string;
+            /**
+             * Fee
+             * @default 0
+             */
+            fee: number | string;
+            /** Reference Note */
+            reference_note?: string | null;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+        };
+        /** VaultTransferResponse */
+        VaultTransferResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            from_vault: components["schemas"]["VaultType"];
+            to_vault: components["schemas"]["VaultType"];
+            /** Amount */
+            amount: string;
+            /** Fee */
+            fee: string;
+            /** Reference Note */
+            reference_note: string | null;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Recorded By */
+            recorded_by: string | null;
+            /** Fee Expense Id */
+            fee_expense_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /**
          * VaultType
-         * @description Dual-vault: every transaction must declare its payment rail.
+         * @description Settlement rail every transaction must declare.
+         *
+         *     MPESA and CASH are the original dual-vault rails; BANK was added when bank
+         *     statement reconciliation (Agent C, bank_statement_lines → invoices) began
+         *     producing Payment rows tagged with their settlement rail.
          * @enum {string}
          */
-        VaultType: "MPESA" | "CASH";
+        VaultType: "MPESA" | "CASH" | "BANK";
     };
     responses: never;
     parameters: never;
@@ -1921,7 +2563,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["InvoiceSettleRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1992,6 +2638,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InvoiceReconstructionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconciliation_flow_api_v1_finance_reconciliation_flow_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationFlowResponse"];
+                };
+            };
+        };
+    };
+    import_bank_statements_api_v1_finance_reconciliation_bank_statements_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BankStatementLineImport"][];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BankStatementLineResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vault_balances_api_v1_finance_vault_balances_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultBalancesResponse"];
+                };
+            };
+        };
+    };
+    list_vault_transfers_api_v1_finance_vault_transfers_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultTransferResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_vault_transfer_api_v1_finance_vault_transfers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VaultTransferCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultTransferResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2331,6 +3115,119 @@ export interface operations {
             };
         };
     };
+    list_insights_api_v1_intelligence_insights_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightFeedItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_actions_api_v1_intelligence_actions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionFeedItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notifications_api_v1_intelligence_notifications_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agent_telemetry_api_v1_intelligence_agents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentTelemetry"][];
+                };
+            };
+        };
+    };
     scan_receipt_api_v1_intelligence_receipts_scan_post: {
         parameters: {
             query?: never;
@@ -2415,6 +3312,156 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_active_alerts_api_v1_alerts_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_alert_api_v1_alerts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_resolved_alerts_api_v1_alerts_resolved_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    alert_kpis_api_v1_alerts_kpis_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertKpis"];
+                };
+            };
+        };
+    };
+    resolve_alert_api_v1_alerts__alert_id__resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertResolve"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertResponse"];
                 };
             };
             /** @description Validation Error */

@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { AlertKpiCards } from "@/components/dashboard/alerts/AlertKpiCards";
-import { DuplicateInvoiceAlert } from "@/components/dashboard/alerts/DuplicateInvoiceAlert";
-import { VendorActivityAlert } from "@/components/dashboard/alerts/VendorActivityAlert";
+import { ActiveAlerts } from "@/components/dashboard/alerts/ActiveAlerts";
 import { RecentlyResolvedAlerts } from "@/components/dashboard/alerts/RecentlyResolvedAlerts";
 
 export default function AlertsPage() {
@@ -53,31 +52,11 @@ export default function AlertsPage() {
       {/* Alert cards */}
       <div className="flex flex-col gap-4">
         <h3 className="text-xl font-semibold tracking-tight text-lf-on-surface">Active Alerts</h3>
-        <DuplicateInvoiceAlert />
-        <VendorActivityAlert />
+        <ActiveAlerts />
       </div>
 
       {/* Recently resolved */}
       <RecentlyResolvedAlerts />
-
-      {/* System status banner */}
-      <AgentStatusBanner />
-    </div>
-  );
-}
-
-function AgentStatusBanner() {
-  return (
-    <div className="flex items-center justify-between gap-3 bg-lf-primary-fixed/10 border border-lf-primary/10 rounded-xl px-4 py-3">
-      <div className="flex items-center gap-2">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-lf-primary shrink-0">
-          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
-        <p className="text-xs text-lf-on-surface">
-          <span className="font-semibold">Agent E</span> is currently scanning <span className="font-semibold">482 new invoices</span>.
-          <span className="text-lf-on-surface-variant ml-1">Last synced: 2 minutes ago</span>
-        </p>
-      </div>
     </div>
   );
 }

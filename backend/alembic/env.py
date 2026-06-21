@@ -12,6 +12,7 @@ import src.domains.identity.models  # noqa: F401
 import src.domains.crm.models  # noqa: F401
 import src.domains.finance.models  # noqa: F401
 import src.domains.intelligence.models  # noqa: F401
+import src.domains.alerts.models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

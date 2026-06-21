@@ -17,6 +17,7 @@ import {
 } from "recharts";
 import { useRole } from "@/lib/hooks/useRole";
 import { cn } from "@/lib/utils/cn";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -90,6 +91,24 @@ export function TaxLiabilityDonut({
   const canAct = canActProp !== undefined ? canActProp : hasRole("MANAGER");
   const [openRef, setOpenRef] = useState<number | null>(null);
   const [dismissedFlags, setDismissedFlags] = useState<Set<number>>(new Set());
+
+  // Without Agent F tax output there is nothing to chart — show empty, not KES 0.
+  const hasData =
+    tax_liability > 0 ||
+    effective_tax_rate > 0 ||
+    vat_component > 0 ||
+    cit_component > 0 ||
+    !!audit_summary ||
+    compliance_flags.length > 0 ||
+    kra_references.length > 0;
+  if (!hasData) {
+    return (
+      <EmptyState
+        title="No tax breakdown yet"
+        message="Ask Agent F for a tax assessment to populate this breakdown."
+      />
+    );
+  }
 
   // Build outer donut segments
   const hasBreakdown = vat_component > 0 || cit_component > 0;

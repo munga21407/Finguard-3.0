@@ -6,13 +6,84 @@ from typing import Any
 
 from google.genai import types
 from langchain_core.messages import HumanMessage
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.llm_client import get_gemini_client
 from src.domains.intelligence.models import AgentRun, AgentRunStatus
-from src.domains.intelligence.schemas import AgentRunCreate, ChatRequest, ChatResponse
+from src.domains.intelligence.schemas import (
+    ActionFeedItem,
+    AgentRunCreate,
+    AgentTelemetry,
+    ChatRequest,
+    ChatResponse,
+    InsightFeedItem,
+    NotificationItem,
+    OrchestrationResponse,
+)
+
+# ── AgentRun → dashboard feed mapping (pure, DB-free for unit testing) ─────────
+
+def _run_summary(run: AgentRun) -> str:
+    """Best-effort human summary of a persisted agent run."""
+    output = run.output_data or {}
+    answer = output.get("answer")
+    if isinstance(answer, str) and answer.strip():
+        return answer.strip()
+    if run.error:
+        return run.error
+    return "No summary available."
+
+
+def insight_from_run(run: AgentRun) -> InsightFeedItem:
+    return InsightFeedItem(
+        id=run.id,
+        agent=run.agent_name,
+        summary=_run_summary(run),
+        created_at=run.created_at,
+    )
+
+
+def action_from_run(run: AgentRun) -> ActionFeedItem:
+    return ActionFeedItem(
+        id=run.id,
+        agent=run.agent_name,
+        summary=_run_summary(run),
+        status=run.status,
+        created_at=run.created_at,
+    )
+
+
+def aggregate_telemetry(runs: list[AgentRun]) -> list[AgentTelemetry]:
+    """Group runs (newest-first) into per-agent statistics. Pure for testing."""
+    by_agent: dict[str, list[AgentRun]] = {}
+    for r in runs:
+        by_agent.setdefault(r.agent_name, []).append(r)
+
+    telemetry: list[AgentTelemetry] = []
+    for agent, agent_runs in by_agent.items():
+        latest = agent_runs[0]  # input is newest-first
+        telemetry.append(
+            AgentTelemetry(
+                agent=agent,
+                total_runs=len(agent_runs),
+                completed=sum(1 for r in agent_runs if r.status == AgentRunStatus.COMPLETED),
+                failed=sum(1 for r in agent_runs if r.status == AgentRunStatus.FAILED),
+                running=sum(
+                    1
+                    for r in agent_runs
+                    if r.status in (AgentRunStatus.RUNNING, AgentRunStatus.PENDING)
+                ),
+                last_status=latest.status,
+                last_run_at=latest.created_at,
+            )
+        )
+    telemetry.sort(
+        key=lambda t: t.last_run_at or datetime.min.replace(tzinfo=UTC), reverse=True
+    )
+    return telemetry
 
 
 class IntelligenceService:
@@ -140,3 +211,86 @@ class IntelligenceService:
             "agents_invoked": agents_invoked,
             "error_messages": final_state.get("error_messages", []),
         }
+
+    # ── Dashboard feeds ───────────────────────────────────────────────────────
+
+    async def record_orchestration_run(
+        self,
+        *,
+        mode: str,
+        query: str,
+        response: OrchestrationResponse,
+        triggered_by: str | None = None,
+    ) -> AgentRun:
+        """Persist a completed orchestration so the dashboard feeds can read it.
+
+        Stores the narrative answer and the invoked agents; the ``mode`` in
+        ``input_data`` is what splits the insights feed from the actions feed.
+        """
+        agents = response.agents_invoked or []
+        run = AgentRun(
+            agent_name=agents[0] if agents else "supervisor",
+            triggered_by=_uuid.UUID(triggered_by) if triggered_by else None,
+            status=AgentRunStatus.COMPLETED,
+            input_data={"mode": mode, "query": query},
+            output_data={
+                "session_id": response.session_id,
+                "answer": response.answer,
+                "agents_invoked": agents,
+            },
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+        )
+        self._session.add(run)
+        await self._session.commit()
+        await self._session.refresh(run)
+        return run
+
+    async def _recent_runs(self, mode: str, limit: int) -> list[AgentRun]:
+        # Fetch a small recent window and filter by mode in Python so the query
+        # stays portable across the generic JSON column (no JSONB path operators).
+        stmt = (
+            select(AgentRun)
+            .order_by(AgentRun.created_at.desc())
+            .limit(max(limit * 5, 50))
+        )
+        result = await self._session.execute(stmt)
+        runs = result.scalars().all()
+        filtered = [r for r in runs if (r.input_data or {}).get("mode") == mode]
+        return filtered[:limit]
+
+    async def list_insights(self, limit: int = 10) -> list[InsightFeedItem]:
+        runs = await self._recent_runs("insights", limit)
+        return [insight_from_run(r) for r in runs]
+
+    async def list_actions(self, limit: int = 10) -> list[ActionFeedItem]:
+        runs = await self._recent_runs("actions", limit)
+        return [action_from_run(r) for r in runs]
+
+    async def list_notifications(self, limit: int = 15) -> list[NotificationItem]:
+        """Recent agent runs (any mode) mapped to bell-feed notifications."""
+        stmt = (
+            select(AgentRun)
+            .order_by(AgentRun.created_at.desc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            NotificationItem(
+                id=r.id,
+                agent=r.agent_name,
+                message=_run_summary(r),
+                created_at=r.created_at,
+            )
+            for r in result.scalars().all()
+        ]
+
+    async def list_agent_telemetry(self) -> list[AgentTelemetry]:
+        """Aggregate the recent agent-run log into per-agent run statistics."""
+        stmt = (
+            select(AgentRun)
+            .order_by(AgentRun.created_at.desc())
+            .limit(1000)
+        )
+        result = await self._session.execute(stmt)
+        return aggregate_telemetry(list(result.scalars().all()))
