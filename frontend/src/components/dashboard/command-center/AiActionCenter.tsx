@@ -1,53 +1,31 @@
-interface ActionItem {
-  id: string;
-  priority: "high" | "routine";
-  timeAgo: string;
-  message: string;
-  actions: { label: string; variant: "primary" | "secondary" }[];
-}
+"use client";
 
-const defaultActions: ActionItem[] = [
-  {
-    id: "1",
-    priority: "high",
-    timeAgo: "2m ago",
-    message: "Agent D: Unusual wire transfer detected: $450k to unknown vendor.",
-    actions: [
-      { label: "Review", variant: "primary" },
-      { label: "Dismiss", variant: "secondary" },
-    ],
-  },
-  {
-    id: "2",
-    priority: "routine",
-    timeAgo: "1h ago",
-    message: "Batch invoice approval ready for sign-off (12 items).",
-    actions: [
-      { label: "Approve All", variant: "primary" },
-      { label: "View", variant: "secondary" },
-    ],
-  },
-  {
-    id: "3",
-    priority: "routine",
-    timeAgo: "3h ago",
-    message: "Agent F: Revenue projection adjusted +4.2% based on Q3 pipeline velocity. Q4 reallocation recommended.",
-    actions: [{ label: "View Analysis", variant: "primary" }],
-  },
-  {
-    id: "4",
-    priority: "high",
-    timeAgo: "5h ago",
-    message: "Agent G: New tax directive (2024-B) affects 3 active international vendor contracts. Addendums drafted.",
-    actions: [{ label: "Review Drafts", variant: "primary" }],
-  },
-];
+import { formatDistanceToNow } from "date-fns";
+import { QueryState } from "@/components/ui/QueryState";
+import { useAiActions } from "@/lib/hooks/useIntelligenceData";
+import type { ApiActionFeedItem } from "@/types/api";
 
-interface AiActionCenterProps {
-  items?: ActionItem[];
-}
+// Map the persisted run status to a badge. "failed" is the only one that
+// genuinely demands attention, so it gets the high-priority treatment.
+type Status = ApiActionFeedItem["status"];
 
-export function AiActionCenter({ items = defaultActions }: AiActionCenterProps) {
+const STATUS_BADGE: Record<Status, { label: string; tone: "error" | "neutral" | "ok" }> = {
+  failed:    { label: "Needs attention", tone: "error" },
+  pending:   { label: "Queued",          tone: "neutral" },
+  running:   { label: "In progress",     tone: "neutral" },
+  completed: { label: "Completed",       tone: "ok" },
+};
+
+const TONE_CLASS: Record<"error" | "neutral" | "ok", string> = {
+  error:   "bg-lf-error-container/50 text-lf-on-error-container",
+  neutral: "bg-lf-secondary-fixed text-lf-on-secondary-fixed",
+  ok:      "bg-[#dcfce7] text-[#166534]",
+};
+
+export function AiActionCenter() {
+  const { data, isLoading, isError, refetch } = useAiActions();
+  const items = data ?? [];
+
   return (
     <div className="bg-lf-primary-fixed/30 rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-lf-primary-fixed-dim p-6 flex flex-col">
       {/* Header */}
@@ -59,58 +37,42 @@ export function AiActionCenter({ items = defaultActions }: AiActionCenterProps) 
         </div>
         <div>
           <h3 className="text-base font-semibold text-lf-on-surface">AI Action Center</h3>
-          <p className="text-[11px] text-lf-primary font-bold tracking-widest uppercase">Agent D</p>
+          <p className="text-[11px] text-lf-primary font-bold tracking-widest uppercase">Recent agent activity</p>
         </div>
       </div>
 
       {/* Action items */}
       <div className="space-y-3 flex-1">
-        {items.map((item) => (
-          <div
-            key={item.id}
-            className="bg-lf-surface rounded-lg p-3 border border-lf-outline-variant/20 shadow-sm hover:border-lf-primary-fixed-dim transition-colors cursor-pointer"
-          >
-            <div className="flex justify-between items-start mb-2">
-              {item.priority === "high" ? (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-lf-error-container/50 text-lf-on-error-container">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-                  </svg>
-                  High Priority
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-lf-secondary-fixed text-lf-on-secondary-fixed">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-                  </svg>
-                  Routine
-                </span>
-              )}
-              <span className="text-[10px] text-lf-tertiary">{item.timeAgo}</span>
-            </div>
-            <p className="text-sm font-medium text-lf-on-surface leading-tight mb-3">{item.message}</p>
-            <div className="flex gap-2">
-              {item.actions.map((action) => (
-                <button
-                  key={action.label}
-                  className={`flex-1 py-1.5 text-[11px] rounded font-semibold transition-colors ${
-                    action.variant === "primary"
-                      ? "bg-lf-primary text-lf-on-primary hover:bg-lf-secondary"
-                      : "bg-lf-surface-variant text-lf-on-surface-variant hover:bg-lf-surface-dim"
-                  }`}
-                >
-                  {action.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
+        <QueryState
+          isLoading={isLoading}
+          isError={isError}
+          isEmpty={items.length === 0}
+          onRetry={() => refetch()}
+          loadingLabel="Loading activity…"
+          errorLabel="Couldn't load agent activity."
+          emptyLabel="No agent activity yet."
+        >
+          {items.map((item) => {
+            const badge = STATUS_BADGE[item.status];
+            return (
+              <div
+                key={item.id}
+                className="bg-lf-surface rounded-lg p-3 border border-lf-outline-variant/20 shadow-sm"
+              >
+                <div className="flex justify-between items-start mb-2">
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${TONE_CLASS[badge.tone]}`}>
+                    {badge.label}
+                  </span>
+                  <span className="text-[10px] text-lf-tertiary">
+                    {formatDistanceToNow(new Date(item.created_at), { addSuffix: true })}
+                  </span>
+                </div>
+                <p className="text-sm font-medium text-lf-on-surface leading-tight">{item.summary}</p>
+              </div>
+            );
+          })}
+        </QueryState>
       </div>
-
-      <button className="w-full mt-4 py-2 border border-lf-primary text-lf-primary rounded-lg text-xs font-semibold tracking-widest uppercase hover:bg-lf-primary-fixed transition-colors">
-        View All Actions
-      </button>
     </div>
   );
 }

@@ -10,8 +10,8 @@
 //   Row 3  — IntelligenceInsights (2-col grid)
 
 import { useState } from "react";
-import { BarChart3, Flame, CalendarClock, TrendingDown, Download } from "lucide-react";
-import { KpiCard } from "@/components/dashboard/KpiCard";
+import { Download } from "lucide-react";
+import { OverviewKpiCards } from "@/components/dashboard/overview/OverviewKpiCards";
 import { CashFlowChart } from "@/components/dashboard/command-center/CashFlowChart";
 import { ReallocationAlert } from "@/components/dashboard/alerts/ReallocationAlert";
 import { AiActionCenter } from "@/components/dashboard/command-center/AiActionCenter";
@@ -39,61 +39,7 @@ export default function OverviewPage() {
       </div>
 
       {/* ── KPI cards ────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
-        <KpiCard
-          title="Total Revenue"
-          value="KES 6.3M"
-          trend={{ value: "+23.5%", direction: "up", variant: "positive" }}
-          subtext="vs Q2 2024"
-          icon={
-            <BarChart3
-              size={64}
-              strokeWidth={1}
-              className="text-lf-primary"
-            />
-          }
-        />
-        <KpiCard
-          title="Monthly Burn Rate"
-          value="KES 3.5M"
-          trend={{ value: "+12.9%", direction: "up", variant: "negative" }}
-          subtext="vs last month"
-          icon={
-            <Flame
-              size={64}
-              strokeWidth={1}
-              className="text-lf-error"
-            />
-          }
-        />
-        <KpiCard
-          title="Cash Runway"
-          value="14 months"
-          trend={{ value: "+2 wks", direction: "up", variant: "positive" }}
-          subtext="Agent E forecast"
-          icon={
-            <CalendarClock
-              size={64}
-              strokeWidth={1}
-              className="text-lf-primary"
-            />
-          }
-        />
-        <KpiCard
-          title="Budget Variance"
-          value="−4.2%"
-          trend={{ value: "−4.2%", direction: "down", variant: "negative" }}
-          subtext="Transport over-budget"
-          urgentBadge={{ label: "Agent E Alert" }}
-          icon={
-            <TrendingDown
-              size={64}
-              strokeWidth={1}
-              className="text-lf-error"
-            />
-          }
-        />
-      </div>
+      <OverviewKpiCards />
 
       {/* ── Main grid: chart + sidebar ────────────────────────────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">

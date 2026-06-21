@@ -31,7 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    router.prefetch("/dashboard");
+    router.prefetch("/dashboard/overview");
   }, [router]);
 
   // ── Bootstrap ─────────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // them automatically, so there is nothing to store client-side.
       await authClient.login({ email, password });
       setUser(await authClient.getMe());
-      router.replace("/dashboard");
+      router.replace("/dashboard/overview");
     },
     [router]
   );

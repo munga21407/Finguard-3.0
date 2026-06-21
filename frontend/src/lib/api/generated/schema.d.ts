@@ -485,6 +485,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/intelligence/insights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Insights
+         * @description Recent read-only analysis items for the dashboard insights feed.
+         *
+         *     Cheap structured read over persisted ``/ai-insights`` runs — does NOT
+         *     re-run the orchestrator. Empty until insight orchestrations have run.
+         */
+        get: operations["list_insights_api_v1_intelligence_insights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Actions
+         * @description Recent actionable items for the dashboard action centre.
+         *
+         *     Cheap structured read over persisted ``/ai-actions`` runs — does NOT
+         *     re-run the orchestrator. Empty until action orchestrations have run.
+         */
+        get: operations["list_actions_api_v1_intelligence_actions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Notifications
+         * @description Recent agent activity for the top-bar notification bell.
+         */
+        get: operations["list_notifications_api_v1_intelligence_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Agent Telemetry
+         * @description Per-agent run statistics for the agent-status widgets.
+         */
+        get: operations["list_agent_telemetry_api_v1_intelligence_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/intelligence/receipts/scan": {
         parameters: {
             query?: never;
@@ -582,6 +668,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Active Alerts
+         * @description Active (unresolved) alerts for the alerts dashboard.
+         */
+        get: operations["list_active_alerts_api_v1_alerts_get"];
+        put?: never;
+        /**
+         * Create Alert
+         * @description Raise a new alert. The integration point for the Agent E watchdog.
+         */
+        post: operations["create_alert_api_v1_alerts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alerts/resolved": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Resolved Alerts
+         * @description Recently resolved alerts.
+         */
+        get: operations["list_resolved_alerts_api_v1_alerts_resolved_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alerts/kpis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Alert Kpis
+         * @description Summary counts for the alert KPI cards.
+         */
+        get: operations["alert_kpis_api_v1_alerts_kpis_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alerts/{alert_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Alert
+         * @description Mark an alert resolved (MANAGER+ via the intelligence-act permission).
+         */
+        post: operations["resolve_alert_api_v1_alerts__alert_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -664,6 +834,27 @@ export interface components {
              */
             token_type: string;
         };
+        /**
+         * ActionFeedItem
+         * @description One actionable item for the AiActionCenter widget.
+         */
+        ActionFeedItem: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Agent */
+            agent: string;
+            /** Summary */
+            summary: string;
+            status: components["schemas"]["AgentRunStatus"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** ActionRequest */
         ActionRequest: {
             /** Intent */
@@ -675,6 +866,115 @@ export interface components {
             /** User Id */
             user_id?: string | null;
         };
+        /**
+         * AgentRunStatus
+         * @enum {string}
+         */
+        AgentRunStatus: "pending" | "running" | "completed" | "failed";
+        /**
+         * AgentTelemetry
+         * @description Per-agent run statistics for the AgentStatus / AgentIntegrations widgets.
+         */
+        AgentTelemetry: {
+            /** Agent */
+            agent: string;
+            /** Total Runs */
+            total_runs: number;
+            /** Completed */
+            completed: number;
+            /** Failed */
+            failed: number;
+            /** Running */
+            running: number;
+            last_status: components["schemas"]["AgentRunStatus"] | null;
+            /** Last Run At */
+            last_run_at: string | null;
+        };
+        /** AlertCreate */
+        AlertCreate: {
+            type: components["schemas"]["AlertType"];
+            severity: components["schemas"]["AlertSeverity"];
+            /** Title */
+            title: string;
+            /** Body */
+            body: string;
+            /** Source Agent */
+            source_agent?: string | null;
+            /** Vc Id */
+            vc_id?: string | null;
+            /** Metadata Payload */
+            metadata_payload?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * AlertKpis
+         * @description Summary counts for the AlertKpiCards widget.
+         */
+        AlertKpis: {
+            /** Active */
+            active: number;
+            /** Critical */
+            critical: number;
+            /** Resolved Last 7D */
+            resolved_last_7d: number;
+            /** Avg Resolution Hours */
+            avg_resolution_hours: number | null;
+        };
+        /** AlertResolve */
+        AlertResolve: {
+            /** Resolution Note */
+            resolution_note?: string | null;
+        };
+        /** AlertResponse */
+        AlertResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            type: components["schemas"]["AlertType"];
+            severity: components["schemas"]["AlertSeverity"];
+            status: components["schemas"]["AlertStatus"];
+            /** Title */
+            title: string;
+            /** Body */
+            body: string;
+            /** Source Agent */
+            source_agent: string | null;
+            /** Vc Id */
+            vc_id: string | null;
+            /** Metadata Payload */
+            metadata_payload: {
+                [key: string]: unknown;
+            };
+            /** Resolved By */
+            resolved_by: string | null;
+            /** Resolved At */
+            resolved_at: string | null;
+            /** Resolution Note */
+            resolution_note: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * AlertSeverity
+         * @enum {string}
+         */
+        AlertSeverity: "critical" | "warning" | "info";
+        /**
+         * AlertStatus
+         * @enum {string}
+         */
+        AlertStatus: "active" | "resolved";
+        /**
+         * AlertType
+         * @enum {string}
+         */
+        AlertType: "duplicate_invoice" | "anomaly" | "vendor_activity" | "budget_overspend";
         /** Body_scan_receipt_api_v1_intelligence_receipts_scan_post */
         Body_scan_receipt_api_v1_intelligence_receipts_scan_post: {
             /** File */
@@ -903,6 +1203,26 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * InsightFeedItem
+         * @description One read-only analysis item for the IntelligenceInsights widget.
+         */
+        InsightFeedItem: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Agent */
+            agent: string;
+            /** Summary */
+            summary: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** InsightRequest */
         InsightRequest: {
@@ -1162,6 +1482,26 @@ export interface components {
             Body: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * NotificationItem
+         * @description One bell-feed notification for the TopNavBar, from a recent agent run.
+         */
+        NotificationItem: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Agent */
+            agent: string;
+            /** Message */
+            message: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** OrchestrationResponse */
         OrchestrationResponse: {
@@ -2331,6 +2671,119 @@ export interface operations {
             };
         };
     };
+    list_insights_api_v1_intelligence_insights_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightFeedItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_actions_api_v1_intelligence_actions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionFeedItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notifications_api_v1_intelligence_notifications_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agent_telemetry_api_v1_intelligence_agents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentTelemetry"][];
+                };
+            };
+        };
+    };
     scan_receipt_api_v1_intelligence_receipts_scan_post: {
         parameters: {
             query?: never;
@@ -2415,6 +2868,156 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_active_alerts_api_v1_alerts_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_alert_api_v1_alerts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_resolved_alerts_api_v1_alerts_resolved_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    alert_kpis_api_v1_alerts_kpis_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertKpis"];
+                };
+            };
+        };
+    };
+    resolve_alert_api_v1_alerts__alert_id__resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertResolve"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertResponse"];
                 };
             };
             /** @description Validation Error */

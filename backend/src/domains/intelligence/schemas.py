@@ -495,3 +495,46 @@ class AgentRunResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Dashboard feeds — GET /intelligence/insights and /intelligence/actions
+# ---------------------------------------------------------------------------
+# Cheap, structured reads over the persisted AgentRun log so always-on dashboard
+# widgets don't re-run the LLM orchestrator on every render. Populated when the
+# /ai-insights and /ai-actions orchestration endpoints record their runs.
+
+class InsightFeedItem(BaseModel):
+    """One read-only analysis item for the IntelligenceInsights widget."""
+    id: uuid.UUID
+    agent: str
+    summary: str
+    created_at: datetime
+
+
+class ActionFeedItem(BaseModel):
+    """One actionable item for the AiActionCenter widget."""
+    id: uuid.UUID
+    agent: str
+    summary: str
+    status: AgentRunStatus
+    created_at: datetime
+
+
+class NotificationItem(BaseModel):
+    """One bell-feed notification for the TopNavBar, from a recent agent run."""
+    id: uuid.UUID
+    agent: str
+    message: str
+    created_at: datetime
+
+
+class AgentTelemetry(BaseModel):
+    """Per-agent run statistics for the AgentStatus / AgentIntegrations widgets."""
+    agent: str
+    total_runs: int
+    completed: int
+    failed: int
+    running: int
+    last_status: AgentRunStatus | None
+    last_run_at: datetime | None

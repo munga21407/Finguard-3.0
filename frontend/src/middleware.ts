@@ -26,7 +26,7 @@ export function middleware(request: NextRequest) {
 
   // Authenticated user trying to access login/signup — redirect to dashboard
   if (sessionCookie && (pathname === "/login" || pathname === "/signup")) {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+    return NextResponse.redirect(new URL("/dashboard/overview", request.url));
   }
 
   return NextResponse.next();

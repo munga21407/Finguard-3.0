@@ -1,19 +1,22 @@
 "use client";
 
 // ─── TopNavBar ────────────────────────────────────────────────────────────────
-// Sticky header with global search, nav links, and a live notification feed.
+// Sticky header with global search, nav links, and a notification feed.
 //
-// The notification bell simulates a RabbitMQ event stream:
-//   • Three seed notifications loaded on mount.
-//   • setInterval adds a new agent event every 15 s to keep the feed "alive".
+// The notification bell:
+//   • Loads placeholder seed notifications on mount (real RabbitMQ event stream
+//     is wired in Phase 4 — no fake "live" injection in the meantime).
 //   • Clicking the bell opens a dropdown and marks all as read.
 //   • Click-outside closes the dropdown.
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Bell, X, Bot, CheckCheck, LogOut, Loader2, UserCircle } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils/cn";
 import { useAuth } from "@/lib/hooks/useAuth";
+import { useNotifications } from "@/lib/hooks/useIntelligenceData";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface AgentNotification {
@@ -24,69 +27,46 @@ export interface AgentNotification {
   read: boolean;
 }
 
-interface TopNavBarProps {
-  activeSection?: "Approvals" | "Reports" | "Audit";
-}
-
-// ── Mock event pool (rotated by the interval) ─────────────────────────────────
-const SEED_NOTIFICATIONS: Omit<AgentNotification, "id" | "read">[] = [
-  { agent: "Agent B", message: "Logged a KSh 10,000 expense (Naivas).",             timestamp: new Date(Date.now() - 2 * 60_000)  },
-  { agent: "Agent C", message: "Reconciled 3 Safaricom M-Pesa payments.",           timestamp: new Date(Date.now() - 8 * 60_000)  },
-  { agent: "Agent E", message: "Recalculated category burn rates.",                  timestamp: new Date(Date.now() - 15 * 60_000) },
-];
-
-const LIVE_POOL: { agent: string; message: string }[] = [
-  { agent: "Agent B", message: "Flagged duplicate invoice #INV-2041 from Jumia."    },
-  { agent: "Agent D", message: "NL query completed — Q3 report generated."          },
-  { agent: "Agent F", message: "Tax liability estimate updated for Q4."             },
-  { agent: "Agent G", message: "Compliance check passed for vendor contract #VC-88." },
-  { agent: "Agent E", message: "Cash runway extended by 2 weeks per forecast."      },
-  { agent: "Agent C", message: "Batch reconciliation complete — 12 transactions."   },
-];
-
-function uid() {
-  return Math.random().toString(36).slice(2, 9);
-}
-
-function seedNotifications(): AgentNotification[] {
-  return SEED_NOTIFICATIONS.map((n) => ({ ...n, id: uid(), read: false }));
-}
+// Section tabs map to their closest existing routes; active state is derived
+// from the current pathname (no caller-supplied prop needed).
+const sectionLinks = [
+  { label: "Approvals", href: "/dashboard/payables/queue" },
+  { label: "Reports", href: "/dashboard/overview" },
+  { label: "Audit", href: "/dashboard/intelligence" },
+] as const;
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export function TopNavBar({ activeSection }: TopNavBarProps) {
-  const links = ["Approvals", "Reports", "Audit"] as const;
+export function TopNavBar() {
+  const pathname = usePathname();
   const { user, logout } = useAuth();
 
-  const [notifications, setNotifications] = useState<AgentNotification[]>(seedNotifications);
+  // Live agent activity from the backend; read/dismissed are client-side UI state.
+  const { data: feed } = useNotifications();
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const poolIndexRef = useRef(0);
 
   // ── Avatar dropdown state ─────────────────────────────────────────────────
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const avatarRef = useRef<HTMLDivElement>(null);
 
+  const notifications = useMemo<AgentNotification[]>(
+    () =>
+      (feed ?? [])
+        .filter((n) => !dismissedIds.has(n.id))
+        .map((n) => ({
+          id: n.id,
+          agent: n.agent,
+          message: n.message,
+          timestamp: new Date(n.created_at),
+          read: readIds.has(n.id),
+        })),
+    [feed, dismissedIds, readIds],
+  );
+
   const unreadCount = notifications.filter((n) => !n.read).length;
-
-  // ── 15-second polling simulation ──────────────────────────────────────────
-  useEffect(() => {
-    const id = setInterval(() => {
-      const idx = poolIndexRef.current % LIVE_POOL.length;
-      poolIndexRef.current += 1;
-      const entry = LIVE_POOL[idx];
-      const next: AgentNotification = {
-        id: uid(),
-        agent: entry.agent,
-        message: entry.message,
-        timestamp: new Date(),
-        read: false,
-      };
-      setNotifications((prev) => [next, ...prev].slice(0, 20));
-    }, 15_000);
-
-    return () => clearInterval(id);
-  }, []);
 
   // ── Click-outside handler ─────────────────────────────────────────────────
   const handleOutsideClick = useCallback((e: MouseEvent) => {
@@ -102,18 +82,22 @@ export function TopNavBar({ activeSection }: TopNavBarProps) {
 
   function toggleBell() {
     if (!open) {
-      // Mark all read when opening
-      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+      // Mark all currently-visible notifications read when opening.
+      setReadIds(new Set(notifications.map((n) => n.id)));
     }
     setOpen((v) => !v);
   }
 
   function dismissNotification(id: string) {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    setDismissedIds((prev) => new Set(prev).add(id));
   }
 
   function clearAll() {
-    setNotifications([]);
+    setDismissedIds((prev) => {
+      const next = new Set(prev);
+      notifications.forEach((n) => next.add(n.id));
+      return next;
+    });
     setOpen(false);
   }
 
@@ -163,20 +147,23 @@ export function TopNavBar({ activeSection }: TopNavBarProps) {
 
       {/* ── Nav links ───────────────────────────────────────────────────── */}
       <nav className="flex gap-6">
-        {links.map((link) => (
-          <a
-            key={link}
-            href="#"
-            className={cn(
-              "text-xs font-semibold tracking-widest uppercase transition-all",
-              activeSection === link
-                ? "text-lf-primary border-b-2 border-lf-primary pb-0.5"
-                : "text-lf-on-surface-variant hover:text-lf-primary"
-            )}
-          >
-            {link}
-          </a>
-        ))}
+        {sectionLinks.map(({ label, href }) => {
+          const isActive = pathname === href || pathname.startsWith(href + "/");
+          return (
+            <Link
+              key={label}
+              href={href}
+              className={cn(
+                "text-xs font-semibold tracking-widest uppercase transition-all",
+                isActive
+                  ? "text-lf-primary border-b-2 border-lf-primary pb-0.5"
+                  : "text-lf-on-surface-variant hover:text-lf-primary"
+              )}
+            >
+              {label}
+            </Link>
+          );
+        })}
       </nav>
 
       {/* ── Actions ─────────────────────────────────────────────────────── */}

@@ -1,39 +1,19 @@
-const alerts = [
-  {
-    type: "critical" as const,
-    title: "Marketing Overspend Alert",
-    body: "Marketing is projected to exceed budget by $120k. 4 major campaigns pending approval with combined cost of $95k.",
-    action: "Review Marketing Budget",
-  },
-  {
-    type: "opportunity" as const,
-    title: "R&D Reallocation Opportunity",
-    body: "R&D has $2.75M unallocated with 114 days remaining. Consider reallocating to Sales pipeline or reserving for Q1 2025.",
-    action: "View Reallocation Proposal",
-  },
-  {
-    type: "stable" as const,
-    title: "Operations & Sales Stable",
-    body: "Both departments tracking within 3% of annual forecast. No intervention required. Compliance status: all clear.",
-    action: "View Full Report",
-  },
-];
+"use client";
 
-type AlertType = "critical" | "opportunity" | "stable";
+import { QueryState } from "@/components/ui/QueryState";
+import { useAlerts } from "@/lib/hooks/useAlerts";
+import type { ApiAlertSeverity } from "@/types/api";
 
-const styles: Record<AlertType, { border: string; bg: string; badge: string; icon: string }> = {
-  critical:    { border: "border-lf-error/30",           bg: "bg-lf-error-container/10",     badge: "bg-lf-error-container text-lf-on-error-container",          icon: "⚠" },
-  opportunity: { border: "border-lf-secondary/30",       bg: "bg-lf-secondary-fixed/10",     badge: "bg-lf-secondary-fixed text-lf-on-secondary-fixed",          icon: "💡" },
-  stable:      { border: "border-lf-outline-variant/30", bg: "bg-lf-surface-container-low",  badge: "bg-[#dcfce7] text-[#166534]",                               icon: "✓" },
-};
-
-const badgeLabels: Record<AlertType, string> = {
-  critical: "Critical",
-  opportunity: "Opportunity",
-  stable: "Stable",
+const styles: Record<ApiAlertSeverity, { border: string; bg: string; badge: string; label: string }> = {
+  critical: { border: "border-lf-error/30",           bg: "bg-lf-error-container/10",    badge: "bg-lf-error-container text-lf-on-error-container", label: "Critical" },
+  warning:  { border: "border-lf-secondary/30",       bg: "bg-lf-secondary-fixed/10",    badge: "bg-lf-secondary-fixed text-lf-on-secondary-fixed", label: "Warning" },
+  info:     { border: "border-lf-outline-variant/30", bg: "bg-lf-surface-container-low", badge: "bg-[#dcfce7] text-[#166534]",                      label: "Info" },
 };
 
 export function AiWatchdogPanel() {
+  const { data, isLoading, isError, refetch } = useAlerts();
+  const alerts = data ?? [];
+
   return (
     <div className="bg-lf-surface-container-lowest rounded-xl border border-lf-outline-variant/10 shadow-[0_4px_20px_rgba(0,0,0,0.03)] p-6 flex flex-col gap-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -58,25 +38,32 @@ export function AiWatchdogPanel() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {alerts.map((alert) => {
-          const s = styles[alert.type];
-          return (
-            <div key={alert.title} className={`rounded-xl p-4 border ${s.border} ${s.bg} flex flex-col gap-3`}>
-              <div className="flex items-start justify-between gap-2">
-                <h4 className="text-sm font-bold text-lf-on-surface leading-tight">{alert.title}</h4>
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${s.badge}`}>
-                  {badgeLabels[alert.type]}
-                </span>
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        isEmpty={alerts.length === 0}
+        onRetry={() => refetch()}
+        loadingLabel="Loading watchdog alerts…"
+        errorLabel="Couldn't load watchdog alerts."
+        emptyLabel="No active alerts. Agent E hasn't flagged anything."
+      >
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {alerts.map((alert) => {
+            const s = styles[alert.severity];
+            return (
+              <div key={alert.id} className={`rounded-xl p-4 border ${s.border} ${s.bg} flex flex-col gap-3`}>
+                <div className="flex items-start justify-between gap-2">
+                  <h4 className="text-sm font-bold text-lf-on-surface leading-tight">{alert.title}</h4>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${s.badge}`}>
+                    {s.label}
+                  </span>
+                </div>
+                <p className="text-xs text-lf-on-surface-variant leading-relaxed flex-1">{alert.body}</p>
               </div>
-              <p className="text-xs text-lf-on-surface-variant leading-relaxed flex-1">{alert.body}</p>
-              <button className="text-xs font-semibold text-lf-primary hover:underline text-left">
-                {alert.action} →
-              </button>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </QueryState>
     </div>
   );
 }

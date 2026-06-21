@@ -1,6 +1,12 @@
+"use client";
+
 import Link from "next/link";
+import { useAlerts } from "@/lib/hooks/useAlerts";
 
 export function AgentIntegrations() {
+  const { data: alerts } = useAlerts();
+  const activeCount = alerts?.length ?? 0;
+
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 h-full">
       {/* Agent B: Receipt Scanner */}
@@ -19,15 +25,10 @@ export function AgentIntegrations() {
               <span className="text-xs font-semibold text-lf-on-surface-variant">Receipt Scanner</span>
             </div>
           </div>
-          <div className="bg-lf-surface-bright rounded-lg p-3 flex flex-col gap-1 border border-lf-outline-variant/30">
-            <div className="flex justify-between text-sm">
-              <span className="text-lf-on-surface-variant">Processing Queue</span>
-              <span className="font-bold text-lf-primary">32 Pending</span>
-            </div>
-            <div className="w-full bg-lf-surface-variant h-1 rounded-full mt-1">
-              <div className="bg-lf-secondary h-full rounded-full w-1/3" />
-            </div>
-            <span className="text-[11px] text-lf-tertiary mt-1">Batch #842 in progress…</span>
+          <div className="bg-lf-surface-bright rounded-lg p-3 border border-lf-outline-variant/30">
+            <p className="text-sm text-lf-on-surface-variant">
+              Scan receipts to OCR and log expenses automatically.
+            </p>
           </div>
         </div>
         <Link href="/dashboard/payables/queue" className="mt-4 w-full text-center text-lf-primary text-xs font-semibold tracking-widest uppercase hover:bg-lf-primary-fixed/20 py-2 rounded-lg transition-colors block">
@@ -57,8 +58,12 @@ export function AgentIntegrations() {
               <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
             </svg>
             <div>
-              <span className="text-sm font-bold text-lf-on-surface">2 Anomalies Detected</span>
-              <span className="block text-xs text-lf-on-surface-variant mt-1">Potential duplicate invoices found in recent batch.</span>
+              <span className="text-sm font-bold text-lf-on-surface">
+                {activeCount} Active Alert{activeCount === 1 ? "" : "s"}
+              </span>
+              <span className="block text-xs text-lf-on-surface-variant mt-1">
+                {activeCount > 0 ? "Review flagged anomalies." : "No anomalies flagged."}
+              </span>
             </div>
           </div>
         </div>

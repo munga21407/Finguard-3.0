@@ -10,6 +10,12 @@
 
 import httpClient from "@/lib/api/http-client";
 import { ENDPOINTS } from "@/lib/api/endpoints";
+import type {
+  ApiActionFeedItem,
+  ApiAgentTelemetry,
+  ApiInsightFeedItem,
+  ApiNotificationItem,
+} from "@/types/api";
 
 // ── Generative UI contract ────────────────────────────────────────────────────
 
@@ -199,6 +205,43 @@ export async function checkConversationStatus(
 ): Promise<ConversationStatusResponse> {
   const { data } = await httpClient.get<ConversationStatusResponse>(
     ENDPOINTS.INTELLIGENCE.CONVERSATION_STATUS(sessionId)
+  );
+  return data;
+}
+
+// ── Dashboard feeds ─────────────────────────────────────────────────────────────
+// Cheap structured reads over persisted orchestration runs. Unlike the POST
+// /ai-insights & /ai-actions endpoints these do NOT run the LLM — they just read
+// the AgentRun log, so dashboard widgets can poll them on mount.
+
+/** Recent read-only analysis items for the IntelligenceInsights widget. */
+export async function listInsights(): Promise<ApiInsightFeedItem[]> {
+  const { data } = await httpClient.get<ApiInsightFeedItem[]>(
+    ENDPOINTS.INTELLIGENCE.INSIGHTS_FEED
+  );
+  return data;
+}
+
+/** Recent actionable items for the AiActionCenter widget. */
+export async function listActions(): Promise<ApiActionFeedItem[]> {
+  const { data } = await httpClient.get<ApiActionFeedItem[]>(
+    ENDPOINTS.INTELLIGENCE.ACTIONS_FEED
+  );
+  return data;
+}
+
+/** Recent agent activity for the top-bar notification bell. */
+export async function listNotifications(): Promise<ApiNotificationItem[]> {
+  const { data } = await httpClient.get<ApiNotificationItem[]>(
+    ENDPOINTS.INTELLIGENCE.NOTIFICATIONS
+  );
+  return data;
+}
+
+/** Per-agent run statistics for the agent-status widgets. */
+export async function listAgentTelemetry(): Promise<ApiAgentTelemetry[]> {
+  const { data } = await httpClient.get<ApiAgentTelemetry[]>(
+    ENDPOINTS.INTELLIGENCE.AGENTS
   );
   return data;
 }

@@ -105,6 +105,19 @@ export type ApiReceiptExtraction     = S["ReceiptExtraction"];
 export type ApiConversationRequest   = S["ConversationRequest"];
 export type ApiConversationResponse  = S["ConversationResponse"];
 export type ApiTaskStatus            = S["TaskStatusResponse"];
+// Dashboard feeds — cheap structured reads over persisted orchestration runs.
+export type ApiInsightFeedItem       = S["InsightFeedItem"];
+export type ApiActionFeedItem        = S["ActionFeedItem"];
+export type ApiNotificationItem      = S["NotificationItem"];
+export type ApiAgentTelemetry        = S["AgentTelemetry"];
+
+// ── Alerts ──────────────────────────────────────────────────────────────────────
+export type ApiAlert         = S["AlertResponse"];
+export type ApiAlertCreate   = S["AlertCreate"];
+export type ApiAlertKpis     = S["AlertKpis"];
+export type ApiAlertType     = S["AlertType"];
+export type ApiAlertSeverity = S["AlertSeverity"];
+export type ApiAlertStatus   = S["AlertStatus"];
 
 // NOTE: Agent structured-output models (ExtractedInvoice, WatchdogAnalysis,
 // CashFlowForecast, AgentF/G outputs, AgentRun*, etc.) are intentionally NOT

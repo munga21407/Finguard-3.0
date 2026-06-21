@@ -1,44 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { formatKESCompact } from "@/lib/utils/format";
+import { QueryState } from "@/components/ui/QueryState";
+import { bucketExpensesByMonth, useExpenses } from "@/lib/hooks/useFinanceData";
 
 const periods = ["Last 6 Months", "Last 12 Months"] as const;
 type Period = (typeof periods)[number];
 
-const data: Record<Period, { label: string; value: number }[]> = {
-  "Last 6 Months": [
-    { label: "Apr", value: 920000 },
-    { label: "May", value: 1050000 },
-    { label: "Jun", value: 980000 },
-    { label: "Jul", value: 1120000 },
-    { label: "Aug", value: 1180000 },
-    { label: "Sep", value: 1240000 },
-  ],
-  "Last 12 Months": [
-    { label: "Oct", value: 640000 },
-    { label: "Nov", value: 710000 },
-    { label: "Dec", value: 850000 },
-    { label: "Jan", value: 780000 },
-    { label: "Feb", value: 890000 },
-    { label: "Mar", value: 830000 },
-    { label: "Apr", value: 920000 },
-    { label: "May", value: 1050000 },
-    { label: "Jun", value: 980000 },
-    { label: "Jul", value: 1120000 },
-    { label: "Aug", value: 1180000 },
-    { label: "Sep", value: 1240000 },
-  ],
-};
-
-function formatAmount(n: number) {
-  if (n >= 1000000) return `$${(n / 1000000).toFixed(1)}M`;
-  return `$${(n / 1000).toFixed(0)}k`;
-}
-
 export function BudgetSpendChart() {
   const [period, setPeriod] = useState<Period>("Last 6 Months");
-  const bars = data[period];
-  const max = Math.max(...bars.map((b) => b.value));
+  const { data: expenses, isLoading, isError } = useExpenses();
+
+  const months = period === "Last 6 Months" ? 6 : 12;
+  const bars = useMemo(
+    () => bucketExpensesByMonth(expenses ?? [], months),
+    [expenses, months],
+  );
+  const max = Math.max(1, ...bars.map((b) => b.value));
 
   return (
     <div className="bg-lf-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 p-6 flex flex-col">
@@ -64,9 +43,17 @@ export function BudgetSpendChart() {
         </div>
       </div>
 
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        isEmpty={bars.every((b) => b.value === 0)}
+        loadingLabel="Loading spend…"
+        errorLabel="Couldn't load spend data."
+        emptyLabel="No spend recorded in this period."
+      >
       <div className="relative flex items-end gap-2 pb-6" style={{ minHeight: "180px" }}>
-        <div className="absolute left-0 top-0 text-[10px] text-lf-tertiary">{formatAmount(max)}</div>
-        <div className="absolute left-0 bottom-6 text-[10px] text-lf-tertiary">$0</div>
+        <div className="absolute left-0 top-0 text-[10px] text-lf-tertiary">{formatKESCompact(max)}</div>
+        <div className="absolute left-0 bottom-6 text-[10px] text-lf-tertiary">KES 0</div>
         <div className="w-full flex items-end gap-1.5 pl-8 h-36">
           {bars.map(({ label, value }) => (
             <div key={label} className="flex-1 flex flex-col items-center gap-1 group">
@@ -76,7 +63,7 @@ export function BudgetSpendChart() {
                   style={{ height: `${(value / max) * 100}%` }}
                 >
                   <div className="hidden group-hover:block absolute -top-7 left-1/2 -translate-x-1/2 bg-lf-inverse-surface text-lf-inverse-on-surface text-[10px] px-2 py-0.5 rounded whitespace-nowrap z-10">
-                    {formatAmount(value)}
+                    {formatKESCompact(value)}
                   </div>
                 </div>
               </div>
@@ -85,6 +72,7 @@ export function BudgetSpendChart() {
           ))}
         </div>
       </div>
+      </QueryState>
     </div>
   );
 }

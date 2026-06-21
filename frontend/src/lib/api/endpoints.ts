@@ -36,10 +36,23 @@ export const ENDPOINTS = {
   INTELLIGENCE: {
     INSIGHTS: "/api/v1/intelligence/ai-insights",
     ACTIONS: "/api/v1/intelligence/ai-actions",
+    // Cheap GET feeds over persisted orchestration runs (dashboard widgets).
+    INSIGHTS_FEED: "/api/v1/intelligence/insights",
+    ACTIONS_FEED: "/api/v1/intelligence/actions",
+    NOTIFICATIONS: "/api/v1/intelligence/notifications",
+    AGENTS: "/api/v1/intelligence/agents",
     INTENT: "/api/v1/intelligence/intent",
     RECEIPT_SCAN: "/api/v1/intelligence/receipts/scan",
     CONVERSATION: "/api/v1/intelligence/conversation",
     CONVERSATION_STATUS: (sessionId: string) =>
       `/api/v1/intelligence/conversation/${sessionId}/status`,
+  },
+
+  // Alerts (agent-raised finance/compliance alerts)
+  ALERTS: {
+    ROOT: "/api/v1/alerts",
+    RESOLVED: "/api/v1/alerts/resolved",
+    KPIS: "/api/v1/alerts/kpis",
+    RESOLVE: (id: string) => `/api/v1/alerts/${id}/resolve`,
   },
 } as const;
