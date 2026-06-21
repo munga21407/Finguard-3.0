@@ -369,7 +369,12 @@ class ReconciliationScoringResult(BaseModel):
 
 
 class ReconciliationMatch(BaseModel):
-    """A confirmed match between an M-Pesa transaction and an invoice."""
+    """A confirmed match between an incoming settlement and an invoice.
+
+    ``source`` identifies the settlement rail the ``transaction_id`` refers to —
+    an M-Pesa transaction or a bank statement line — so the persistence step can
+    record the Payment with the right vault and provenance FK.
+    """
 
     transaction_id: str
     invoice_id: str
@@ -377,6 +382,7 @@ class ReconciliationMatch(BaseModel):
     match_score: float = Field(..., ge=0.0, le=1.0)
     amount: float = Field(..., ge=0.0)
     new_invoice_status: str  # "paid" | "partially_paid"
+    source: Literal["mpesa", "bank"] = "mpesa"
 
 
 class ReconciliationReport(BaseModel):

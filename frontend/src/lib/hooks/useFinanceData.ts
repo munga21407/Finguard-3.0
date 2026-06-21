@@ -4,8 +4,11 @@
 // mutations elsewhere (e.g. createInvoice) can invalidate the right caches.
 
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  createVaultTransfer,
+  getReconciliationFlow,
+  getVaultBalances,
   listBudgets,
   listCustomers,
   listExpenses,
@@ -16,6 +19,8 @@ import type {
   ApiCustomer,
   ApiExpense,
   ApiInvoice,
+  ApiReconciliationFlow,
+  ApiVaultBalances,
 } from "@/types/api";
 
 export const financeKeys = {
@@ -23,6 +28,8 @@ export const financeKeys = {
   expenses: ["finance", "expenses"] as const,
   budgets: ["finance", "budgets"] as const,
   customers: ["crm", "customers"] as const,
+  reconciliationFlow: ["finance", "reconciliation-flow"] as const,
+  vaultBalances: ["finance", "vault-balances"] as const,
 };
 
 export function useInvoices() {
@@ -50,6 +57,36 @@ export function useCustomers() {
   return useQuery<ApiCustomer[]>({
     queryKey: financeKeys.customers,
     queryFn: listCustomers,
+  });
+}
+
+export function useReconciliationFlow() {
+  return useQuery<ApiReconciliationFlow>({
+    queryKey: financeKeys.reconciliationFlow,
+    queryFn: getReconciliationFlow,
+  });
+}
+
+export function useVaultBalances() {
+  return useQuery<ApiVaultBalances>({
+    queryKey: financeKeys.vaultBalances,
+    queryFn: getVaultBalances,
+  });
+}
+
+/**
+ * Record an internal vault-to-vault transfer. On success, refresh balances (and
+ * expenses + the reconciliation flow, which the booked fee / rails depend on).
+ */
+export function useCreateVaultTransfer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: createVaultTransfer,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: financeKeys.vaultBalances });
+      queryClient.invalidateQueries({ queryKey: financeKeys.expenses });
+      queryClient.invalidateQueries({ queryKey: financeKeys.reconciliationFlow });
+    },
   });
 }
 

@@ -39,6 +39,10 @@ celery_app.conf.update(
             "task": "batch.run_batch_reconciliation",
             "schedule": 900.0,  # every 15 minutes
         },
+        "run-batch-bank-reconciliation": {
+            "task": "batch.run_batch_bank_reconciliation",
+            "schedule": 900.0,  # every 15 minutes — matches the M-Pesa cadence
+        },
         "dispatch-monthly-reports": {
             "task": "reporting.dispatch_monthly_reports",
             "schedule": crontab(hour=0, minute=0, day_of_month="1"),

@@ -277,16 +277,18 @@ async def _publish_reconciliation_event(
     matched_fuzzy: int,
     unmatched: int,
     run_at: str,
+    routing_key: str = "finance.reconciliation.completed",
 ) -> None:
     """
-    Publish finance.reconciliation.completed to finguard.events.
+    Publish a reconciliation-completed domain event to finguard.events.
 
-    Opens a fresh aio-pika connection per call (same pattern as
-    _publish_classified_event) so the Celery worker process does not depend
-    on the FastAPI lifespan connection singleton.
+    ``routing_key`` (and the mirrored ``event_name``) distinguishes the M-Pesa
+    sweep from the bank-statement sweep.  Opens a fresh aio-pika connection per
+    call (same pattern as _publish_classified_event) so the Celery worker process
+    does not depend on the FastAPI lifespan connection singleton.
     """
     payload = {
-        "event_name": "finance.reconciliation.completed",
+        "event_name": routing_key,
         "emitted_at": datetime.now(UTC).isoformat(),
         "payload": {
             "total_transactions": total,
@@ -308,17 +310,17 @@ async def _publish_reconciliation_event(
                 content_type="application/json",
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
             )
-            await exchange.publish(
-                message, routing_key="finance.reconciliation.completed"
-            )
+            await exchange.publish(message, routing_key=routing_key)
             logger.info(
-                "Published finance.reconciliation.completed event",
+                "Published reconciliation event",
+                routing_key=routing_key,
                 total=total,
                 matched=matched_exact + matched_fuzzy,
             )
     except Exception as exc:
         logger.warning(
             "Failed to publish reconciliation event",
+            routing_key=routing_key,
             error=str(exc),
             total=total,
         )
@@ -362,6 +364,59 @@ async def _run_batch_reconciliation_async() -> dict[str, Any]:
 
     logger.info(
         "Batch reconciliation completed",
+        total=report.total_transactions,
+        exact=report.matched_exact,
+        fuzzy=report.matched_fuzzy,
+        unmatched=report.unmatched,
+        artifact_id=artifact_id,
+    )
+    return {
+        "status": "ok",
+        "total": report.total_transactions,
+        "matched_exact": report.matched_exact,
+        "matched_fuzzy": report.matched_fuzzy,
+        "unmatched": report.unmatched,
+        "run_at": report.run_at,
+        "hub_artifact_id": artifact_id,
+    }
+
+
+# ── Core async bank-reconciliation pipeline ───────────────────────────────────
+
+async def _run_batch_bank_reconciliation_async() -> dict[str, Any]:
+    """
+    Bank-statement reconciliation pipeline (bank_statement_lines → invoices).
+
+    Mirrors ``_run_batch_reconciliation_async`` but delegates to Agent C's
+    ``run_bank_reconciliation`` and publishes finance.bank_reconciliation.completed.
+    """
+    await init_mongo()
+
+    from src.domains.intelligence.agents.c_reconciler import (  # noqa: PLC0415
+        run_bank_reconciliation,
+    )
+
+    async with AsyncSessionLocal() as session:
+        report = await run_bank_reconciliation(session)
+
+    if report.total_transactions == 0:
+        return {"status": "no_work", "matched": 0, "unmatched": 0}
+
+    await _publish_reconciliation_event(
+        total=report.total_transactions,
+        matched_exact=report.matched_exact,
+        matched_fuzzy=report.matched_fuzzy,
+        unmatched=report.unmatched,
+        run_at=report.run_at,
+        routing_key="finance.bank_reconciliation.completed",
+    )
+
+    artifact_id = await _write_to_hub({
+        "bank_reconciliation_report": report.model_dump(),
+    })
+
+    logger.info(
+        "Batch bank reconciliation completed",
         total=report.total_transactions,
         exact=report.matched_exact,
         fuzzy=report.matched_fuzzy,
@@ -474,5 +529,27 @@ def run_batch_reconciliation(self: Any) -> dict[str, Any]:
     """
     try:
         return asyncio.run(_run_batch_reconciliation_async())
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    bind=True,
+    name="batch.run_batch_bank_reconciliation",
+    queue="batch_processing",
+    max_retries=3,
+    default_retry_delay=120,
+)
+def run_batch_bank_reconciliation(self: Any) -> dict[str, Any]:
+    """
+    Sweep unreconciled bank statement lines, match them to open invoices via
+    Agent C's two-pass algorithm (recording Payment(vault=BANK) per match), and
+    publish a finance.bank_reconciliation.completed domain event.
+
+    Idempotent: FOR UPDATE SKIP LOCKED inside Agent C ensures concurrent workers
+    each process a disjoint batch — no bank line is matched twice.
+    """
+    try:
+        return asyncio.run(_run_batch_bank_reconciliation_async())
     except Exception as exc:
         raise self.retry(exc=exc) from exc

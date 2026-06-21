@@ -93,6 +93,18 @@ export type ApiPayment           = S["PaymentResponse"];
 export type ApiPaymentCreate     = S["PaymentCreate"];
 export type ApiTransactionType   = S["TransactionType"];
 export type ApiVaultType         = S["VaultType"];
+// Invoice-lifecycle → settlement-rail Sankey for the Overview dashboard.
+export type ApiReconciliationFlow = S["ReconciliationFlowResponse"];
+export type ApiSankeyNode         = S["SankeyNode"];
+export type ApiSankeyLink         = S["SankeyLink"];
+// Bank statement reconciliation (Agent C source).
+export type ApiBankStatementImport = S["BankStatementLineImport"];
+export type ApiBankStatementLine   = S["BankStatementLineResponse"];
+// Treasury — per-vault balances + internal transfers.
+export type ApiVaultTransfer       = S["VaultTransferResponse"];
+export type ApiVaultTransferCreate = S["VaultTransferCreate"];
+export type ApiVaultBalance        = S["VaultBalance"];
+export type ApiVaultBalances       = S["VaultBalancesResponse"];
 
 // ── Intelligence ──────────────────────────────────────────────────────────────
 export type ApiInsightRequest        = S["InsightRequest"];

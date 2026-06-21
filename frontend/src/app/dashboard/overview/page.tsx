@@ -5,21 +5,19 @@
 //
 // Layout:
 //   Row 1  — 4 KPI cards (Revenue, Burn Rate, Runway, Budget Variance)
-//   Row 2  — CashFlowChart (col-span-8)  +  sidebar (col-span-4)
-//              Sidebar: ReallocationAlert (self-dismissing) + AiActionCenter
-//   Row 3  — IntelligenceInsights (2-col grid)
+//   Row 2  — VaultBalances (per-vault treasury balances + move money)
+//   Row 3  — CashFlowChart (full width)
+//   Row 4  — InvoiceReconciliationSankey (billed → status → settlement rail)
+//   Row 5  — IntelligenceInsights (2-col grid)
 
-import { useState } from "react";
 import { Download } from "lucide-react";
 import { OverviewKpiCards } from "@/components/dashboard/overview/OverviewKpiCards";
+import { VaultBalances } from "@/components/dashboard/overview/VaultBalances";
 import { CashFlowChart } from "@/components/dashboard/command-center/CashFlowChart";
-import { ReallocationAlert } from "@/components/dashboard/alerts/ReallocationAlert";
-import { AiActionCenter } from "@/components/dashboard/command-center/AiActionCenter";
+import { InvoiceReconciliationSankey } from "@/components/dashboard/overview/InvoiceReconciliationSankey";
 import { IntelligenceInsights } from "@/components/dashboard/command-center/IntelligenceInsights";
 
 export default function OverviewPage() {
-  const [showAlert, setShowAlert] = useState(true);
-
   return (
     <div className="max-w-[1600px] mx-auto flex flex-col gap-6">
       {/* ── Page header ──────────────────────────────────────────────────── */}
@@ -41,27 +39,14 @@ export default function OverviewPage() {
       {/* ── KPI cards ────────────────────────────────────────────────────── */}
       <OverviewKpiCards />
 
-      {/* ── Main grid: chart + sidebar ────────────────────────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
-        {/* Cash flow chart — wide column */}
-        <div className="md:col-span-8">
-          <CashFlowChart />
-        </div>
+      {/* ── Treasury: per-vault balances + move money ─────────────────────── */}
+      <VaultBalances />
 
-        {/* Sidebar — alert + action center */}
-        <div className="md:col-span-4 flex flex-col gap-4">
-          {showAlert && (
-            <ReallocationAlert
-              deficitCategory="Transport"
-              deficitAmount={15_000}
-              surplusCategory="Marketing"
-              surplusAmount={20_000}
-              onDismiss={() => setShowAlert(false)}
-            />
-          )}
-          <AiActionCenter />
-        </div>
-      </div>
+      {/* ── Cash flow chart — full width ──────────────────────────────────── */}
+      <CashFlowChart />
+
+      {/* ── Invoice lifecycle & reconciliation (Sankey) ───────────────────── */}
+      <InvoiceReconciliationSankey />
 
       {/* ── Intelligence insights ──────────────────────────────────────── */}
       <IntelligenceInsights />
