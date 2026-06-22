@@ -36,11 +36,13 @@ const areas: OpsArea[] = [
     status: "live",
   },
   {
-    title: "Audit Trail",
+    title: "Activity Log",
     description:
-      "Append-only invoice event log and signed agent credentials (trust_log). Surfacing UI is pending.",
+      "Append-only audit trail of who-did-what — user and agent actions across the platform. Managers and above.",
     icon: <ShieldCheck size={18} />,
-    status: "pending",
+    href: "/dashboard/operations/logs",
+    cta: "View activity log",
+    status: "live",
   },
 ];
 

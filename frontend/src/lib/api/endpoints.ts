@@ -64,4 +64,11 @@ export const ENDPOINTS = {
     KPIS: "/api/v1/alerts/kpis",
     RESOLVE: (id: string) => `/api/v1/alerts/${id}/resolve`,
   },
+
+  // Audit (append-only system-activity trail; managers+)
+  AUDIT: {
+    ROOT: "/api/v1/audit",
+    KPIS: "/api/v1/audit/kpis",
+    ENTRY: (id: string) => `/api/v1/audit/${id}`,
+  },
 } as const;

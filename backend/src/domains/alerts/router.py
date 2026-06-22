@@ -12,6 +12,8 @@ from src.domains.alerts.schemas import (
     AlertResponse,
 )
 from src.domains.alerts.service import AlertService
+from src.domains.audit.models import AuditAction, AuditActorType
+from src.domains.audit.service import AuditService
 from src.domains.identity.dependencies import (
     RequireIntelligenceAct,
     RequireIntelligenceRead,
@@ -25,10 +27,23 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 
 @router.post("", response_model=AlertResponse, status_code=201)
 async def create_alert(
-    data: AlertCreate, db: DBSession, _: RequireIntelligenceAct
+    data: AlertCreate, db: DBSession, current_user: RequireIntelligenceAct
 ) -> AlertResponse:
     """Raise a new alert. The integration point for the Agent E watchdog."""
     alert = await AlertService(db).create_alert(data)
+    await AuditService(db).record_safe(
+        action=AuditAction.ALERT_CREATED,
+        actor_type=AuditActorType.USER,
+        actor_id=current_user.id,
+        actor_label=current_user.email,
+        resource_type="alert",
+        resource_id=alert.id,
+        metadata={
+            "type": alert.type.value,
+            "severity": alert.severity.value,
+            "source_agent": alert.source_agent,
+        },
+    )
     return AlertResponse.model_validate(alert)
 
 
@@ -70,5 +85,14 @@ async def resolve_alert(
     """Mark an alert resolved (MANAGER+ via the intelligence-act permission)."""
     alert = await AlertService(db).resolve_alert(
         alert_id, current_user.id, data.resolution_note
+    )
+    await AuditService(db).record_safe(
+        action=AuditAction.ALERT_RESOLVED,
+        actor_type=AuditActorType.USER,
+        actor_id=current_user.id,
+        actor_label=current_user.email,
+        resource_type="alert",
+        resource_id=alert.id,
+        metadata={"resolution_note": data.resolution_note},
     )
     return AlertResponse.model_validate(alert)

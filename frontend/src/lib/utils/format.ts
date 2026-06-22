@@ -40,6 +40,21 @@ export function formatDate(iso: string | null | undefined): string {
   });
 }
 
+/** Format an ISO datetime as "Oct 24, 2023, 14:05" (null-safe → "—"). */
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
 /** Clamp a utilisation percentage to a 0–100 integer. */
 export function utilisationPct(spent: string | number, allocated: string | number): number {
   const s = typeof spent === "string" ? Number(spent) : spent;

@@ -18,7 +18,9 @@ from src.core.config import settings
 from src.core.csrf import CSRFMiddleware
 from src.core.exceptions import register_exception_handlers
 from src.core.logging import configure_logging
+from src.core.request_context import RequestContextMiddleware
 from src.domains.alerts.router import router as alerts_router
+from src.domains.audit.router import router as audit_router
 from src.domains.crm.router import router as crm_router
 from src.domains.finance.router import router as finance_router
 from src.domains.identity.router import limiter
@@ -117,6 +119,11 @@ app.add_middleware(
 # through untouched and cross-origin error responses still carry CORS headers.
 app.add_middleware(CSRFMiddleware)
 
+# Stamp every request with an id + client IP (and bind the id into structlog) so
+# the audit trail and operational logs share a correlatable request_id. Added
+# last so it runs outermost — context is set before any other layer needs it.
+app.add_middleware(RequestContextMiddleware)
+
 Instrumentator(
     should_group_status_codes=True,
     should_ignore_untemplated=True,
@@ -135,6 +142,7 @@ app.include_router(crm_router, prefix="/api/v1/crm", tags=["crm"])
 app.include_router(finance_router, prefix="/api/v1/finance", tags=["finance"])
 app.include_router(intelligence_router, prefix="/api/v1/intelligence", tags=["intelligence"])
 app.include_router(alerts_router, prefix="/api/v1/alerts", tags=["alerts"])
+app.include_router(audit_router, prefix="/api/v1/audit", tags=["audit"])
 
 
 @app.get("/health")

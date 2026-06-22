@@ -34,6 +34,10 @@ class Permission(enum.StrEnum):
     INTELLIGENCE_READ = "intelligence:read"      # read-only insights / cached reads
     INTELLIGENCE_ACT = "intelligence:act"        # state-changing agent actions
     USER_MANAGE = "user:manage"                  # verify users, change roles
+    # Reading the audit trail exposes cross-domain who-did-what (including other
+    # users' actions and source IPs) — an oversight capability, so it is held by
+    # managers+ rather than every operator.
+    AUDIT_READ = "audit:read"
 
 
 _READ_ONLY: frozenset[Permission] = frozenset(
@@ -45,8 +49,11 @@ _OPERATOR: frozenset[Permission] = _READ_ONLY | frozenset(
 )
 
 # Manager tier adds reconciliation authority — separation of duties from the
-# Accountant, who can record invoices/payments but cannot import settlements.
-_MANAGER: frozenset[Permission] = _OPERATOR | frozenset({Permission.FINANCE_RECONCILE})
+# Accountant, who can record invoices/payments but cannot import settlements —
+# plus read access to the audit trail (oversight of who-did-what).
+_MANAGER: frozenset[Permission] = _OPERATOR | frozenset(
+    {Permission.FINANCE_RECONCILE, Permission.AUDIT_READ}
+)
 
 _ADMIN: frozenset[Permission] = _MANAGER | frozenset({Permission.USER_MANAGE})
 

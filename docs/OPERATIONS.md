@@ -81,6 +81,22 @@ Grafana dashboards live in `infrastructure/grafana/`. Wire Alertmanager for
 error rate, p95 latency, the Gemini timeout counter, outbox lag, and DB
 connection saturation (see `PRODUCTION_READINESS.md` Phase 7).
 
+**Request correlation.** `RequestContextMiddleware` stamps every request with a
+`request_id` (honouring an inbound `X-Request-ID` from nginx, else minting one)
+and returns it in the response `X-Request-ID` header. The id is bound into the
+structlog JSON logs *and* persisted on every `audit_logs` row, so a user-reported
+request id ties operational logs to the durable audit trail.
+
+## Audit trail
+
+`audit_logs` is an append-only record of meaningful activity (logins, alert
+create/resolve, …) written via `AuditService` at explicit call sites — never
+updated or deleted. It is read-only over `GET /api/v1/audit` (manager+,
+`audit:read`) and surfaced in the dashboard at `/dashboard/operations/logs`.
+Because it is the integrity record, exclude it from routine purges and **retain
+backups** on the same schedule as the financial tables; growth is bounded only
+by activity volume, so plan for time-based archival rather than truncation.
+
 ## Incident quick-reference
 
 - **Gemini down:** agents degrade (circuit breaker) and return a `degraded_ai`
