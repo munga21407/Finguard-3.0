@@ -12,6 +12,7 @@ Covers:
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -215,3 +216,41 @@ async def test_transfer_fee_does_not_burn_budget(seed_customer: str) -> None:
         refreshed = await session.get(Budget, budget_id)
         assert refreshed is not None
         assert refreshed.spent == Decimal("0")  # fee did NOT burn the budget
+
+
+@pytest.mark.asyncio
+async def test_concurrent_transfers_cannot_overdraw(seed_customer: str) -> None:
+    """The advisory lock serialises transfers OUT of a vault so two concurrent
+    moves that together exceed the balance cannot both succeed."""
+    user = _fake_user()
+    await _fund_vault(seed_customer, VaultType.CASH, "1000")
+
+    async with TestingSessionLocal() as session:
+        cash = next(
+            b.balance
+            for b in (await FinanceService(session).get_vault_balances()).balances
+            if b.vault == VaultType.CASH
+        )
+
+    # Two transfers of (balance − 100) each: either alone fits, but both together
+    # would overdraw, so exactly one must be rejected.
+    each = cash - Decimal("100")
+
+    async def _move() -> object:
+        async with TestingSessionLocal() as session:
+            return await FinanceService(session).create_vault_transfer(
+                VaultTransferCreate(
+                    from_vault=VaultType.CASH,
+                    to_vault=VaultType.BANK,
+                    amount=each,
+                    occurred_at=datetime.now(UTC),
+                ),
+                user,
+            )
+
+    results = await asyncio.gather(_move(), _move(), return_exceptions=True)
+    successes = [r for r in results if not isinstance(r, Exception)]
+    failures = [r for r in results if isinstance(r, Exception)]
+    assert len(successes) == 1, "exactly one concurrent transfer should succeed"
+    assert len(failures) == 1
+    assert isinstance(failures[0], UnprocessableError)
