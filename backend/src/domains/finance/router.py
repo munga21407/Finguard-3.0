@@ -36,7 +36,11 @@ from src.domains.finance.schemas import (
     VaultTransferResponse,
 )
 from src.domains.finance.service import FinanceService
-from src.domains.identity.dependencies import RequireFinanceRead, RequireFinanceWrite
+from src.domains.identity.dependencies import (
+    RequireFinanceRead,
+    RequireFinanceReconcile,
+    RequireFinanceWrite,
+)
 from src.infrastructure.database.postgres import get_db
 
 router = APIRouter()
@@ -275,15 +279,66 @@ async def reconciliation_flow(
     status_code=201,
 )
 async def import_bank_statements(
-    lines: list[BankStatementLineImport], db: DBSession, _: RequireFinanceWrite
+    lines: list[BankStatementLineImport], db: DBSession, current_user: RequireFinanceReconcile
 ) -> list[BankStatementLineResponse]:
     """Ingest bank statement lines for Agent C to reconcile against open invoices.
 
+    Requires ``finance:reconcile`` (manager+), not just ``finance:write`` — importing
+    settlement data auto-marks invoices paid, so it is separated from ordinary
+    finance operators (an Accountant cannot import settlements unilaterally).
+
     Lines land unreconciled; the batch bank-reconciliation job (or the Agent C
     LangGraph node) later matches them to invoices and records a Payment(vault=BANK).
+    The importing user is recorded on each line for auditability.
     """
-    rows = await FinanceService(db).import_bank_statement_lines(lines)
+    rows = await FinanceService(db).import_bank_statement_lines(lines, current_user)
     return [BankStatementLineResponse.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/reconciliation/bank-statements",
+    response_model=list[BankStatementLineResponse],
+)
+async def list_bank_statements(
+    db: DBSession,
+    _: RequireFinanceRead,
+    review_status: str | None = Query(default=None),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> list[BankStatementLineResponse]:
+    """List imported bank statement lines, newest first (optionally by review status)."""
+    lines = await FinanceService(db).list_bank_statement_lines(
+        review_status=review_status, limit=limit, offset=offset
+    )
+    return [BankStatementLineResponse.model_validate(line) for line in lines]
+
+
+@router.post(
+    "/reconciliation/bank-statements/{line_id}/approve",
+    response_model=BankStatementLineResponse,
+)
+async def approve_bank_statement_line(
+    line_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+) -> BankStatementLineResponse:
+    """Approve a pending bank line so the reconciler may settle invoices with it.
+
+    Maker-checker: the approver must differ from the importer (403 otherwise), so
+    no single user can both import and release settlement data.
+    """
+    line = await FinanceService(db).approve_bank_statement_line(line_id, current_user)
+    return BankStatementLineResponse.model_validate(line)
+
+
+@router.post(
+    "/reconciliation/bank-statements/{line_id}/reject",
+    response_model=BankStatementLineResponse,
+)
+async def reject_bank_statement_line(
+    line_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+) -> BankStatementLineResponse:
+    """Reject a pending bank line so it is never reconciled (approver ≠ importer)."""
+    line = await FinanceService(db).reject_bank_statement_line(line_id, current_user)
+    return BankStatementLineResponse.model_validate(line)
 
 
 # ── Vault transfers + balances (treasury) ─────────────────────────────────────

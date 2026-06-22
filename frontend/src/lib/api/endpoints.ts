@@ -18,7 +18,12 @@ export const ENDPOINTS = {
     RECEIPTS: "/api/v1/finance/receipts",
     BUDGETS: "/api/v1/finance/budgets",
     RECONCILIATION_FLOW: "/api/v1/finance/reconciliation-flow",
+    BANK_STATEMENTS: "/api/v1/finance/reconciliation/bank-statements",
     BANK_STATEMENTS_IMPORT: "/api/v1/finance/reconciliation/bank-statements/import",
+    BANK_STATEMENT_APPROVE: (id: string) =>
+      `/api/v1/finance/reconciliation/bank-statements/${id}/approve`,
+    BANK_STATEMENT_REJECT: (id: string) =>
+      `/api/v1/finance/reconciliation/bank-statements/${id}/reject`,
     VAULT_BALANCES: "/api/v1/finance/vault-balances",
     VAULT_TRANSFERS: "/api/v1/finance/vault-transfers",
     PAYMENTS_CASH: "/api/v1/finance/payments/cash",

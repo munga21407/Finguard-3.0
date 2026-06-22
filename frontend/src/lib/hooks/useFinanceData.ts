@@ -6,21 +6,29 @@
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  approveBankStatement,
   createVaultTransfer,
   getReconciliationFlow,
   getVaultBalances,
+  importBankStatements,
+  listBankStatements,
   listBudgets,
   listCustomers,
   listExpenses,
   listInvoices,
+  listVaultTransfers,
+  rejectBankStatement,
 } from "@/lib/api/finance";
 import type {
+  ApiBankStatementImport,
+  ApiBankStatementLine,
   ApiBudget,
   ApiCustomer,
   ApiExpense,
   ApiInvoice,
   ApiReconciliationFlow,
   ApiVaultBalances,
+  ApiVaultTransfer,
 } from "@/types/api";
 
 export const financeKeys = {
@@ -30,6 +38,9 @@ export const financeKeys = {
   customers: ["crm", "customers"] as const,
   reconciliationFlow: ["finance", "reconciliation-flow"] as const,
   vaultBalances: ["finance", "vault-balances"] as const,
+  vaultTransfers: ["finance", "vault-transfers"] as const,
+  bankStatements: (status?: string) =>
+    ["finance", "bank-statements", status ?? "all"] as const,
 };
 
 export function useInvoices() {
@@ -85,6 +96,44 @@ export function useCreateVaultTransfer() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: financeKeys.vaultBalances });
       queryClient.invalidateQueries({ queryKey: financeKeys.expenses });
+      queryClient.invalidateQueries({ queryKey: financeKeys.reconciliationFlow });
+      queryClient.invalidateQueries({ queryKey: financeKeys.vaultTransfers });
+    },
+  });
+}
+
+export function useVaultTransfers() {
+  return useQuery<ApiVaultTransfer[]>({
+    queryKey: financeKeys.vaultTransfers,
+    queryFn: listVaultTransfers,
+  });
+}
+
+export function useBankStatements(reviewStatus?: string) {
+  return useQuery<ApiBankStatementLine[]>({
+    queryKey: financeKeys.bankStatements(reviewStatus),
+    queryFn: () => listBankStatements(reviewStatus),
+  });
+}
+
+export function useImportBankStatements() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (lines: ApiBankStatementImport[]) => importBankStatements(lines),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["finance", "bank-statements"] });
+    },
+  });
+}
+
+/** Approve or reject a pending bank line; refresh the queues + reconciliation flow. */
+export function useReviewBankStatement() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: "approve" | "reject" }) =>
+      decision === "approve" ? approveBankStatement(id) : rejectBankStatement(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["finance", "bank-statements"] });
       queryClient.invalidateQueries({ queryKey: financeKeys.reconciliationFlow });
     },
   });

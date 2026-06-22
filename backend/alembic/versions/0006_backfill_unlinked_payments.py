@@ -48,7 +48,7 @@ def upgrade() -> None:
             FROM payments
             GROUP BY invoice_id
         ) p ON p.invoice_id = i.id
-        WHERE i.status <> 'cancelled'
+        WHERE i.status <> 'CANCELLED'
           AND i.amount_paid - COALESCE(p.paid, 0) > 0
         """
     )

@@ -244,12 +244,14 @@ class Payment(Base):
     payment_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     recorded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     # Provenance: which raw settlement record reconciliation matched to this
-    # invoice (NULL for manual cash payments).
+    # invoice (NULL for manual cash payments).  ``unique`` (nullable → many NULLs
+    # allowed in Postgres) guarantees a given M-Pesa transaction / bank line backs
+    # AT MOST ONE payment — a DB-level guard against double-paying an invoice.
     mpesa_trans_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("mpesa_transactions.id"), index=True
+        UUID(as_uuid=True), ForeignKey("mpesa_transactions.id"), unique=True
     )
     bank_line_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("bank_statement_lines.id"), index=True
+        UUID(as_uuid=True), ForeignKey("bank_statement_lines.id"), unique=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -258,12 +260,28 @@ class Payment(Base):
     invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="payments")
 
 
+# Bank-line review states (maker-checker). Plain strings (not a native PG enum) to
+# avoid enum-label pitfalls; values are lowercase and stored verbatim.
+BANK_REVIEW_PENDING = "pending"
+BANK_REVIEW_APPROVED = "approved"
+BANK_REVIEW_REJECTED = "rejected"
+
+
 class BankStatementLine(Base):
     """
-    Raw bank statement line used by Agent C (Reconciler) for ledger matching.
+    Raw bank statement line imported for Agent C (Reconciler) to match to invoices.
 
     Two-pass reconciliation checks this table for exact (amount + date ±2 days +
-    reference substring) and fuzzy (Gemini) matches against `ledger_entries`.
+    reference substring) and fuzzy (Gemini) matches against open invoices, then
+    records a Payment(vault=BANK).  ``external_ref`` is the bank's own line/
+    transaction reference; it is the required, unique import idempotency key, so
+    re-importing the same statement cannot create duplicate lines (and therefore
+    cannot double-pay an invoice).
+
+    Maker-checker: a line lands ``pending`` and the reconciler only ever picks up
+    ``approved`` lines, so a settlement that auto-pays invoices needs a SECOND
+    person (``approved_by`` ≠ ``imported_by``) to release it — segregation of duties
+    on top of the ``finance:reconcile`` role gate.
     """
 
     __tablename__ = "bank_statement_lines"
@@ -272,6 +290,19 @@ class BankStatementLine(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     reference_text: Mapped[str | None] = mapped_column(Text)
+    # Bank's own unique reference for the line — the required import idempotency key.
+    external_ref: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # Provenance: the user who imported this line. Imported bank data auto-reconciles
+    # and marks invoices paid, so recording the importer keeps that trust auditable.
+    imported_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Maker-checker review gate (pending → approved/rejected); only approved lines
+    # are reconciled.  ``approved_by`` must differ from ``imported_by``.
+    review_status: Mapped[str] = mapped_column(
+        String(20), default=BANK_REVIEW_PENDING, server_default=BANK_REVIEW_PENDING,
+        nullable=False, index=True,
+    )
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_reconciled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, index=True
     )

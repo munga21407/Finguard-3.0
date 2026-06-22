@@ -35,3 +35,18 @@ def test_operators_can_write_and_act_but_not_manage_users(role: UserRole) -> Non
 @pytest.mark.parametrize("role", [UserRole.ADMIN, UserRole.OWNER])
 def test_admins_hold_every_permission(role: UserRole) -> None:
     assert role_permissions(role) == frozenset(Permission)
+
+
+def test_reconcile_is_a_separate_grant_above_finance_write() -> None:
+    """Importing settlements (finance:reconcile) is held by manager+, not Accountant.
+
+    Separation of duties: an Accountant can still record invoices/payments
+    (finance:write) but cannot unilaterally import bank settlements that auto-pay
+    invoices.
+    """
+    for role in (UserRole.MANAGER, UserRole.ADMIN, UserRole.OWNER):
+        assert has_permission(role, Permission.FINANCE_RECONCILE)
+    for role in (UserRole.ACCOUNTANT, UserRole.VIEWER):
+        assert not has_permission(role, Permission.FINANCE_RECONCILE)
+    # The Accountant keeps ordinary finance write authority.
+    assert has_permission(UserRole.ACCOUNTANT, Permission.FINANCE_WRITE)

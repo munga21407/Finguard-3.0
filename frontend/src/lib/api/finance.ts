@@ -68,6 +68,33 @@ export async function importBankStatements(
   return data;
 }
 
+/** List imported bank statement lines, optionally filtered by review status. */
+export async function listBankStatements(
+  reviewStatus?: string
+): Promise<ApiBankStatementLine[]> {
+  const { data } = await httpClient.get<ApiBankStatementLine[]>(
+    ENDPOINTS.FINANCE.BANK_STATEMENTS,
+    { params: reviewStatus ? { review_status: reviewStatus } : undefined }
+  );
+  return data;
+}
+
+/** Approve a pending bank line (maker-checker; approver must differ from importer). */
+export async function approveBankStatement(id: string): Promise<ApiBankStatementLine> {
+  const { data } = await httpClient.post<ApiBankStatementLine>(
+    ENDPOINTS.FINANCE.BANK_STATEMENT_APPROVE(id)
+  );
+  return data;
+}
+
+/** Reject a pending bank line so it is never reconciled. */
+export async function rejectBankStatement(id: string): Promise<ApiBankStatementLine> {
+  const { data } = await httpClient.post<ApiBankStatementLine>(
+    ENDPOINTS.FINANCE.BANK_STATEMENT_REJECT(id)
+  );
+  return data;
+}
+
 /** Live balance of each vault (M-Pesa / Cash / Bank) + the total cash position. */
 export async function getVaultBalances(): Promise<ApiVaultBalances> {
   const { data } = await httpClient.get<ApiVaultBalances>(
