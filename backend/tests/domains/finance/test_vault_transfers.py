@@ -162,14 +162,19 @@ async def test_overdraw_is_rejected(seed_customer: str) -> None:
     user = _fake_user()
     await _fund_vault(seed_customer, VaultType.MPESA, "1000")
 
+    # The DB is shared across tests, so read the current MPESA balance and try to
+    # move more than it holds (balance + 1) — guaranteed to overdraw.
+    async with TestingSessionLocal() as session:
+        balances = await FinanceService(session).get_vault_balances()
+    mpesa = next(b.balance for b in balances.balances if b.vault == VaultType.MPESA)
+
     async with TestingSessionLocal() as session:
         with pytest.raises(UnprocessableError):
             await FinanceService(session).create_vault_transfer(
                 VaultTransferCreate(
                     from_vault=VaultType.MPESA,
                     to_vault=VaultType.BANK,
-                    amount=Decimal("1000"),
-                    fee=Decimal("50"),  # 1050 > 1000 balance
+                    amount=mpesa + Decimal("1"),
                     occurred_at=datetime.now(UTC),
                 ),
                 user,

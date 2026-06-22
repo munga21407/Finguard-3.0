@@ -11,8 +11,12 @@
 import { useState } from "react";
 import { ArrowRight, Landmark, Smartphone, Wallet } from "lucide-react";
 import { QueryState } from "@/components/ui/QueryState";
-import { useCreateVaultTransfer, useVaultBalances } from "@/lib/hooks/useFinanceData";
-import { formatMoney } from "@/lib/utils/format";
+import {
+  useCreateVaultTransfer,
+  useVaultBalances,
+  useVaultTransfers,
+} from "@/lib/hooks/useFinanceData";
+import { formatDate, formatMoney } from "@/lib/utils/format";
 import type { ApiVaultType } from "@/types/api";
 
 const VAULTS: { value: ApiVaultType; label: string; icon: typeof Wallet; color: string }[] = [
@@ -91,6 +95,55 @@ export function VaultBalances() {
       </QueryState>
 
       {formOpen && <MoveMoneyForm onDone={() => setFormOpen(false)} />}
+
+      <TransferHistory />
+    </div>
+  );
+}
+
+function TransferHistory() {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading, isError } = useVaultTransfers();
+  const transfers = data ?? [];
+
+  return (
+    <div className="mt-4 pt-4 border-t border-lf-outline-variant/15">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="text-xs font-semibold text-lf-on-surface-variant hover:text-lf-primary transition-colors"
+      >
+        {open ? "Hide" : "Show"} recent transfers{transfers.length ? ` (${transfers.length})` : ""}
+      </button>
+
+      {open && (
+        <QueryState
+          isLoading={isLoading}
+          isError={isError}
+          isEmpty={transfers.length === 0}
+          loadingLabel="Loading transfers…"
+          errorLabel="Couldn't load transfers."
+          emptyLabel="No transfers yet."
+        >
+          <div className="flex flex-col divide-y divide-lf-outline-variant/15 mt-2">
+            {transfers.slice(0, 8).map((t) => (
+              <div key={t.id} className="flex items-center justify-between gap-3 py-2 text-xs">
+                <span className="flex items-center gap-1.5 text-lf-on-surface-variant">
+                  <span className="font-semibold text-lf-on-surface">{VAULT_LABEL[t.from_vault] ?? t.from_vault}</span>
+                  <ArrowRight size={12} />
+                  <span className="font-semibold text-lf-on-surface">{VAULT_LABEL[t.to_vault] ?? t.to_vault}</span>
+                </span>
+                <span className="flex items-center gap-3 shrink-0">
+                  {Number(t.fee) > 0 && (
+                    <span className="text-lf-tertiary">fee {formatMoney(t.fee)}</span>
+                  )}
+                  <span className="font-semibold text-lf-on-surface">{formatMoney(t.amount)}</span>
+                  <span className="text-lf-on-surface-variant/60">{formatDate(t.occurred_at)}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </QueryState>
+      )}
     </div>
   );
 }

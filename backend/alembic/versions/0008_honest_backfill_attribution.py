@@ -45,7 +45,7 @@ _REAL_PAYMENTS = f"""
 _EVENT_TOTALS = """
     SELECT invoice_id, SUM(amount) AS evt
     FROM invoice_events
-    WHERE event_type = 'payment_applied'
+    WHERE event_type = 'PAYMENT_APPLIED'
     GROUP BY invoice_id
 """
 
@@ -60,7 +60,7 @@ def _insert_cash() -> str:
         FROM invoices i
         LEFT JOIN ({_EVENT_TOTALS}) e ON e.invoice_id = i.id
         LEFT JOIN ({_REAL_PAYMENTS}) rp ON rp.invoice_id = i.id
-        WHERE i.status <> 'cancelled'
+        WHERE i.status <> 'CANCELLED'
           AND (COALESCE(e.evt, 0) - COALESCE(rp.paid, 0)) > 0
           AND NOT EXISTS (
               SELECT 1 FROM payments b
@@ -78,7 +78,7 @@ def _insert_mpesa() -> str:
                'MPESA', '{_MPESA_NOTE}', COALESCE(i.paid_at, i.created_at), NULL, NOW()
         FROM invoices i
         LEFT JOIN ({_EVENT_TOTALS}) e ON e.invoice_id = i.id
-        WHERE i.status <> 'cancelled'
+        WHERE i.status <> 'CANCELLED'
           AND (i.amount_paid - COALESCE(e.evt, 0)) > 0
           AND NOT EXISTS (
               SELECT 1 FROM payments b
@@ -109,7 +109,7 @@ def downgrade() -> None:
         LEFT JOIN (
             SELECT invoice_id, SUM(amount) AS paid FROM payments GROUP BY invoice_id
         ) p ON p.invoice_id = i.id
-        WHERE i.status <> 'cancelled'
+        WHERE i.status <> 'CANCELLED'
           AND i.amount_paid - COALESCE(p.paid, 0) > 0
         """
     )

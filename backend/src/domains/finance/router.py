@@ -295,6 +295,52 @@ async def import_bank_statements(
     return [BankStatementLineResponse.model_validate(r) for r in rows]
 
 
+@router.get(
+    "/reconciliation/bank-statements",
+    response_model=list[BankStatementLineResponse],
+)
+async def list_bank_statements(
+    db: DBSession,
+    _: RequireFinanceRead,
+    review_status: str | None = Query(default=None),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> list[BankStatementLineResponse]:
+    """List imported bank statement lines, newest first (optionally by review status)."""
+    lines = await FinanceService(db).list_bank_statement_lines(
+        review_status=review_status, limit=limit, offset=offset
+    )
+    return [BankStatementLineResponse.model_validate(line) for line in lines]
+
+
+@router.post(
+    "/reconciliation/bank-statements/{line_id}/approve",
+    response_model=BankStatementLineResponse,
+)
+async def approve_bank_statement_line(
+    line_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+) -> BankStatementLineResponse:
+    """Approve a pending bank line so the reconciler may settle invoices with it.
+
+    Maker-checker: the approver must differ from the importer (403 otherwise), so
+    no single user can both import and release settlement data.
+    """
+    line = await FinanceService(db).approve_bank_statement_line(line_id, current_user)
+    return BankStatementLineResponse.model_validate(line)
+
+
+@router.post(
+    "/reconciliation/bank-statements/{line_id}/reject",
+    response_model=BankStatementLineResponse,
+)
+async def reject_bank_statement_line(
+    line_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+) -> BankStatementLineResponse:
+    """Reject a pending bank line so it is never reconciled (approver ≠ importer)."""
+    line = await FinanceService(db).reject_bank_statement_line(line_id, current_user)
+    return BankStatementLineResponse.model_validate(line)
+
+
 # ── Vault transfers + balances (treasury) ─────────────────────────────────────
 
 @router.get("/vault-balances", response_model=VaultBalancesResponse)

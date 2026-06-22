@@ -7,9 +7,17 @@ from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.exceptions import ConflictError, NotFoundError, UnprocessableError
+from src.core.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    UnprocessableError,
+)
 from src.domains.finance.events import InvoiceState, fold_invoice_events
 from src.domains.finance.models import (
+    BANK_REVIEW_APPROVED,
+    BANK_REVIEW_PENDING,
+    BANK_REVIEW_REJECTED,
     BankStatementLine,
     Budget,
     Expense,
@@ -460,7 +468,7 @@ class FinanceService:
         def node(name: str, kind: str) -> int:
             if name not in node_index:
                 node_index[name] = len(nodes)
-                nodes.append(SankeyNode(name=name, kind=kind))  # type: ignore[arg-type]
+                nodes.append(SankeyNode(name=name, kind=kind))
             return node_index[name]
 
         def money(value: Decimal) -> Decimal:
@@ -497,11 +505,13 @@ class FinanceService:
         rail_by_status: dict[InvoiceStatus, dict[str, Decimal]] = {}
         reconciled_total = Decimal("0")
         for status, vault, amount in rail_rows:
-            label = rail_labels.get(vault)
-            if label is None or amount <= 0:
+            rail_name = rail_labels.get(vault)
+            if rail_name is None or amount <= 0:
                 continue
             rail_by_status.setdefault(status, {})
-            rail_by_status[status][label] = rail_by_status[status].get(label, Decimal("0")) + amount
+            rail_by_status[status][rail_name] = (
+                rail_by_status[status].get(rail_name, Decimal("0")) + amount
+            )
             if vault in (VaultType.MPESA, VaultType.BANK):
                 reconciled_total += amount
 
@@ -515,7 +525,11 @@ class FinanceService:
             status_idx = node(label, "status")
             for rail_label, amount in rails.items():
                 links.append(
-                    SankeyLink(source=status_idx, target=node(rail_label, "rail"), value=money(amount))
+                    SankeyLink(
+                        source=status_idx,
+                        target=node(rail_label, "rail"),
+                        value=money(amount),
+                    )
                 )
 
         return ReconciliationFlowResponse(
@@ -608,13 +622,13 @@ class FinanceService:
         # Mark the raw settlement record reconciled (mirrors the old _apply_match).
         if mpesa_uuid is not None:
             await self._session.execute(
-                text("UPDATE mpesa_transactions SET is_reconciled = TRUE WHERE id = :id::uuid"),
-                {"id": str(mpesa_uuid)},
+                text("UPDATE mpesa_transactions SET is_reconciled = TRUE WHERE id = :id"),
+                {"id": mpesa_uuid},
             )
         if bank_uuid is not None:
             await self._session.execute(
-                text("UPDATE bank_statement_lines SET is_reconciled = TRUE WHERE id = :id::uuid"),
-                {"id": str(bank_uuid)},
+                text("UPDATE bank_statement_lines SET is_reconciled = TRUE WHERE id = :id"),
+                {"id": bank_uuid},
             )
 
         self._session.add(
@@ -697,6 +711,53 @@ class FinanceService:
         await self._session.commit()
         return rows
 
+    async def list_bank_statement_lines(
+        self, *, review_status: str | None = None, limit: int = 100, offset: int = 0
+    ) -> list[BankStatementLine]:
+        return await self._bank_repo.list_all(
+            review_status=review_status, limit=limit, offset=offset
+        )
+
+    async def _review_bank_statement_line(
+        self, line_id: uuid.UUID, current_user: User, *, decision: str
+    ) -> BankStatementLine:
+        """Approve or reject a pending bank line (maker-checker).
+
+        Enforces segregation of duties: the reviewer must differ from the importer,
+        and only a still-pending, unreconciled line can be decided.  Approving makes
+        the line eligible for the reconciler; rejecting keeps it out permanently.
+        """
+        line = await self._bank_repo.get_by_id(line_id)
+        if not line:
+            raise NotFoundError("Bank statement line not found")
+        if line.is_reconciled:
+            raise UnprocessableError("Line is already reconciled")
+        if line.review_status != BANK_REVIEW_PENDING:
+            raise UnprocessableError(f"Line is already {line.review_status}")
+        if line.imported_by is not None and line.imported_by == current_user.id:
+            raise ForbiddenError("The importer cannot review their own bank statement line")
+
+        line.review_status = decision
+        line.approved_by = current_user.id
+        line.approved_at = datetime.now(UTC)
+        await self._session.commit()
+        await self._session.refresh(line)
+        return line
+
+    async def approve_bank_statement_line(
+        self, line_id: uuid.UUID, current_user: User
+    ) -> BankStatementLine:
+        return await self._review_bank_statement_line(
+            line_id, current_user, decision=BANK_REVIEW_APPROVED
+        )
+
+    async def reject_bank_statement_line(
+        self, line_id: uuid.UUID, current_user: User
+    ) -> BankStatementLine:
+        return await self._review_bank_statement_line(
+            line_id, current_user, decision=BANK_REVIEW_REJECTED
+        )
+
     # ── Vault transfers + balances (treasury) ──────────────────────────────────
 
     async def create_vault_transfer(
@@ -713,7 +774,16 @@ class FinanceService:
 
         Overdraw guard: the transfer is rejected if ``amount + fee`` exceeds the
         current source-vault balance — you cannot move more money than a vault holds.
+        A transaction-scoped advisory lock on the source vault serialises concurrent
+        transfers so the balance read-then-write cannot race into an overdraw.
         """
+        # Serialise concurrent transfers OUT of the same vault (held until commit),
+        # so the balance check below cannot be undercut by a parallel transfer.
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:vault))"),
+            {"vault": f"vault_transfer:{data.from_vault.value}"},
+        )
+
         # Cannot move more than the source vault currently holds.
         balances = await self.get_vault_balances()
         from_balance = next(

@@ -201,6 +201,19 @@ class BankStatementRepository:
             await self._session.refresh(line)
         return lines
 
+    async def get_by_id(self, line_id: uuid.UUID) -> BankStatementLine | None:
+        return await self._session.get(BankStatementLine, line_id)
+
+    async def list_all(
+        self, *, review_status: str | None = None, limit: int = 100, offset: int = 0
+    ) -> list[BankStatementLine]:
+        stmt = select(BankStatementLine)
+        if review_status is not None:
+            stmt = stmt.where(BankStatementLine.review_status == review_status)
+        stmt = stmt.order_by(BankStatementLine.date.desc()).limit(limit).offset(offset)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def existing_external_refs(self, refs: list[str]) -> set[str]:
         """Subset of ``refs`` already present — the import idempotency check."""
         if not refs:

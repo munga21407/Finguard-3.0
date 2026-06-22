@@ -366,6 +366,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/reconciliation/bank-statements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Bank Statements
+         * @description List imported bank statement lines, newest first (optionally by review status).
+         */
+        get: operations["list_bank_statements_api_v1_finance_reconciliation_bank_statements_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/reconciliation/bank-statements/{line_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Bank Statement Line
+         * @description Approve a pending bank line so the reconciler may settle invoices with it.
+         *
+         *     Maker-checker: the approver must differ from the importer (403 otherwise), so
+         *     no single user can both import and release settlement data.
+         */
+        post: operations["approve_bank_statement_line_api_v1_finance_reconciliation_bank_statements__line_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/reconciliation/bank-statements/{line_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Bank Statement Line
+         * @description Reject a pending bank line so it is never reconciled (approver ≠ importer).
+         */
+        post: operations["reject_bank_statement_line_api_v1_finance_reconciliation_bank_statements__line_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/vault-balances": {
         parameters: {
             query?: never;
@@ -1129,6 +1192,12 @@ export interface components {
             external_ref: string;
             /** Imported By */
             imported_by: string | null;
+            /** Review Status */
+            review_status: string;
+            /** Approved By */
+            approved_by: string | null;
+            /** Approved At */
+            approved_at: string | null;
             /** Is Reconciled */
             is_reconciled: boolean;
             /**
@@ -2707,6 +2776,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BankStatementLineResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_bank_statements_api_v1_finance_reconciliation_bank_statements_get: {
+        parameters: {
+            query?: {
+                review_status?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BankStatementLineResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_bank_statement_line_api_v1_finance_reconciliation_bank_statements__line_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                line_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BankStatementLineResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_bank_statement_line_api_v1_finance_reconciliation_bank_statements__line_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                line_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BankStatementLineResponse"];
                 };
             };
             /** @description Validation Error */

@@ -326,7 +326,7 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
             SELECT id::text, invoice_number, status::text, total::float,
                    amount_paid::float, balance_due::float, due_date, customer_id::text
             FROM invoices
-            WHERE status IN ('sent', 'overdue')
+            WHERE status IN ('SENT', 'OVERDUE')
               AND balance_due > 0
             ORDER BY due_date ASC NULLS LAST
             LIMIT :lim
@@ -423,10 +423,13 @@ async def run_bank_reconciliation(session: AsyncSession) -> ReconciliationReport
     run_at = datetime.now(UTC).isoformat()
 
     async with session.begin():
+        # Maker-checker: only APPROVED lines are eligible — a reviewer (≠ importer)
+        # must release a line before it can settle invoices.
         line_sql = text("""
             SELECT id::text, amount::float, reference_text, date
             FROM bank_statement_lines
             WHERE is_reconciled = FALSE
+              AND review_status = 'approved'
             ORDER BY date ASC
             LIMIT :lim
             FOR UPDATE SKIP LOCKED
@@ -448,7 +451,7 @@ async def run_bank_reconciliation(session: AsyncSession) -> ReconciliationReport
             SELECT id::text, invoice_number, status::text, total::float,
                    amount_paid::float, balance_due::float, due_date, customer_id::text
             FROM invoices
-            WHERE status IN ('sent', 'overdue')
+            WHERE status IN ('SENT', 'OVERDUE')
               AND balance_due > 0
             ORDER BY due_date ASC NULLS LAST
             LIMIT :lim

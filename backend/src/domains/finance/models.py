@@ -260,6 +260,13 @@ class Payment(Base):
     invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="payments")
 
 
+# Bank-line review states (maker-checker). Plain strings (not a native PG enum) to
+# avoid enum-label pitfalls; values are lowercase and stored verbatim.
+BANK_REVIEW_PENDING = "pending"
+BANK_REVIEW_APPROVED = "approved"
+BANK_REVIEW_REJECTED = "rejected"
+
+
 class BankStatementLine(Base):
     """
     Raw bank statement line imported for Agent C (Reconciler) to match to invoices.
@@ -270,6 +277,11 @@ class BankStatementLine(Base):
     transaction reference; it is the required, unique import idempotency key, so
     re-importing the same statement cannot create duplicate lines (and therefore
     cannot double-pay an invoice).
+
+    Maker-checker: a line lands ``pending`` and the reconciler only ever picks up
+    ``approved`` lines, so a settlement that auto-pays invoices needs a SECOND
+    person (``approved_by`` ≠ ``imported_by``) to release it — segregation of duties
+    on top of the ``finance:reconcile`` role gate.
     """
 
     __tablename__ = "bank_statement_lines"
@@ -283,6 +295,14 @@ class BankStatementLine(Base):
     # Provenance: the user who imported this line. Imported bank data auto-reconciles
     # and marks invoices paid, so recording the importer keeps that trust auditable.
     imported_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Maker-checker review gate (pending → approved/rejected); only approved lines
+    # are reconciled.  ``approved_by`` must differ from ``imported_by``.
+    review_status: Mapped[str] = mapped_column(
+        String(20), default=BANK_REVIEW_PENDING, server_default=BANK_REVIEW_PENDING,
+        nullable=False, index=True,
+    )
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_reconciled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, index=True
     )

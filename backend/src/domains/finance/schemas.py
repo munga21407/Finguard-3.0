@@ -284,6 +284,9 @@ class BankStatementLineResponse(BaseModel):
     reference_text: str | None
     external_ref: str
     imported_by: uuid.UUID | None
+    review_status: str
+    approved_by: uuid.UUID | None
+    approved_at: datetime | None
     is_reconciled: bool
     created_at: datetime
 
