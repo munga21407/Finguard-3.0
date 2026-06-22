@@ -119,3 +119,4 @@ RequireIntelligenceAct = Annotated[
     User, Depends(require_permission(Permission.INTELLIGENCE_ACT))
 ]
 RequireUserManage = Annotated[User, Depends(require_permission(Permission.USER_MANAGE))]
+RequireAuditRead = Annotated[User, Depends(require_permission(Permission.AUDIT_READ))]

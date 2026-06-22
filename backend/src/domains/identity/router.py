@@ -12,6 +12,8 @@ from src.core.config import settings
 from src.core.csrf import CSRF_COOKIE_NAME, generate_csrf_token, require_csrf_token
 from src.core.exceptions import UnauthorizedError
 from src.core.security import ACCESS_COOKIE_NAME, SESSION_COOKIE_NAME, decode_token
+from src.domains.audit.models import AuditAction, AuditActorType, AuditOutcome
+from src.domains.audit.service import AuditService
 from src.domains.identity.dependencies import CurrentUser, RequireUserManage
 from src.domains.identity.schemas import (
     AccessTokenResponse,
@@ -162,11 +164,32 @@ async def login(
     non-HttpOnly CSRF cookie is set for the double-submit pattern that guards all
     cookie-authenticated mutations.
     """
-    result = await IdentityService(db).login(
-        data.email, data.password, ip=_client_ip(request)
-    )
+    try:
+        result = await IdentityService(db).login(
+            data.email, data.password, ip=_client_ip(request)
+        )
+    except Exception as exc:  # noqa: BLE001 — audit then re-raise; handler unchanged
+        # Audit the failed attempt (bad credentials, disabled/unverified account,
+        # lockout) before propagating. actor_id is unknown — the attempted email
+        # is recorded as the label so brute-force / probing is still attributable.
+        await AuditService(db).record_safe(
+            action=AuditAction.AUTH_LOGIN_FAILED,
+            actor_type=AuditActorType.USER,
+            actor_label=data.email,
+            resource_type="session",
+            outcome=AuditOutcome.FAILURE,
+            metadata={"reason": type(exc).__name__},
+        )
+        raise
     _set_auth_cookies(
         response, result.access_token, result.refresh_token, generate_csrf_token()
+    )
+    await AuditService(db).record_safe(
+        action=AuditAction.AUTH_LOGIN,
+        actor_type=AuditActorType.USER,
+        actor_label=data.email,
+        resource_type="session",
+        outcome=AuditOutcome.SUCCESS,
     )
     return AccessTokenResponse(access_token=result.access_token)
 

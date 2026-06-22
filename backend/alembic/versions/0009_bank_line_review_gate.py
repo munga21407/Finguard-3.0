@@ -23,23 +23,28 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "bank_statement_lines",
-        sa.Column(
-            "review_status", sa.String(20), nullable=False, server_default="pending"
-        ),
-    )
-    op.add_column(
-        "bank_statement_lines",
-        sa.Column("approved_by", postgresql.UUID(as_uuid=True), nullable=True),
-    )
-    op.add_column(
-        "bank_statement_lines",
-        sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.create_index(
-        "ix_bank_statement_lines_review_status", "bank_statement_lines", ["review_status"]
-    )
+    # Guard against columns the 0001 baseline already built from the current ORM.
+    cols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("bank_statement_lines")}
+    if "review_status" not in cols:
+        op.add_column(
+            "bank_statement_lines",
+            sa.Column(
+                "review_status", sa.String(20), nullable=False, server_default="pending"
+            ),
+        )
+        op.create_index(
+            "ix_bank_statement_lines_review_status", "bank_statement_lines", ["review_status"]
+        )
+    if "approved_by" not in cols:
+        op.add_column(
+            "bank_statement_lines",
+            sa.Column("approved_by", postgresql.UUID(as_uuid=True), nullable=True),
+        )
+    if "approved_at" not in cols:
+        op.add_column(
+            "bank_statement_lines",
+            sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True),
+        )
 
 
 def downgrade() -> None:

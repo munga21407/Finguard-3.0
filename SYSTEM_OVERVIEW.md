@@ -53,7 +53,10 @@ Finguard-3.0/
 │   │       ├── 0001_initial_schema.py # Single squashed baseline: full schema +
 │   │       │                          # CHECK (balance_due = total - amount_paid),
 │   │       │                          # vault columns, receipt-scan provenance, is_verified
-│   │       └── 0002_invoice_events.py # Append-only invoice_events log + backfill (event sourcing)
+│   │       ├── 0002_invoice_events.py # Append-only invoice_events log + backfill (event sourcing)
+│   │       ├── 0003_alerts.py … 0009_bank_line_review_gate.py # alerts, payment links/bank rail,
+│   │       │                          # vault transfers, settlement idempotency, bank-line review gate
+│   │       └── 0010_audit_logs.py     # append-only audit_logs table + audit_actor_type/audit_outcome enums
 │   ├── scripts/
 │   │   ├── ingest_kra_docs.py         # Seeds knowledge_base with KRA docs via pgvector
 │   │   └── kra_docs/                  # Source KRA regulation documents
@@ -68,6 +71,8 @@ Finguard-3.0/
 │       │   ├── exceptions.py          # Custom exception classes + handlers
 │       │   ├── logging.py             # structlog configuration
 │       │   ├── metrics.py             # Prometheus custom collectors
+│       │   ├── request_context.py     # RequestContextMiddleware — per-request id + client IP
+│       │   │                          # (contextvars), bound into structlog; feeds the audit trail
 │       │   └── security.py            # JWT encode/decode + direct bcrypt helpers (no passlib)
 │       ├── domains/
 │       │   ├── identity/              # Auth domain
@@ -95,7 +100,7 @@ Finguard-3.0/
 │       │   │   ├── repository.py      # incl. InvoiceEventRepository (append-only)
 │       │   │   ├── schemas.py         # ReceiptExpenseCreate + finance request/response models
 │       │   │   └── types.py           # VaultType (MPESA | CASH) dual-vault enum
-│       │   └── intelligence/          # AI/ML domain
+│       │   ├── intelligence/          # AI/ML domain
 │       │       ├── llm_client.py      # back-compat facade re-exporting the llm/ package surface
 │       │       ├── llm/               # provider-agnostic LLM layer:
 │       │       │                      #   base.py (BaseLLMClient), gemini.py (impl),
@@ -140,6 +145,11 @@ Finguard-3.0/
 │       │           ├── event_publisher.py # RabbitMQ publish tool
 │       │           ├── http_caller.py     # httpx tool; SSRF guard (_assert_public_url); no redirects
 │       │           └── mongo_reader.py    # MongoDB read tool
+│       │   └── audit/                  # Audit / activity-log domain
+│       │       ├── models.py          # AuditLog ORM (append-only); AuditAction/ActorType/Outcome enums
+│       │       ├── service.py         # AuditService.record / record_safe / record_user_action / query / kpis
+│       │       ├── router.py          # /api/v1/audit (list+filters, /kpis, /{id}); RBAC: RequireAuditRead
+│       │       └── schemas.py         # AuditLogResponse, AuditLogPage, AuditKpis
 │       ├── infrastructure/
 │       │   ├── database/
 │       │   │   ├── postgres.py        # AsyncSessionLocal, Base, init_db (SELECT 1 only — no create_all);
@@ -186,7 +196,9 @@ Finguard-3.0/
 │       │       ├── budgets/page.tsx
 │       │       ├── transactions/page.tsx
 │       │       ├── receivables/page.tsx
-│       │       ├── operations/page.tsx # Operations control surface (live System Health card)
+│       │       ├── operations/
+│       │       │   ├── page.tsx       # Operations control surface (live System Health + Activity Log cards)
+│       │       │   └── logs/page.tsx  # Audit / activity-log view (RequirePermission minRole="MANAGER")
 │       │       └── payables/
 │       │           ├── page.tsx
 │       │           ├── queue/page.tsx  # Approval queue (static mock — no backend endpoint yet)
@@ -217,13 +229,24 @@ Finguard-3.0/
 │       │   │   │   ├── StrategicForecast.tsx
 │       │   │   │   ├── CreditStrategy.tsx
 │       │   │   │   ├── TaxLiabilityDonut.tsx
-│       │   │   │   └── BankabilityScoreRadar.tsx
+│       │   │   │   ├── BankabilityScoreRadar.tsx
+│       │   │   │   └── genui/            # Agent-agnostic GenUI widget library (registered in GenUiRegistry)
+│       │   │   │       ├── _icons.ts     # curated lucide resolver (JSON string name → icon)
+│       │   │   │       ├── SemiCircleGaugeCard.tsx      # A: semi-circle gauge + centre %
+│       │   │   │       ├── ConcentricProgressCard.tsx   # A: concentric progress rings + legend
+│       │   │   │       ├── ProcessTrackerCard.tsx       # A: progress arc + verification checklist
+│       │   │   │       ├── MiniTrendSparkline.tsx       # B: key value + filled area wave
+│       │   │   │       ├── MultiVariantBarChart.tsx     # B: grouped/stacked bars over time
+│       │   │   │       ├── UserDiagnosticCard.tsx       # B: avatar + badge array + activity dots
+│       │   │   │       ├── NeomorphicKPICard.tsx        # C: neomorphic KPI surface
+│       │   │   │       └── TransactionHistoryList.tsx   # C: tabular log + status pills
 │       │   │   ├── invoices/
 │       │   │   │   └── InvoiceGenerator.tsx   # Wired to real backend (Agent A extraction + CRM + finance API)
 │       │   │   ├── transactions/
 │       │   │   │   └── ReceiptScanner.tsx     # Upload receipt → scanReceipt() OCR → review → createReceiptExpense()
 │       │   │   ├── operations/
-│       │   │   │   └── SystemHealthCard.tsx   # Live /health/ready poll (Postgres/Redis/Mongo/RabbitMQ; RabbitMQ soft)
+│       │   │   │   ├── SystemHealthCard.tsx   # Live /health/ready poll (Postgres/Redis/Mongo/RabbitMQ; RabbitMQ soft)
+│       │   │   │   └── ActivityLog.tsx        # Audit trail view: KPI tiles + action/outcome filters + paginated table + detail drawer
 │       │   │   ├── alerts/
 │       │   │   ├── payables/
 │       │   │   └── receivables/
@@ -241,6 +264,7 @@ Finguard-3.0/
 │       │   │   │                      # scanReceipt (POST /intelligence/receipts/scan);
 │       │   │   │                      # KeyFinding, GenUIPayload, ExtractedInvoice, ReceiptScanResult interfaces
 │       │   │   ├── health.ts          # getReadiness() → GET /health/ready (accepts 200 + 503)
+│       │   │   ├── audit.ts           # listAuditLogs / getAuditKpis / getAuditLog (+ hand-written types — see §OpenAPI note)
 │       │   │   └── auth-client.ts     # login, logout (revokes refresh token), getMe()
 │       │   ├── auth/
 │       │   │   ├── auth-context.tsx   # Hydrates user via GET /me (not JWT decode); proactive refresh
@@ -249,7 +273,8 @@ Finguard-3.0/
 │       │   │   ├── useAuth.ts
 │       │   │   ├── useRole.ts
 │       │   │   ├── useFinanceData.ts  # useInvoices/useExpenses/useBudgets/useCustomers (live dashboard data)
-│       │   │   └── useHealth.ts       # useReadiness() — polls /health/ready (15s)
+│       │   │   ├── useHealth.ts       # useReadiness() — polls /health/ready (15s)
+│       │   │   └── useAuditLog.ts     # useAuditLogs/useAuditKpis TanStack Query hooks (filters + paging)
 │       │   └── utils/cn.ts
 │       └── types/
 │           ├── index.ts
@@ -587,6 +612,30 @@ finguard.knowledge_base (
 )
 ```
 
+### PostgreSQL — Audit Domain
+
+```
+finguard.audit_logs (                  -- append-only activity trail; never UPDATE/DELETE
+  id               UUID PK,
+  actor_type       AuditActorType ENUM (user | agent | system),
+  actor_id         UUID FK → users (nullable, indexed),  -- null for agent/system actors; FK left
+                                       -- ON DELETE-untouched so removing a user never erases history
+  actor_label      VARCHAR(255),       -- denormalised email / agent name / service id (stays legible)
+  action           VARCHAR(100) (indexed),  -- '<resource>.<verb>' (e.g. auth.login, alert.resolved).
+                                       -- String, not a PG enum: new verbs need no migration. AuditAction
+                                       -- enum is the registry of well-known values for greppable call sites
+  resource_type    VARCHAR(50),
+  resource_id      VARCHAR(100),
+  outcome          AuditOutcome ENUM (success | failure | denied) DEFAULT success,
+  ip_address       VARCHAR(45),        -- IPv6-sized; from RequestContextMiddleware
+  request_id       VARCHAR(64),        -- correlates the audit row with structlog/operational logs
+  metadata_payload JSONB DEFAULT '{}',
+  created_at       TIMESTAMPTZ (indexed)
+)
+```
+
+Written **only** via `AuditService` at explicit service/router call sites (not middleware) — `record` (commits its own row, after the business action), `record_safe` (best-effort, never raises — for post-commit paths where audit failure must not 500), and `record_user_action` (the common "authenticated user did X" wrapper). Request context (ip, request id) is attached automatically from `core/request_context.py`. Currently instrumented: identity login success/failure, alert created/resolved.
+
 ### MongoDB — Collections
 
 | Collection | Purpose |
@@ -922,6 +971,16 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/conversation` | `intelligence:read` | Dual-path; stores task_owner for IDOR guard |
 | GET | `/conversation/{session_id}/status` | `intelligence:read` | Owner-verified status poll |
 
+### Audit — `/api/v1/audit`
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `` | `audit:read` | Filtered, paginated, most-recent-first activity trail. Filters: `actor_id`, `action`, `resource_type`, `resource_id`, `outcome`, `since`, `until`, `limit` (≤200), `offset`. Returns `AuditLogPage` (`items`, `total`, `limit`, `offset`) |
+| GET | `/kpis` | `audit:read` | Summary counts for the dashboard cards (`total`, `last_24h`, `failures_last_24h`, `denied_last_24h`) |
+| GET | `/{audit_id}` | `audit:read` | A single audit entry (full metadata payload) by id |
+
+`audit:read` is a manager+ permission (oversight of who-did-what across domains).
+
 ### Special Endpoints
 
 | Method | Path | Auth | Description |
@@ -956,7 +1015,8 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | `/dashboard/payables` | AP: DepartmentBudgets (live `useBudgets`), RecentOutgoing (live `useExpenses`), AgentIntegrations |
 | `/dashboard/payables/queue` | Approval queue UI (invoice review states) — static mock; no backend approval endpoint yet |
 | `/dashboard/payables/alerts` | Budget alerts |
-| `/dashboard/operations` | Operations control surface — live System Health card (`/health/ready` poll) + links to queue/alerts; Audit Trail card pending |
+| `/dashboard/operations` | Operations control surface — live System Health card (`/health/ready` poll) + an Activity Log card linking to the audit trail + links to queue/alerts |
+| `/dashboard/operations/logs` | Audit / activity-log view (`ActivityLog`): KPI tiles, action/outcome filters, paginated table, detail drawer. Gated by `RequirePermission minRole="MANAGER"` |
 
 ### Chat Pipeline (AgentChatWindow)
 
@@ -982,9 +1042,50 @@ User types free-text description
       createInvoice(body)     — POST /finance/invoices
 ```
 
-### GenUI Registry
+### GenUI Library (generative UI)
 
-| component_id | Component | Agent | Chart type |
+The "GenUI library" is the frontend layer that turns a backend agent's structured
+`GenUIPayload` into a live, lazily-loaded React visualization inside the chat
+stream — instead of the agent returning prose, it names a component and supplies
+its props. All pieces live under `components/dashboard/intelligence/`. The
+backend half of the contract (`CompositeGenUIPayload` → `to_gen_ui_payload()`) is
+in [§6 GenUI Payload Contract](#genui-payload-contract); the design rationale is
+in Design Patterns 17–19.
+
+**Payload contract** (`GenUIPayload` in `lib/api/intelligence.ts`):
+
+```ts
+interface KeyFinding { metric: string; value: string }        // composite KPI badge
+interface GenUIPayload {
+  component_id: string;                  // must match a key in GenUiRegistry
+  props: Record<string, unknown>;        // forwarded verbatim to the component
+  fallback_text: string;                 // shown when the component is unknown / crashes
+  // Composite agents (D/E/F/G) also embed `findings: KeyFinding[]` inside `props`.
+}
+```
+
+An agent turn surfaces `gen_ui_payloads: GenUIPayload[]` on the status response;
+`AgentChatWindow` renders each one as its own block (bypassing the markdown text
+renderer).
+
+**Modules**
+
+| File | Role |
+|---|---|
+| `GenUiRegistry.tsx` | `Record<component_id, React.ElementType>` — each entry is a `next/dynamic` import (`ssr: false`, `RegistrySkeleton` loading state) so an unused chart bundle never blocks the stream. The single source of truth for what the backend may name |
+| `AgentChatWindow.tsx` | Maps `gen_ui_payloads[]` → blocks. **Render-path decision**: if `payload.props.findings` is a non-empty array → `CompositeInsightBlock`; otherwise → the inline `GenUiBlock` |
+| `CompositeInsightBlock.tsx` | Two-column layout — `FindingBadge` KPI panel (left/top) + the registry component (right). Strips `findings` out of the props it forwards; wraps the viz in `GenUiBoundary`; unknown `component_id` → `FallbackCard` |
+| `GenUiBlock` (in `AgentChatWindow.tsx`) | Legacy/simple path — resolves the registry and mounts the component; unknown `component_id` → plain-text fallback card so the bubble never blanks |
+| `GenUiBoundary.tsx` | React class **error boundary**; on a render crash shows `component_id` + `fallback_text` + findings as text — a broken chart degrades, it never blanks the chat |
+| `CompositeInsightSkeleton.tsx` | Two-panel `animate-pulse` placeholder shown while the turn is still polling (`isPending`) |
+
+**Registry contract** — every registered component must accept a `canAct?: boolean`
+prop (RBAC gating of interactive buttons; threaded from the chat root). The
+registry key must exactly equal the backend `component_id`.
+
+**Registered components**
+
+| component_id | Component | Agent | Render |
 |---|---|---|---|
 | `CashFlowChart` | `command-center/CashFlowChart.tsx` | D | Recharts `ComposedChart` (area + line) |
 | `BudgetWatchdogMeter` | `command-center/BudgetWatchdogMeter.tsx` | E | Recharts `RadialBarChart` half-gauge |
@@ -993,6 +1094,29 @@ User types free-text description
 | `DuplicateInvoiceAlert` | `alerts/DuplicateInvoiceAlert.tsx` | E (legacy) | Alert card |
 | `AuditorInsights` | `intelligence/AuditorInsights.tsx` | F (legacy) | Insight card |
 | `CreditStrategy` | `intelligence/CreditStrategy.tsx` | G (legacy) | Score card |
+
+**General-purpose widget library** (`intelligence/genui/`) — agent-agnostic, fully prop-driven building blocks an agent can name in any payload. All accept `canAct?: boolean`, render an `EmptyState` when their data array/value is absent, and take icons by string name via the curated `genui/_icons.ts` resolver:
+
+| component_id | File | Category | Render |
+|---|---|---|---|
+| `SemiCircleGaugeCard` | `genui/SemiCircleGaugeCard.tsx` | A · callout | SVG semi-circle gauge + centred % over capacity track |
+| `ConcentricProgressCard` | `genui/ConcentricProgressCard.tsx` | A · micro-widget | Up to 3 concentric SVG progress rings + legend |
+| `ProcessTrackerCard` | `genui/ProcessTrackerCard.tsx` | A · micro-widget | Circular progress arc + verification checklist |
+| `MiniTrendSparkline` | `genui/MiniTrendSparkline.tsx` | B · viz | Key value + smooth filled SVG area wave (no axes) |
+| `MultiVariantBarChart` | `genui/MultiVariantBarChart.tsx` | B · viz | Grouped/stacked vertical bars over a time axis |
+| `UserDiagnosticCard` | `genui/UserDiagnosticCard.tsx` | B · viz | Avatar block + inline badge array + activity dots |
+| `NeomorphicKPICard` | `genui/NeomorphicKPICard.tsx` | C · layout | Soft double-shadow surface: title + icon slot + large metric |
+| `TransactionHistoryList` | `genui/TransactionHistoryList.tsx` | C · container | Tabular log: item/icon, date, type, amount, status pill |
+
+Each widget file documents its backend `props` JSON in an `@example` header comment.
+
+**Adding a component**
+
+1. Build the component in the appropriate domain folder; accept `canAct?: boolean` for any action buttons.
+2. Register it in `GenUiRegistry.tsx` with `next/dynamic` — the **key must equal the backend `component_id`**.
+3. Emit a matching `CompositeGenUIPayload` (`component_id` + `props` + `fallback_text`, plus `findings` for the composite two-column layout) from the agent.
+
+No central switch statement to edit — the registry resolution + boundary handle unknown ids and render crashes gracefully, so a missing or broken component degrades to `fallback_text` rather than erroring.
 
 ### Utilities
 
@@ -1006,6 +1130,8 @@ User types free-text description
 | `lib/api/auth-client.ts` | `login`, `logout` (sends refresh token to revoke), `getMe()` |
 | `lib/hooks/useFinanceData.ts` | TanStack Query hooks `useInvoices`/`useExpenses`/`useBudgets`/`useCustomers` over finance+CRM REST; centralised `financeKeys` for cache invalidation. Source of the live dashboard widgets |
 | `lib/hooks/useHealth.ts` | `useReadiness()` — polls `/health/ready` every 15s (10s `staleTime`); backs the Operations System Health card |
+| `lib/api/audit.ts` | `listAuditLogs`, `getAuditKpis`, `getAuditLog` over `/api/v1/audit`. **Types are hand-written here, not derived from the generated `schema.d.ts`** (escape-hatch pattern — see the OpenAPI sync-types gate) |
+| `lib/hooks/useAuditLog.ts` | `useAuditLogs` / `useAuditKpis` TanStack Query hooks (filter + paging state); backs the `ActivityLog` view |
 | `lib/auth/auth-context.tsx` | React context; hydrates `user` via `GET /me` (not JWT decode); proactive refresh on expiry |
 | `lib/auth/token-manager.ts` | reads `fg_csrf` (CSRF header source) + `fg_session` markers; clears them on logout. Access/refresh tokens are HttpOnly cookies (not JS-readable) |
 | `lib/hooks/useRole.ts` | `hasRole(minRole)` RBAC helper using 5-tier hierarchy |
@@ -1098,24 +1224,28 @@ Both tokens carry a `jti` (JWT ID). On logout or refresh rotation, the consumed 
 
 ```python
 class Permission(enum.StrEnum):
-    FINANCE_READ  = "finance:read"
-    FINANCE_WRITE = "finance:write"
-    CRM_READ      = "crm:read"
-    CRM_WRITE     = "crm:write"
+    FINANCE_READ      = "finance:read"
+    FINANCE_WRITE     = "finance:write"
+    FINANCE_RECONCILE = "finance:reconcile"   # import settlements / auto-reconcile — manager+
+    CRM_READ          = "crm:read"
+    CRM_WRITE         = "crm:write"
     INTELLIGENCE_READ = "intelligence:read"
     INTELLIGENCE_ACT  = "intelligence:act"
-    USER_MANAGE   = "user:manage"
+    USER_MANAGE       = "user:manage"
+    AUDIT_READ        = "audit:read"           # read the cross-domain audit trail — manager+
 ```
+
+Permissions accumulate up the role hierarchy (`viewer ⊂ accountant ⊂ manager ⊂ admin ⊂ owner`):
 
 | Role | Permissions |
 |---|---|
 | `viewer` | `finance:read`, `crm:read`, `intelligence:read` |
 | `accountant` | All read + `finance:write`, `crm:write`, `intelligence:act` |
-| `manager` | Same as accountant |
-| `admin` | All permissions |
+| `manager` | All accountant + `finance:reconcile`, `audit:read` (reconciliation authority + audit oversight — separation of duties) |
+| `admin` | All manager + `user:manage` |
 | `owner` | All permissions |
 
-`require_permission(*required)` in `dependencies.py` returns an async FastAPI dependency that raises `ForbiddenError (403)` if the authenticated user lacks any required permission. Ready-made aliases: `RequireFinanceRead`, `RequireFinanceWrite`, `RequireCrmRead`, `RequireCrmWrite`, `RequireIntelligenceRead`, `RequireIntelligenceAct`, `RequireUserManage`.
+`require_permission(*required)` in `dependencies.py` returns an async FastAPI dependency that raises `ForbiddenError (403)` if the authenticated user lacks any required permission. Ready-made aliases: `RequireFinanceRead`, `RequireFinanceWrite`, `RequireCrmRead`, `RequireCrmWrite`, `RequireIntelligenceRead`, `RequireIntelligenceAct`, `RequireUserManage`, `RequireAuditRead`.
 
 ### Login Lockout
 
@@ -1355,6 +1485,14 @@ Every graph node is wrapped at registration by `orchestrator._tracked(name, node
 `@traced_tool(name)` (`domains/intelligence/observability.py`) wraps the agents' high-risk tool calls — read-only Text-to-SQL (`execute_readonly_sql`), outbound HTTP / Daraja (`_send_with_retry`, decorated **above** `@retry` so one observation covers the whole retried call), and pgvector RAG (`get_relevant_tax_rules`) — recording `agent_tool_duration_seconds{tool,agent,status}`. The histogram's per-`status` `_count` gives both latency and a success/error breakdown for alerting; `agent` reuses the `current_agent_id` contextvar (so "Agent D's SQL is slow" / "the Daraja call started failing" become visible). Duration is observed even on failure (a hung call → a long `error` sample) and the original exception always re-raises — telemetry is transparent to the caller.
 **Files**: `domains/intelligence/observability.py`, `tools/sql_executor.py`, `tools/http_caller.py`, `services/tax_rag_service.py`, `core/metrics.py`
 
+### 28. Append-Only Audit Trail (explicit service-layer capture)
+A durable `audit_logs` table records meaningful system activity (who/what/when/outcome). Writes go **only** through `AuditService` at explicit service/router call sites — deliberately *not* a catch-all middleware, so each entry carries business-meaningful `action`/`resource`/`metadata` rather than raw HTTP noise, and uninteresting traffic is never logged. `action` is a `String` column (not a PG enum) so new verbs land without a migration; the `AuditAction` enum is the registry of well-known values to keep call sites greppable. `record` commits its own row *after* the business action succeeds; `record_safe` is the best-effort variant for post-commit paths where a failed audit write must never turn a successful action into a 500 (it logs and returns `None`). Rows are never updated or deleted — immutability is the point. Reads are manager+ (`audit:read`). Request context (client IP + request id) is attached automatically (Pattern 29), so the trail records the source without threading a `Request` through every call.
+**Files**: `domains/audit/service.py`, `domains/audit/models.py`, `domains/audit/router.py`
+
+### 29. Per-Request Context (request id + client IP correlation)
+`RequestContextMiddleware` (`core/request_context.py`) stamps every request with a `request_id` (honouring an inbound `X-Request-ID` from nginx / a caller, else a fresh uuid4) and the resolved client IP, stored in `contextvars` so any code deep in the stack — notably `AuditService.record` — can read them without parameter threading. The id is bound into structlog (so every operational log line in the request carries it) **and** persisted on each audit row, so JSON logs and durable audit entries share one correlatable `request_id`. It is also echoed back in the response `X-Request-ID` header for client-side correlation. Added **last** in `main.py` so it runs outermost — context is set before any other layer needs it. The client-IP resolver mirrors `identity.router._client_ip` (left-most `X-Forwarded-For`, else direct peer) so audit rows and the login-lockout key agree on "the client" (see Pattern 23 — Trusted Client IP).
+**Files**: `core/request_context.py`, `src/main.py`
+
 ---
 
 ## 15. Celery Tasks
@@ -1502,4 +1640,4 @@ ENABLE_OUTBOX_PROJECTOR=true         # Starts PostgreSQL outbox → MongoDB proj
 
 ---
 
-*Last updated: 2026-06-17*
+*Last updated: 2026-06-22*

@@ -53,7 +53,30 @@ def upgrade() -> None:
 
     # Create every table/enum/index/FK exactly as the ORM defines them. create_all
     # topologically sorts by FK dependency, so users is created before agent_runs.
-    _metadata().create_all(bind)
+    #
+    # EXCLUDE tables introduced by LATER revisions so a fresh `alembic upgrade head`
+    # doesn't pre-create them here and then collide when their own revision runs.
+    # ``create_all`` reflects the *current* ORM, which has since grown; these are
+    # owned by 0003 (alerts), 0005 (vault_transfers) and 0010 (audit_logs). Their
+    # dedicated revisions create them. (Columns added to *existing* tables by later
+    # revisions are handled idempotently in those revisions.)
+    #
+    # NOTE: every NEW table added by a future revision must be added here (or that
+    # revision must create it idempotently). This list-maintenance is the cost of
+    # the create_all baseline; the durable fix is an explicit-DDL 0001 (see TODO).
+    md = _metadata()
+    _deferred = {"alerts", "vault_transfers", "audit_logs"}
+    md.create_all(bind, tables=[t for t in md.sorted_tables if t.name not in _deferred])
+
+    # create_all still emits the ENUM types used by the deferred tables (enum DDL
+    # is metadata-wide, not gated by ``tables=``). Drop them so the owning revisions
+    # — 0003 (alerts) and 0010 (audit_logs) — create them cleanly. Safe: nothing
+    # between here and those revisions references these types.
+    for _enum in (
+        "alert_type", "alert_severity", "alert_status",
+        "audit_actor_type", "audit_outcome",
+    ):
+        op.execute(f"DROP TYPE IF EXISTS {_enum}")
 
     # ── Refinements not expressed in the ORM ─────────────────────────────────
     # (1) Swap the model's ivfflat vector index for HNSW (works on empty tables,

@@ -96,6 +96,80 @@ const GenUiRegistry: Record<string, React.ElementType> = {
       ),
     { ssr: false, loading: () => <RegistrySkeleton /> }
   ),
+
+  // ── General-purpose GenUI widget library (components/dashboard/intelligence/genui) ──
+
+  /** A · semi-circle gauge with a bold centre percentage over a capacity track */
+  SemiCircleGaugeCard: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/SemiCircleGaugeCard").then(
+        (m) => ({ default: m.SemiCircleGaugeCard })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** A · up to three concentric progress rings + legend */
+  ConcentricProgressCard: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/ConcentricProgressCard").then(
+        (m) => ({ default: m.ConcentricProgressCard })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** A · task status + circular progress arc + verification checklist */
+  ProcessTrackerCard: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/ProcessTrackerCard").then(
+        (m) => ({ default: m.ProcessTrackerCard })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** B · key value + smooth filled area sparkline (no axes) */
+  MiniTrendSparkline: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/MiniTrendSparkline").then(
+        (m) => ({ default: m.MiniTrendSparkline })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** B · grouped or stacked vertical bars across a time axis */
+  MultiVariantBarChart: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/MultiVariantBarChart").then(
+        (m) => ({ default: m.MultiVariantBarChart })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** B · avatar profile + inline badge array + recent-activity dots */
+  UserDiagnosticCard: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/UserDiagnosticCard").then(
+        (m) => ({ default: m.UserDiagnosticCard })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** C · neomorphic KPI surface: title + icon slot + large metric + delta */
+  NeomorphicKPICard: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/NeomorphicKPICard").then(
+        (m) => ({ default: m.NeomorphicKPICard })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** C · tabular transaction log with colour-coded status pills */
+  TransactionHistoryList: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/TransactionHistoryList").then(
+        (m) => ({ default: m.TransactionHistoryList })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
 };
 
 export default GenUiRegistry;
