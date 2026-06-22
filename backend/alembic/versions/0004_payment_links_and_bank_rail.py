@@ -36,26 +36,31 @@ def upgrade() -> None:
 
     op.alter_column("payments", "recorded_by", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
 
-    op.add_column(
-        "payments",
-        sa.Column(
-            "mpesa_trans_id",
-            postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("mpesa_transactions.id"),
-            nullable=True,
-        ),
-    )
-    op.add_column(
-        "payments",
-        sa.Column(
-            "bank_line_id",
-            postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("bank_statement_lines.id"),
-            nullable=True,
-        ),
-    )
-    op.create_index("ix_payments_mpesa_trans_id", "payments", ["mpesa_trans_id"])
-    op.create_index("ix_payments_bank_line_id", "payments", ["bank_line_id"])
+    # Guard against columns the 0001 baseline already built from the current ORM
+    # (so a fresh `alembic upgrade head` no-ops here while an old DB gets them).
+    cols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("payments")}
+    if "mpesa_trans_id" not in cols:
+        op.add_column(
+            "payments",
+            sa.Column(
+                "mpesa_trans_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("mpesa_transactions.id"),
+                nullable=True,
+            ),
+        )
+        op.create_index("ix_payments_mpesa_trans_id", "payments", ["mpesa_trans_id"])
+    if "bank_line_id" not in cols:
+        op.add_column(
+            "payments",
+            sa.Column(
+                "bank_line_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("bank_statement_lines.id"),
+                nullable=True,
+            ),
+        )
+        op.create_index("ix_payments_bank_line_id", "payments", ["bank_line_id"])
 
 
 def downgrade() -> None:

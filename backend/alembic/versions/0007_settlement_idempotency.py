@@ -32,23 +32,34 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "bank_statement_lines",
-        sa.Column("external_ref", sa.String(255), nullable=False),
-    )
-    op.add_column(
-        "bank_statement_lines",
-        sa.Column("imported_by", postgresql.UUID(as_uuid=True), nullable=True),
-    )
-    op.create_unique_constraint(
-        "uq_bank_statement_lines_external_ref", "bank_statement_lines", ["external_ref"]
-    )
+    # Guard against artifacts the 0001 baseline already built from the current ORM,
+    # so a fresh `alembic upgrade head` no-ops while an old DB gets the changes.
+    insp = sa.inspect(op.get_bind())
+    bank_cols = {c["name"] for c in insp.get_columns("bank_statement_lines")}
+    if "external_ref" not in bank_cols:
+        op.add_column(
+            "bank_statement_lines",
+            sa.Column("external_ref", sa.String(255), nullable=False),
+        )
+        op.create_unique_constraint(
+            "uq_bank_statement_lines_external_ref", "bank_statement_lines", ["external_ref"]
+        )
+    if "imported_by" not in bank_cols:
+        op.add_column(
+            "bank_statement_lines",
+            sa.Column("imported_by", postgresql.UUID(as_uuid=True), nullable=True),
+        )
 
-    # Replace the plain provenance indexes (0004) with UNIQUE constraints.
-    op.drop_index("ix_payments_mpesa_trans_id", table_name="payments")
-    op.drop_index("ix_payments_bank_line_id", table_name="payments")
-    op.create_unique_constraint("uq_payments_mpesa_trans_id", "payments", ["mpesa_trans_id"])
-    op.create_unique_constraint("uq_payments_bank_line_id", "payments", ["bank_line_id"])
+    # Replace the plain provenance indexes (0004) with UNIQUE constraints — only on
+    # DBs where 0004 created those plain indexes (a fresh baseline already made the
+    # columns UNIQUE via the current ORM).
+    pay_idx = {ix["name"] for ix in insp.get_indexes("payments")}
+    if "ix_payments_mpesa_trans_id" in pay_idx:
+        op.drop_index("ix_payments_mpesa_trans_id", table_name="payments")
+        op.create_unique_constraint("uq_payments_mpesa_trans_id", "payments", ["mpesa_trans_id"])
+    if "ix_payments_bank_line_id" in pay_idx:
+        op.drop_index("ix_payments_bank_line_id", table_name="payments")
+        op.create_unique_constraint("uq_payments_bank_line_id", "payments", ["bank_line_id"])
 
 
 def downgrade() -> None:
