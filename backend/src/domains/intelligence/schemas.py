@@ -71,6 +71,35 @@ class GenUIPayload(BaseModel):
         return v
 
 
+class AgentHOutput(BaseModel):
+    """Structured output for Agent H (Financial Advisor), used as the Gemini 2.5
+    Flash ``response_schema`` for native structured-output generation.
+
+    The advisor returns a conversational ``narrative_response`` and, when a
+    figure is better shown than described, an optional list of ``ui_widgets``
+    (Generative UI components from the frontend registry). The agent node folds
+    ``ui_widgets`` into the orchestrator's ``gen_ui_payloads`` so the chat client
+    renders them inline beneath the narrative.
+    """
+
+    narrative_response: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "The advisor's natural-language guidance for the SME, in Markdown. "
+            "This is always shown to the user; never leave it empty."
+        ),
+    )
+    ui_widgets: list[GenUIPayload] = Field(
+        default_factory=list,
+        description=(
+            "Optional Generative UI widgets to render alongside the narrative. "
+            "Each widget's component_id MUST be one of the components defined in "
+            "the GenUI catalog. Omit entirely when no visual aid adds value."
+        ),
+    )
+
+
 class KeyFinding(BaseModel):
     """A single key metric distilled from agent analysis for GenUI metric badges."""
 

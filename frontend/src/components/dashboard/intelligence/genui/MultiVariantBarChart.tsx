@@ -3,18 +3,6 @@
 // ─── MultiVariantBarChart ─────────────────────────────────────────────────────
 // Category B · Specialized Visualization. Side-by-side grouped (or stacked)
 // vertical bars across a time axis, with clean contrasting series fills.
-//
-// @example props
-// {
-//   "title": "Revenue vs Expenses",
-//   "categories": ["Jan", "Feb", "Mar", "Apr"],
-//   "series": [
-//     { "name": "Revenue",  "color": "#6b38d4", "values": [120, 150, 138, 172] },
-//     { "name": "Expenses", "color": "#0ea5e9", "values": [80, 95, 102, 110] }
-//   ],
-//   "stacked": false
-// }
-
 import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────

@@ -3,16 +3,6 @@
 // ─── MiniTrendSparkline ───────────────────────────────────────────────────────
 // Category B · Specialized Visualization. Primary key value paired with a smooth,
 // filled SVG area wave. No axes or grid lines — maximum simplicity.
-//
-// @example props
-// {
-//   "label": "Net Cash Flow",
-//   "value": "$21,650",
-//   "data": [12, 18, 15, 22, 19, 27, 24, 31, 28, 35],
-//   "color": "#6b38d4",
-//   "deltaPct": 8.4
-// }
-
 import { useId } from "react";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";

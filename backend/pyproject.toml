@@ -87,6 +87,10 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM"]
 # where wrapping to 100 cols hurts readability more than it helps. E501 stays
 # strictly enforced in src/ where line length aids production readability.
 "tests/**/*.py" = ["E501"]
+# Prompt modules are natural-language catalogs/few-shot examples (often verbatim
+# JSON), where wrapping to 100 cols would corrupt the illustrative payloads the
+# LLM is shown. Line length is not a readability aid for prose prompts.
+"src/domains/intelligence/prompts/*.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
