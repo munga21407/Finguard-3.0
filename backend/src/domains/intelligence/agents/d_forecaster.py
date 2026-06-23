@@ -142,7 +142,7 @@ async def _fetch_upcoming_invoices(
             SUM(balance_due::float)  AS total_due
         FROM invoices
         WHERE status IN ('SENT', 'OVERDUE', 'PARTIALLY_PAID')
-          AND due_date BETWEEN NOW() AND NOW() + :interval::interval
+          AND due_date BETWEEN NOW() AND NOW() + CAST(:interval AS interval)
           AND balance_due > 0
         GROUP BY due_date::date
         ORDER BY due_date ASC

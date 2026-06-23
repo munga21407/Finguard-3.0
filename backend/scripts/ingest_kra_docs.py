@@ -246,11 +246,16 @@ async def _upsert_chunks(
     Insert chunks into finguard.knowledge_base with ON CONFLICT DO NOTHING.
     Returns (inserted_count, skipped_count).
     """
+    # Use CAST(:x AS type) rather than the `:x::type` shorthand: SQLAlchemy's
+    # text() bind-parameter scanner does not recognise a ``:name`` placeholder
+    # when it is immediately followed by ``::`` (the postgres cast operator), so
+    # ``:embedding::vector`` leaves ``:embedding`` unbound and asyncpg raises a
+    # syntax error. CAST(...) keeps the placeholder unambiguous.
     insert_sql = text("""
         INSERT INTO finguard.knowledge_base
             (document_title, section_key, content, vector_embeddings, metadata_payload)
         VALUES
-            (:title, :section_key, :content, :embedding::vector, :metadata::jsonb)
+            (:title, :section_key, :content, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
         ON CONFLICT (document_title, section_key) DO NOTHING
     """)
 
