@@ -208,11 +208,12 @@ async def _run_batch_classification() -> dict[str, Any]:
             logger.error("Batch classification: Gemini call failed", error=str(exc))
             return {"status": "gemini_error", "classified": 0, "error": str(exc)}
 
-        # Step 3 — persist
+        # Step 3 — persist.  CAST(:id AS uuid) not :id::uuid — text()'s bind
+        # scanner mis-parses a ``:name`` immediately followed by ``::``.
         update_sql = text("""
             UPDATE ledger_entries
             SET category = :category
-            WHERE id = :id::uuid
+            WHERE id = CAST(:id AS uuid)
         """)
         for clf in classifications:
             await session.execute(
@@ -589,7 +590,7 @@ async def _fetch_customer_debit_amounts(session: Any, customer_id: str) -> list[
             FROM ledger_entries
             WHERE transaction_type = 'debit'
               AND category IS NOT NULL
-              AND account_id = :cid::uuid
+              AND account_id = CAST(:cid AS uuid)
               AND created_at >= NOW() - make_interval(days => :days)
             ORDER BY created_at DESC
         """),
