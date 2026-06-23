@@ -378,6 +378,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report Catalog
+         * @description List the CoreReports with a live ready/no_data status (drives the menu).
+         */
+        get: operations["report_catalog_api_v1_finance_reports_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/reports/{report_type}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Generate Report
+         * @description Generate one financial report (P&L / cash-flow / tax) from live data.
+         */
+        get: operations["generate_report_api_v1_finance_reports__report_type__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/reconciliation/bank-statements/import": {
         parameters: {
             query?: never;
@@ -1004,6 +1044,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/intelligence/admin/knowledge-base/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Knowledge Base
+         * @description Ingest an uploaded KRA document into the Tax RAG knowledge base.
+         *
+         *     Guarded by ``USER_MANAGE``. Validates the upload is a UTF-8 ``.txt``/``.md``
+         *     document under 5 MB, then runs it through the shared chunk → embed → pgvector
+         *     upsert pipeline. Idempotent: re-uploading the same content reports the
+         *     sections as ``skipped`` (ON CONFLICT DO NOTHING).
+         */
+        post: operations["ingest_knowledge_base_api_v1_intelligence_admin_knowledge_base_ingest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/alerts": {
         parameters: {
             query?: never;
@@ -1502,6 +1567,11 @@ export interface components {
              */
             created_at: string;
         };
+        /** Body_ingest_knowledge_base_api_v1_intelligence_admin_knowledge_base_ingest_post */
+        Body_ingest_knowledge_base_api_v1_intelligence_admin_knowledge_base_ingest_post: {
+            /** File */
+            file: string;
+        };
         /** Body_scan_receipt_api_v1_intelligence_receipts_scan_post */
         Body_scan_receipt_api_v1_intelligence_receipts_scan_post: {
             /** File */
@@ -1754,6 +1824,32 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** FinancialReport */
+        FinancialReport: {
+            report_type: components["schemas"]["ReportType"];
+            /** Title */
+            title: string;
+            /**
+             * Currency
+             * @default KES
+             */
+            currency: string;
+            /** Period Days */
+            period_days: number;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Has Data */
+            has_data: boolean;
+            /** Summary */
+            summary: components["schemas"]["ReportMetric"][];
+            /** Lines */
+            lines: components["schemas"]["ReportLine"][];
+            /** Series */
+            series: components["schemas"]["ReportSeriesPoint"][];
         };
         /**
          * GenUiErrorReport
@@ -2018,6 +2114,23 @@ export interface components {
             notes?: string | null;
             /** Paid At */
             paid_at?: string | null;
+        };
+        /**
+         * KnowledgeIngestResponse
+         * @description Result of an admin knowledge-base document upload.
+         *
+         *     ``inserted`` vs ``skipped`` reflects the ON CONFLICT DO NOTHING upsert — a
+         *     re-uploaded document whose sections already exist reports ``skipped``.
+         */
+        KnowledgeIngestResponse: {
+            /** Document Title */
+            document_title: string;
+            /** Chunks */
+            chunks: number;
+            /** Inserted */
+            inserted: number;
+            /** Skipped */
+            skipped: number;
         };
         /** LedgerEntryCreate */
         LedgerEntryCreate: {
@@ -2367,6 +2480,77 @@ export interface components {
             /** Reconciled Total */
             reconciled_total: string;
         };
+        /** ReportCatalogItem */
+        ReportCatalogItem: {
+            report_type: components["schemas"]["ReportType"];
+            /** Title */
+            title: string;
+            /** Description */
+            description: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "no_data";
+        };
+        /** ReportCatalogResponse */
+        ReportCatalogResponse: {
+            /** Reports */
+            reports: components["schemas"]["ReportCatalogItem"][];
+            /**
+             * Currency
+             * @default KES
+             */
+            currency: string;
+        };
+        /**
+         * ReportLine
+         * @description A labelled amount in a report breakdown (e.g. an expense category).
+         */
+        ReportLine: {
+            /** Label */
+            label: string;
+            /** Amount */
+            amount: string;
+        };
+        /**
+         * ReportMetric
+         * @description A single headline figure on a report (e.g. Net Profit).
+         */
+        ReportMetric: {
+            /** Label */
+            label: string;
+            /** Value */
+            value: string;
+            /**
+             * Unit
+             * @default KES
+             */
+            unit: string;
+            /**
+             * Is Estimate
+             * @default false
+             */
+            is_estimate: boolean;
+        };
+        /**
+         * ReportSeriesPoint
+         * @description One month in a report's time series; ``values`` keyed by series name.
+         */
+        ReportSeriesPoint: {
+            /** Period */
+            period: string;
+            /** Values */
+            values: {
+                [key: string]: string;
+            };
+        };
+        /**
+         * ReportType
+         * @description Deterministic financial reports generated from live ledger/invoice data.
+         * @enum {string}
+         */
+        ReportType: "income_statement" | "cash_flow" | "tax_liability";
         /**
          * SankeyLink
          * @description A weighted flow between two nodes, referenced by their index in ``nodes``.
@@ -3258,6 +3442,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReconciliationFlowResponse"];
+                };
+            };
+        };
+    };
+    report_catalog_api_v1_finance_reports_get: {
+        parameters: {
+            query?: {
+                period_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_report_api_v1_finance_reports__report_type__get: {
+        parameters: {
+            query?: {
+                period_days?: number;
+            };
+            header?: never;
+            path: {
+                report_type: components["schemas"]["ReportType"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinancialReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -4194,6 +4442,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_knowledge_base_api_v1_intelligence_admin_knowledge_base_ingest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_ingest_knowledge_base_api_v1_intelligence_admin_knowledge_base_ingest_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeIngestResponse"];
                 };
             };
             /** @description Validation Error */

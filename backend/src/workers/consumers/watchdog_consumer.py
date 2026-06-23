@@ -22,9 +22,11 @@ from langchain_core.messages import HumanMessage
 from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import AMQP_MESSAGES_CONSUMED
+from src.domains.alerts.service import AlertService, alert_from_watchdog
 from src.domains.intelligence.agents.e_watchdog import make_e_watchdog_node
 from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
 from src.infrastructure.cache.redis import get_redis
+from src.infrastructure.database.postgres import AsyncSessionLocal
 
 EXCHANGE = "finguard.events"
 QUEUE = "finguard.agent_e.events"
@@ -100,6 +102,43 @@ async def _handle_expense_created(body: dict[str, Any]) -> None:
         anomaly_detected=analysis.get("anomaly_detected"),
         vc_id=analysis.get("vc_id"),
     )
+
+    # Surface anomalies/duplicates/overspend to the alerts dashboard.  This is
+    # the integration point the alerts domain was built for: until now nothing
+    # ever wrote an Alert row, so the page stayed empty.  Idempotent on the
+    # expense id, so a re-delivered message never spawns a duplicate alert.
+    await _raise_watchdog_alert(analysis, expense_id)
+
+
+async def _raise_watchdog_alert(analysis: dict[str, Any], expense_id: str) -> None:
+    """Persist an Alert when the watchdog result warrants human attention.
+
+    Best-effort: a failure here must not nack the message (the analysis and its
+    Verifiable Credential are already durably recorded), so exceptions are
+    logged and swallowed.
+    """
+    alert_data = alert_from_watchdog(analysis, expense_id)
+    if alert_data is None:
+        return
+    try:
+        async with AsyncSessionLocal() as session:
+            created = await AlertService(session).create_alert_idempotent(
+                alert_data, dedup_key=f"watchdog:{expense_id}"
+            )
+        if created is not None:
+            logger.info(
+                "Watchdog alert raised",
+                expense_id=expense_id,
+                alert_id=str(created.id),
+                alert_type=created.type,
+                severity=created.severity,
+            )
+    except Exception as exc:  # noqa: BLE001 — alerting must never break ingestion
+        logger.warning(
+            "Watchdog alert creation failed",
+            expense_id=expense_id,
+            error=str(exc),
+        )
 
 
 async def _process_message(message: AbstractIncomingMessage) -> None:

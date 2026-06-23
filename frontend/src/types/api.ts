@@ -111,6 +111,14 @@ export type ApiVaultTransfer       = S["VaultTransferResponse"];
 export type ApiVaultTransferCreate = S["VaultTransferCreate"];
 export type ApiVaultBalance        = S["VaultBalance"];
 export type ApiVaultBalances       = S["VaultBalancesResponse"];
+// CoreReports — deterministic financial reports (P&L / cash-flow / tax).
+export type ApiReportType          = S["ReportType"];
+export type ApiReportMetric        = S["ReportMetric"];
+export type ApiReportLine          = S["ReportLine"];
+export type ApiReportSeriesPoint   = S["ReportSeriesPoint"];
+export type ApiFinancialReport     = S["FinancialReport"];
+export type ApiReportCatalogItem   = S["ReportCatalogItem"];
+export type ApiReportCatalog       = S["ReportCatalogResponse"];
 
 // ── Intelligence ──────────────────────────────────────────────────────────────
 export type ApiInsightRequest        = S["InsightRequest"];
@@ -128,6 +136,8 @@ export type ApiInsightFeedItem       = S["InsightFeedItem"];
 export type ApiActionFeedItem        = S["ActionFeedItem"];
 export type ApiNotificationItem      = S["NotificationItem"];
 export type ApiAgentTelemetry        = S["AgentTelemetry"];
+// Admin: KRA knowledge-base document ingestion result.
+export type ApiKnowledgeIngestResponse = S["KnowledgeIngestResponse"];
 
 // ── Alerts ──────────────────────────────────────────────────────────────────────
 export type ApiAlert         = S["AlertResponse"];

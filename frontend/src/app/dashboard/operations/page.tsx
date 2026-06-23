@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Workflow, ScrollText, ShieldCheck, ArrowUpRight } from "lucide-react";
 import { SystemHealthCard } from "@/components/dashboard/operations/SystemHealthCard";
+import { KraIngestPanel } from "@/components/dashboard/operations/KraIngestPanel";
 
 // ─── Operations ────────────────────────────────────────────────────────────
 // Operational control surface for the platform. Each card links to the area
@@ -58,6 +59,9 @@ export default function OperationsPage() {
           Control surface for queues, alerts, system health and the audit trail.
         </p>
       </div>
+
+      {/* Admin: KRA knowledge-base ingestion (rendered only for ADMIN/OWNER) */}
+      <KraIngestPanel />
 
       {/* Area cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

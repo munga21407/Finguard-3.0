@@ -12,20 +12,23 @@ Two credential types
    executing any database write to prove they hold a valid, in-scope credential for
    that exact transaction.
 
-Signing (Ed25519, asymmetric)
------------------------------
+Signing (Ed25519, asymmetric — EdDSA only)
+------------------------------------------
 VCs are signed with the internal CA's **Ed25519** key (``key_manager.py``) — the
 same trust root that signs agent cards — so the audit trail is *independently
-verifiable* with the CA public key and is no longer forgeable by anyone holding
-the symmetric application secret. Tokens use a compact ``header.payload.signature``
+verifiable* with the CA public key and is **not** forgeable by anyone holding the
+symmetric application secret. Tokens use a compact ``header.payload.signature``
 encoding (base64url JSON segments); the header records ``"alg": "EdDSA"``.
 
-Backward compatibility
-----------------------
-VCs issued before this migration are JWTs signed with HS256 over ``SECRET_KEY``.
-``_decode_vc`` inspects the token header and routes legacy ``HS256`` tokens
-through ``jose`` + ``SECRET_KEY`` so existing ``trust_log`` entries still verify.
-New tokens are always EdDSA.
+HS256 sunset (legacy fallback removed)
+--------------------------------------
+Earlier VCs were JWTs signed with HS256 over the symmetric ``SECRET_KEY``.
+Keeping that fallback in the verification path defeated the asymmetric upgrade:
+anyone who learned ``SECRET_KEY`` could forge a "legacy" VC and poison the
+``trust_log``. As of ``HS256_VC_SUNSET`` the fallback is **gone** — verification
+is EdDSA-only and ``SECRET_KEY`` is never consulted here. Pre-sunset ``trust_log``
+entries are re-signed with Ed25519 by the one-time ``scripts.migrate_hs256_vcs``
+migration; any HS256 token presented after the sunset is hard-rejected.
 
 Sprint 6 additions
 -------------------
@@ -38,12 +41,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from jose import JWTError, jwt
-
-from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.security.agent_cards import get_card
 from src.domains.intelligence.security.key_manager import sign_data, verify_signature
@@ -52,6 +52,12 @@ from src.infrastructure.database.mongodb import get_mongo_db
 COLLECTION = "trust_log"
 VC_TTL_DAYS = 365
 TASK_VC_TTL_SECONDS = 300  # 5-minute hard TTL for task-scoped VCs
+
+# Hard cutoff after which legacy HS256-signed VCs are no longer accepted by the
+# verifier. The symmetric ``SECRET_KEY`` fallback has been removed entirely;
+# pre-sunset trust_log entries must be re-signed with Ed25519 via the one-time
+# ``scripts.migrate_hs256_vcs`` migration before this date.
+HS256_VC_SUNSET = date(2026, 6, 23)
 
 # Compact-token header for EdDSA-signed VCs. The signature covers the exact
 # ``<header_seg>.<payload_seg>`` ASCII string, so verification reconstructs the
@@ -86,7 +92,7 @@ def _encode_vc(claims: dict[str, Any]) -> str:
 
 
 def _enforce_exp(claims: dict[str, Any]) -> None:
-    """Reject an expired VC (EdDSA path; jose enforces exp for legacy tokens)."""
+    """Reject an expired VC by its ``exp`` claim (EdDSA verification path)."""
     exp = claims.get("exp")
     if exp is None:
         return
@@ -101,12 +107,14 @@ def _enforce_exp(claims: dict[str, Any]) -> None:
 def _decode_vc(token: str) -> dict[str, Any]:
     """Verify a VC token's signature + expiry and return its claims.
 
-    EdDSA tokens are verified against the CA public key. Legacy HS256 tokens
-    (``alg: HS256`` in the header) fall back to ``jose`` + ``SECRET_KEY``.
+    Verification is **EdDSA-only**: tokens are checked against the CA public key.
+    The legacy HS256 / ``SECRET_KEY`` fallback has been removed (see the
+    ``HS256_VC_SUNSET`` note in the module docstring), so the symmetric secret is
+    never a trust input here. HS256 tokens are hard-rejected.
 
     Raises:
-        VCError — malformed token, unsupported algorithm, bad signature, or
-            expired credential.
+        VCError — malformed token, unsupported/sunset algorithm, bad signature,
+            or expired credential.
     """
     parts = token.split(".")
     if len(parts) != 3:
@@ -135,12 +143,13 @@ def _decode_vc(token: str) -> dict[str, Any]:
         return claims
 
     if alg == "HS256":
-        # Legacy VC issued before the Ed25519 migration — jose enforces both the
-        # HMAC signature and the exp claim.
-        try:
-            return jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-        except JWTError as exc:
-            raise VCError(f"Legacy HS256 VC verification failed: {exc}") from exc
+        # Symmetric-key VCs are no longer a trust root. Re-sign pre-sunset
+        # trust_log entries with `python -m scripts.migrate_hs256_vcs`.
+        raise VCError(
+            "Legacy HS256 VCs are no longer accepted "
+            f"(sunset {HS256_VC_SUNSET.isoformat()}); re-sign via "
+            "scripts.migrate_hs256_vcs"
+        )
 
     raise VCError(f"Unsupported VC algorithm: {alg!r}")
 
@@ -223,9 +232,10 @@ async def issue_vc(
 
 
 def verify_vc(token: str) -> dict[str, Any]:
-    """Decode and verify a VC token (EdDSA, or legacy HS256).
+    """Decode and verify a VC token (EdDSA only).
 
-    Raises ``VCError`` on a malformed token, bad signature, or expiry.
+    Raises ``VCError`` on a malformed token, a sunset HS256 token, a bad
+    signature, or expiry.
     """
     return _decode_vc(token)
 
@@ -345,7 +355,7 @@ def validate_task_vc(
     Validate a task-scoped VC before a database write.
 
     Enforces four properties:
-    1. **Signature + expiry** — JWT decode raises ``JWTError`` on any failure.
+    1. **Signature + expiry** — EdDSA decode raises ``VCError`` on any failure.
     2. **Type check** — ``vc_type`` must equal ``"task_scoped"``.
     3. **Transaction scope** — ``jti`` must match ``transaction_id``.
     4. **Agent binding** — ``sub`` must match ``agent_id``.

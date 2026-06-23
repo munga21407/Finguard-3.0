@@ -36,6 +36,7 @@ from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
 from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.ml.model_store import save_model, train_isolation_forest
 from src.domains.intelligence.prompts.b_classifier import CLASSIFIER_SYSTEM, TRANSACTION_TAXONOMY
 from src.domains.intelligence.schemas import BatchClassificationResult, TransactionClassification
 from src.infrastructure.database.mongodb import init_mongo
@@ -45,6 +46,8 @@ from src.workers.tasks.celery_app import celery_app
 _BATCH_SIZE = 50
 _EVENT_EXCHANGE = "finguard.events"
 _EVENT_ROUTING_KEY = "finance.transactions.classified"
+# Trailing window of categorized transactions Agent E's anomaly model trains on.
+_AGENT_E_TRAIN_DAYS = 90
 # Max rows the weekly data-retention sweep deletes per Celery invocation —
 # bounded so the DELETE never takes a long table lock in production.
 _RETENTION_BATCH_SIZE = 10_000
@@ -551,5 +554,136 @@ def run_batch_bank_reconciliation(self: Any) -> dict[str, Any]:
     """
     try:
         return asyncio.run(_run_batch_bank_reconciliation_async())
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+
+
+# ── Agent E model retraining ──────────────────────────────────────────────────
+#
+# Periodic retraining loop for Agent E's per-customer IsolationForest. Each model
+# is fit on the trailing _AGENT_E_TRAIN_DAYS of *categorized* debit transactions
+# (Agent B sets `category`) and upserted to finguard.agent_e_models by customer.
+# The watchdog loads these at scoring time; this removes the on-the-fly fit from
+# the hot path for every customer that has any history.
+
+async def _fetch_categorized_customer_ids(session: Any) -> list[str]:
+    """Customers with categorized debits in the training window (one model each)."""
+    result = await session.execute(
+        text("""
+            SELECT DISTINCT account_id::text
+            FROM ledger_entries
+            WHERE transaction_type = 'debit'
+              AND category IS NOT NULL
+              AND account_id IS NOT NULL
+              AND created_at >= NOW() - make_interval(days => :days)
+        """),
+        {"days": _AGENT_E_TRAIN_DAYS},
+    )
+    return [row[0] for row in result.fetchall()]
+
+
+async def _fetch_customer_debit_amounts(session: Any, customer_id: str) -> list[float]:
+    result = await session.execute(
+        text("""
+            SELECT amount::float
+            FROM ledger_entries
+            WHERE transaction_type = 'debit'
+              AND category IS NOT NULL
+              AND account_id = :cid::uuid
+              AND created_at >= NOW() - make_interval(days => :days)
+            ORDER BY created_at DESC
+        """),
+        {"cid": customer_id, "days": _AGENT_E_TRAIN_DAYS},
+    )
+    return [float(row[0]) for row in result.fetchall()]
+
+
+async def _train_and_upsert_customer(session: Any, customer_id: str) -> bool:
+    """Fit IsolationForest(contamination='auto') for one customer and upsert it.
+
+    Returns ``True`` when a model was trained+stored, ``False`` when the customer
+    had too few samples (left to the watchdog's on-the-fly fallback).
+    """
+    amounts = await _fetch_customer_debit_amounts(session, customer_id)
+    model = train_isolation_forest(amounts)
+    if model is None:
+        return False
+    await save_model(session, uuid.UUID(customer_id), model, len(amounts))
+    return True
+
+
+async def _retrain_agent_e_async() -> dict[str, Any]:
+    trained = 0
+    skipped = 0
+    async with AsyncSessionLocal() as session:
+        customer_ids = await _fetch_categorized_customer_ids(session)
+        for customer_id in customer_ids:
+            if await _train_and_upsert_customer(session, customer_id):
+                trained += 1
+            else:
+                skipped += 1
+
+    logger.info(
+        "Agent E retraining complete",
+        customers=len(customer_ids),
+        trained=trained,
+        skipped=skipped,
+        window_days=_AGENT_E_TRAIN_DAYS,
+    )
+    return {
+        "status": "ok",
+        "customers": len(customer_ids),
+        "trained": trained,
+        "skipped_insufficient_samples": skipped,
+    }
+
+
+async def _fit_one_agent_e_async(customer_id: str) -> dict[str, Any]:
+    async with AsyncSessionLocal() as session:
+        trained = await _train_and_upsert_customer(session, customer_id)
+    logger.info("Agent E single-customer fit", customer_id=customer_id, trained=trained)
+    return {
+        "status": "ok" if trained else "insufficient_samples",
+        "customer_id": customer_id,
+        "trained": trained,
+    }
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    bind=True,
+    name="batch.retrain_agent_e_models",
+    queue="batch_processing",
+    max_retries=2,
+    default_retry_delay=300,
+)
+def retrain_agent_e_models(self: Any) -> dict[str, Any]:
+    """Weekly retrain of every customer's Agent E IsolationForest.
+
+    Fired by Celery beat. Fits each customer on the trailing 90 days of
+    categorized debits and upserts to finguard.agent_e_models; customers with
+    too few samples are skipped (handled by the watchdog's on-the-fly fallback).
+    """
+    try:
+        return asyncio.run(_retrain_agent_e_async())
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    bind=True,
+    name="batch.fit_agent_e_model",
+    queue="batch_processing",
+    max_retries=2,
+    default_retry_delay=120,
+)
+def fit_agent_e_model(self: Any, customer_id: str) -> dict[str, Any]:
+    """Fit + persist a single customer's model on demand.
+
+    Enqueued by the watchdog the first time it scores a customer that has no
+    persisted model yet, so subsequent runs use the trained weights. Idempotent
+    (upsert), so duplicate enqueues are harmless.
+    """
+    try:
+        return asyncio.run(_fit_one_agent_e_async(customer_id))
     except Exception as exc:
         raise self.retry(exc=exc) from exc

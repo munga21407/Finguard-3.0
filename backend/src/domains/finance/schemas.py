@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -469,3 +470,61 @@ class VaultBalancesResponse(BaseModel):
     balances: list[VaultBalance]
     currency: str
     total: Decimal
+
+
+# ── Financial reports (CoreReports) ────────────────────────────────────────────
+
+
+class ReportType(StrEnum):
+    """Deterministic financial reports generated from live ledger/invoice data."""
+
+    INCOME_STATEMENT = "income_statement"
+    CASH_FLOW = "cash_flow"
+    TAX_LIABILITY = "tax_liability"
+
+
+class ReportMetric(BaseModel):
+    """A single headline figure on a report (e.g. Net Profit)."""
+
+    label: str
+    value: Decimal
+    unit: str = "KES"  # "KES" for money, "%" for rates
+    is_estimate: bool = False
+
+
+class ReportLine(BaseModel):
+    """A labelled amount in a report breakdown (e.g. an expense category)."""
+
+    label: str
+    amount: Decimal
+
+
+class ReportSeriesPoint(BaseModel):
+    """One month in a report's time series; ``values`` keyed by series name."""
+
+    period: str  # YYYY-MM
+    values: dict[str, Decimal]
+
+
+class FinancialReport(BaseModel):
+    report_type: ReportType
+    title: str
+    currency: str = "KES"
+    period_days: int
+    generated_at: datetime
+    has_data: bool
+    summary: list[ReportMetric]
+    lines: list[ReportLine]
+    series: list[ReportSeriesPoint]
+
+
+class ReportCatalogItem(BaseModel):
+    report_type: ReportType
+    title: str
+    description: str
+    status: Literal["ready", "no_data"]
+
+
+class ReportCatalogResponse(BaseModel):
+    reports: list[ReportCatalogItem]
+    currency: str = "KES"

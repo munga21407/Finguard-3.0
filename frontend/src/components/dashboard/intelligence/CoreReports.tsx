@@ -1,106 +1,195 @@
-interface Report {
-  title: string;
-  description: string;
-  badge: { label: string; variant: "neutral" | "warning" | "ai" };
-  colorClass: string;
-  iconVariant: "primary" | "secondary" | "tertiary" | "ai";
-}
+"use client";
 
-const reports: Report[] = [
-  {
-    title: "Income Statement",
-    description: "Comprehensive P&L analysis across all divisions.",
-    badge: { label: "Q3 READY", variant: "neutral" },
-    colorClass: "bg-lf-primary-fixed",
-    iconVariant: "primary",
-  },
-  {
-    title: "Tax Liability",
-    description: "Jurisdictional breakdown and deferment models.",
-    badge: { label: "REVIEW REQ", variant: "warning" },
-    colorClass: "bg-lf-secondary-fixed",
-    iconVariant: "secondary",
-  },
-  {
-    title: "Cash Flow",
-    description: "Liquidity runway and operational burn rate.",
-    badge: { label: "REAL-TIME", variant: "neutral" },
-    colorClass: "bg-lf-tertiary-fixed",
-    iconVariant: "tertiary",
-  },
-  {
-    title: "Predict AI",
-    description: "Machine learning generated anomaly detection.",
-    badge: { label: "AI ACTIVE", variant: "ai" },
-    colorClass: "bg-lf-primary-fixed",
-    iconVariant: "ai",
-  },
-];
+// ─── CoreReports ──────────────────────────────────────────────────────────────
+// Live financial reports (P&L / cash-flow / tax). The card grid is driven by the
+// report catalog (GET /finance/reports → ready/no_data status); clicking a ready
+// card generates and renders that report (GET /finance/reports/{type}) computed
+// server-side from the ledger and invoices. No hardcoded figures.
+
+import { useState } from "react";
+
+import { QueryState } from "@/components/ui/QueryState";
+import { useReport, useReportCatalog } from "@/lib/hooks/useFinanceData";
+import { formatMoney } from "@/lib/utils/format";
+import type {
+  ApiReportCatalogItem,
+  ApiReportType,
+} from "@/types/api";
+
+const ICON_VARIANT: Record<ApiReportType, "primary" | "secondary" | "tertiary"> = {
+  income_statement: "primary",
+  cash_flow: "tertiary",
+  tax_liability: "secondary",
+};
+
+const CARD_COLOR: Record<ApiReportType, string> = {
+  income_statement: "bg-lf-primary-fixed",
+  cash_flow: "bg-lf-tertiary-fixed",
+  tax_liability: "bg-lf-secondary-fixed",
+};
 
 export function CoreReports() {
+  const catalog = useReportCatalog();
+  const [selected, setSelected] = useState<ApiReportType | null>(null);
+
   return (
     <div className="bg-lf-surface-container-lowest rounded-xl shadow-[0px_4px_20px_rgba(0,0,0,0.03)] border border-lf-outline-variant/10 p-6 flex flex-col hover:shadow-[0px_8px_24px_rgba(107,56,212,0.08)] hover:border-lf-secondary-fixed transition-all">
       <div className="flex justify-between items-center mb-6">
         <h3 className="text-xl font-semibold tracking-tight text-lf-on-surface">Core Reports</h3>
-        <button className="text-lf-primary hover:text-lf-secondary transition-colors">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
-            <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
-            <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
-            <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
-          </svg>
-        </button>
+        {selected && (
+          <button
+            onClick={() => setSelected(null)}
+            className="text-sm text-lf-primary hover:text-lf-secondary transition-colors"
+          >
+            ← Back
+          </button>
+        )}
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1">
-        {reports.map((report) => (
-          <ReportCard key={report.title} report={report} />
-        ))}
-      </div>
+
+      {selected ? (
+        <ReportDetail type={selected} />
+      ) : (
+        <QueryState
+          isLoading={catalog.isLoading}
+          isError={catalog.isError}
+          isEmpty={(catalog.data?.reports.length ?? 0) === 0}
+          onRetry={catalog.refetch}
+          loadingLabel="Loading reports…"
+          errorLabel="Couldn't load reports."
+          emptyLabel="No reports available yet."
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1">
+            {catalog.data?.reports.map((report) => (
+              <ReportCard
+                key={report.report_type}
+                report={report}
+                onOpen={() => setSelected(report.report_type)}
+              />
+            ))}
+          </div>
+        </QueryState>
+      )}
     </div>
   );
 }
 
-function ReportCard({ report }: { report: Report }) {
-  const isAi = report.iconVariant === "ai";
-  const bgCard = isAi ? "bg-lf-primary-fixed/5 border-lf-primary/30 hover:border-lf-primary" : "bg-lf-surface hover:border-lf-primary border-lf-outline-variant";
+function ReportCard({
+  report,
+  onOpen,
+}: {
+  report: ApiReportCatalogItem;
+  onOpen: () => void;
+}) {
+  const ready = report.status === "ready";
+  const iconVariant = ICON_VARIANT[report.report_type];
+  const colorClass = CARD_COLOR[report.report_type];
 
   const iconBg = {
     primary: "bg-lf-primary text-lf-on-primary",
     secondary: "bg-lf-secondary text-lf-on-secondary",
     tertiary: "bg-lf-tertiary text-lf-on-tertiary",
-    ai: "bg-lf-primary-container text-lf-on-primary-container border border-lf-primary/20",
-  }[report.iconVariant];
+  }[iconVariant];
 
-  const badgeStyle = {
-    neutral: "bg-lf-surface-container-highest text-lf-on-surface-variant",
-    warning: "bg-lf-error-container text-lf-on-error-container",
-    ai: "bg-lf-primary text-lf-on-primary",
-  }[report.badge.variant];
+  const badgeStyle = ready
+    ? "bg-lf-surface-container-highest text-lf-on-surface-variant"
+    : "bg-lf-error-container text-lf-on-error-container";
 
   return (
-    <div className={`group border rounded-xl p-5 cursor-pointer transition-all relative overflow-hidden ${bgCard}`}>
-      <div className={`absolute top-0 right-0 w-24 h-24 ${report.colorClass} opacity-50 rounded-bl-full -mr-4 -mt-4 transition-transform group-hover:scale-110`} />
+    <button
+      type="button"
+      onClick={ready ? onOpen : undefined}
+      disabled={!ready}
+      className={`group text-left border rounded-xl p-5 transition-all relative overflow-hidden bg-lf-surface border-lf-outline-variant ${
+        ready ? "cursor-pointer hover:border-lf-primary" : "opacity-60 cursor-not-allowed"
+      }`}
+    >
+      <div className={`absolute top-0 right-0 w-24 h-24 ${colorClass} opacity-50 rounded-bl-full -mr-4 -mt-4 transition-transform group-hover:scale-110`} />
       <div className="flex items-start justify-between relative z-10">
         <div className={`w-10 h-10 rounded-full ${iconBg} flex items-center justify-center mb-4 shadow-sm`}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            {isAi
-              ? <><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></>
-              : <><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></>
-            }
+            <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" />
           </svg>
         </div>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-          className={`${isAi ? "text-lf-primary" : "text-lf-outline-variant group-hover:text-lf-primary"} transition-colors`}>
-          <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
-        </svg>
+        {ready && (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            className="text-lf-outline-variant group-hover:text-lf-primary transition-colors">
+            <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
+          </svg>
+        )}
       </div>
-      <h4 className={`text-base font-bold relative z-10 ${isAi ? "text-lf-primary" : "text-lf-on-surface"}`}>{report.title}</h4>
+      <h4 className="text-base font-bold relative z-10 text-lf-on-surface">{report.title}</h4>
       <p className="text-sm text-lf-on-surface-variant mt-1 relative z-10">{report.description}</p>
       <div className="mt-4 relative z-10">
         <span className={`px-2 py-1 rounded text-xs font-semibold tracking-widest uppercase ${badgeStyle}`}>
-          {report.badge.label}
+          {ready ? "Ready" : "No data"}
         </span>
       </div>
-    </div>
+    </button>
+  );
+}
+
+function ReportDetail({ type }: { type: ApiReportType }) {
+  const report = useReport(type);
+
+  return (
+    <QueryState
+      isLoading={report.isLoading}
+      isError={report.isError}
+      isEmpty={report.data?.has_data === false}
+      onRetry={report.refetch}
+      loadingLabel="Generating report…"
+      errorLabel="Couldn't generate this report."
+      emptyLabel="No data for this report yet."
+    >
+      {report.data && (
+        <div className="flex flex-col gap-5">
+          <div>
+            <h4 className="text-lg font-semibold text-lf-on-surface">{report.data.title}</h4>
+            <p className="text-xs text-lf-on-surface-variant">
+              Trailing {report.data.period_days} days · {report.data.currency}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {report.data.summary.map((m) => (
+              <div
+                key={m.label}
+                className="rounded-lg border border-lf-outline-variant/30 bg-lf-surface p-3"
+              >
+                <p className="text-xs text-lf-on-surface-variant flex items-center gap-1">
+                  {m.label}
+                  {m.is_estimate && (
+                    <span className="text-[10px] uppercase tracking-wide text-lf-on-surface-variant/70">
+                      est.
+                    </span>
+                  )}
+                </p>
+                <p className="text-lg font-semibold text-lf-on-surface tabular-nums">
+                  {m.unit === "%"
+                    ? `${Number(m.value).toFixed(1)}%`
+                    : formatMoney(m.value, report.data.currency)}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {report.data.lines.length > 0 && (
+            <div className="flex flex-col gap-1">
+              {report.data.lines.map((line) => (
+                <div
+                  key={line.label}
+                  className="flex justify-between text-sm py-1 border-b border-lf-outline-variant/20"
+                >
+                  <span className="text-lf-on-surface-variant">{line.label}</span>
+                  <span className="tabular-nums text-lf-on-surface">
+                    {formatMoney(line.amount, report.data.currency)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </QueryState>
   );
 }

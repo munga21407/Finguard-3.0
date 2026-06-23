@@ -560,3 +560,16 @@ class GenUiErrorReport(BaseModel):
     component_stack: str | None = Field(default=None, max_length=8000)
     # Path the widget rendered on, for correlating with a dashboard view.
     pathname: str | None = Field(default=None, max_length=512)
+
+
+class KnowledgeIngestResponse(BaseModel):
+    """Result of an admin knowledge-base document upload.
+
+    ``inserted`` vs ``skipped`` reflects the ON CONFLICT DO NOTHING upsert — a
+    re-uploaded document whose sections already exist reports ``skipped``.
+    """
+
+    document_title: str
+    chunks: int
+    inserted: int
+    skipped: int

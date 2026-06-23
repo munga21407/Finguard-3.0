@@ -1,9 +1,10 @@
 """Verifiable Credential signing: Ed25519 issuance, tamper-evidence, and the
-backward-compatible HS256 legacy verification path.
+hard rejection of the sunset HS256 legacy path.
 
 These tests exercise the pure crypto codec (``_encode_vc`` / ``verify_vc`` /
 ``validate_task_vc``) without touching MongoDB — the issuance helpers' DB writes
-are covered elsewhere; here we pin the trust properties of the tokens.
+are covered elsewhere; here we pin the trust properties of the tokens, including
+that the symmetric ``SECRET_KEY`` is no longer a valid VC trust root.
 """
 from __future__ import annotations
 
@@ -60,13 +61,13 @@ def test_malformed_and_unknown_alg_rejected() -> None:
         verify_vc(bad_alg)
 
 
-def test_legacy_hs256_still_verifies() -> None:
-    # A VC minted before the migration (jose HS256 over SECRET_KEY) must remain
-    # verifiable so existing trust_log entries don't become unreadable.
+def test_legacy_hs256_hard_rejected_even_with_correct_secret() -> None:
+    # The core fix: a VC signed with the real SECRET_KEY is STILL rejected, so a
+    # leaked SECRET_KEY can no longer forge a verifiable "legacy" VC.
     legacy_claims = {"sub": "E", "vc_type": "audit", "exp": _future_exp()}
     legacy_token = jwt.encode(legacy_claims, settings.SECRET_KEY, algorithm="HS256")
-    decoded = verify_vc(legacy_token)
-    assert decoded["sub"] == "E"
+    with pytest.raises(VCError, match="no longer accepted"):
+        verify_vc(legacy_token)
 
 
 def test_legacy_hs256_wrong_secret_rejected() -> None:

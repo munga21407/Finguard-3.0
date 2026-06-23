@@ -250,7 +250,7 @@ REDIS_URL=redis://:finguard@redis:6379/0
 RABBITMQ_URL=amqp://finguard:finguard@rabbitmq:5672/
 
 # Auth
-SECRET_KEY=<64+ char secret>     # general secret + legacy-HS256 VC verification
+SECRET_KEY=<64+ char secret>     # general app secret / JWT auth (NOT a VC trust root)
 JWT_SECRET_KEY=                  # auth-token signing; defaults to SECRET_KEY if empty
 CSRF_ENABLED=true                # double-submit CSRF on mutations (never disable in prod)
 FINGUARD_CA_PRIVATE_KEY_HEX=    # Ed25519 CA key (64 hex chars); required in production

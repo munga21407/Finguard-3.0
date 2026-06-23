@@ -288,6 +288,65 @@ async def _upsert_chunks(
 
 
 # ---------------------------------------------------------------------------
+# Reusable in-memory ingestion (used by the admin upload endpoint)
+# ---------------------------------------------------------------------------
+
+async def ingest_text_buffer(
+    session: AsyncSession,
+    client: genai.Client,
+    document_title: str,
+    raw_text: str,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_OVERLAP,
+) -> dict[str, Any]:
+    """Chunk, embed, and upsert a raw text buffer into ``finguard.knowledge_base``.
+
+    The reusable core of the per-file pipeline (``_split_text`` → ``_embed_batch``
+    → ``_upsert_chunks``), driven by an in-memory buffer and a caller-supplied
+    session + Gemini client instead of a directory walk. Lets the admin upload
+    endpoint reuse the exact same chunking/embedding/HNSW-storage path as the CLI.
+
+    Returns ``{document_title, chunks, inserted, skipped}``.
+
+    Raises:
+        ValueError — the buffer is empty/blank, or an embedding came back with an
+            unexpected dimensionality.
+    """
+    if not raw_text.strip():
+        raise ValueError("Uploaded document is empty.")
+
+    chunks = _split_text(raw_text, _SEPARATORS, chunk_size, chunk_overlap)
+    if not chunks:
+        raise ValueError("Document produced no ingestible chunks.")
+
+    all_embeddings: list[list[float]] = []
+    for batch_start in range(0, len(chunks), EMBED_BATCH_SIZE):
+        batch = chunks[batch_start : batch_start + EMBED_BATCH_SIZE]
+        all_embeddings.extend(await _embed_batch(client, batch))
+
+    bad = [(i, len(v)) for i, v in enumerate(all_embeddings) if len(v) != EMBEDDING_DIM]
+    if bad:
+        raise ValueError(f"Unexpected embedding dimensions at indices {bad[:5]}")
+
+    inserted, skipped = await _upsert_chunks(
+        session, document_title, chunks, all_embeddings, source_file=document_title
+    )
+    log.info(
+        "Buffer ingest complete: %s — %d chunks, %d inserted, %d skipped",
+        document_title,
+        len(chunks),
+        inserted,
+        skipped,
+    )
+    return {
+        "document_title": document_title,
+        "chunks": len(chunks),
+        "inserted": inserted,
+        "skipped": skipped,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Per-document pipeline
 # ---------------------------------------------------------------------------
 

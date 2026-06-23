@@ -22,6 +22,7 @@ from src.domains.finance.schemas import (
     CreditNoteRequest,
     ExpenseCreate,
     ExpenseResponse,
+    FinancialReport,
     InvoiceCancelRequest,
     InvoiceCreate,
     InvoiceEventResponse,
@@ -40,6 +41,8 @@ from src.domains.finance.schemas import (
     PaymentResponse,
     ReceiptExpenseCreate,
     ReconciliationFlowResponse,
+    ReportCatalogResponse,
+    ReportType,
     VaultBalancesResponse,
     VaultTransferCreate,
     VaultTransferResponse,
@@ -355,6 +358,27 @@ async def reconciliation_flow(
     by a Payment, so the rails fully account for each status's collected total.
     """
     return await FinanceService(db).get_reconciliation_flow()
+
+
+@router.get("/reports", response_model=ReportCatalogResponse)
+async def report_catalog(
+    db: DBSession,
+    _: RequireFinanceRead,
+    period_days: int = Query(365, ge=1, le=1825),
+) -> ReportCatalogResponse:
+    """List the CoreReports with a live ready/no_data status (drives the menu)."""
+    return await FinanceService(db).get_report_catalog(period_days)
+
+
+@router.get("/reports/{report_type}", response_model=FinancialReport)
+async def generate_report(
+    report_type: ReportType,
+    db: DBSession,
+    _: RequireFinanceRead,
+    period_days: int = Query(365, ge=1, le=1825),
+) -> FinancialReport:
+    """Generate one financial report (P&L / cash-flow / tax) from live data."""
+    return await FinanceService(db).generate_report(report_type, period_days)
 
 
 @router.post(

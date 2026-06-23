@@ -59,5 +59,12 @@ celery_app.conf.update(
             # no impact on current operational data.
             "schedule": crontab(hour=2, minute=0, day_of_week="sunday"),
         },
+        "retrain-agent-e-models": {
+            "task": "batch.retrain_agent_e_models",
+            # Weekly on Sunday at 03:00 UTC — after retention enforcement, in the
+            # same low-traffic window.  Re-fits each customer's Agent E
+            # IsolationForest from the trailing 90 days of categorized debits.
+            "schedule": crontab(hour=3, minute=0, day_of_week="sunday"),
+        },
     },
 )
