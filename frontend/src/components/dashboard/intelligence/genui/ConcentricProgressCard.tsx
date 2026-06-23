@@ -3,17 +3,6 @@
 // ─── ConcentricProgressCard ───────────────────────────────────────────────────
 // Category A · Micro-Widget. Up to three concentric SVG progress rings tracking
 // nested metrics, with a clean legend beside the dial.
-//
-// @example props
-// {
-//   "title": "Quarter Targets",
-//   "rings": [
-//     { "label": "Sales",    "value": 82,  "max": 100, "color": "#6b38d4" },
-//     { "label": "Users",    "value": 1240, "max": 2000, "color": "#0ea5e9" },
-//     { "label": "Products", "value": 47,  "max": 60,  "color": "#22c55e" }
-//   ]
-// }
-
 import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────

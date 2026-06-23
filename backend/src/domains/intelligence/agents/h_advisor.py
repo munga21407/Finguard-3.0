@@ -6,10 +6,11 @@ Pipeline:
   2. Load watchdog (E), forecast (D), credit strategy (G), and tax audit (F)
      outputs from context.
   3. Fetch CRM customer profile from PostgreSQL using customer_id / user_id.
-  4. Build an evidence-grounded prompt with all pre-computed financial figures.
-  5. Gemini structured output → list of FinancialRecommendation dicts.
+  4. Build an evidence-grounded prompt (incl. the GenUI component catalog).
+  5. Gemini structured output (temperature 0.0) → AgentHOutput.
   6. RBAC clip: viewer/accountant → high-level summary; manager/admin/owner → actionable.
-  7. Write to context["advice"].
+  7. Write the narrative to context["advice"]; append any emitted ui_widgets to
+     the orchestrator's gen_ui_payloads so the chat renders them inline.
 """
 from __future__ import annotations
 
@@ -17,27 +18,16 @@ import json
 from typing import Any
 
 from langchain_core.messages import AIMessage
-from pydantic import BaseModel
 from sqlalchemy import text
 
 from src.core.logging import logger
 from src.domains.intelligence.llm_client import generate_structured_content
-from src.domains.intelligence.schemas import OrchestratorState
+from src.domains.intelligence.prompts.h_advisor import (
+    H_ADVISOR_ALLOWED_COMPONENTS,
+    H_ADVISOR_GENUI_CATALOG,
+)
+from src.domains.intelligence.schemas import AgentHOutput, GenUIPayload, OrchestratorState
 from src.infrastructure.database.postgres import AsyncSessionLocal
-
-# ── Private Gemini output schemas ─────────────────────────────────────────────
-
-class _FinancialRecommendation(BaseModel):
-    recommendation: str
-    rationale: str
-    priority: str   # "HIGH" | "MEDIUM" | "LOW"
-
-
-class _AdvisorOutput(BaseModel):
-    recommendations: list[_FinancialRecommendation]
-    advice_tier: str       # "SUMMARY" | "ACTIONABLE"
-    overall_outlook: str   # 1-2 sentence executive framing
-
 
 # ── RBAC ──────────────────────────────────────────────────────────────────────
 
@@ -157,25 +147,17 @@ def make_h_advisor_node(llm: Any = None) -> Any:  # llm kept for signature compa
         # ── 5. RBAC-clipped advice prompt ─────────────────────────────────
         if is_actionable:
             scope = (
-                "Generate 3-5 SPECIFIC, ACTIONABLE recommendations including:\n"
-                "  - Concrete budget reallocation percentages or KES targets\n"
-                "  - Named financial instruments available in Kenya "
-                "(T-bills, CBK repo rate, SACCOs, KCB SME loans)\n"
-                "  - Compliance remediation steps referencing specific KRA obligations\n"
-                "  - Credit improvement milestones with measurable bankability score targets\n"
-                "  Priority: HIGH = act within 30 days | MEDIUM = 31-90 days | "
-                "LOW = strategic (>90 days)"
+                "Write SPECIFIC, ACTIONABLE guidance. You may reference concrete "
+                "budget reallocation percentages or KES targets, named Kenyan "
+                "instruments (T-bills, CBK repo rate, SACCOs, KCB SME loans), KRA "
+                "compliance remediation steps, and measurable bankability targets."
             )
             advice_tier = "ACTIONABLE"
         else:
             scope = (
-                "Generate 3-5 HIGH-LEVEL summary recommendations only:\n"
-                "  - Use directional language without specific instrument names or percentages\n"
-                "  - Focus on general financial health observations "
-                "(e.g., 'consider reviewing operational costs')\n"
-                "  - Do NOT disclose specific tax liabilities, reallocation "
-                "targets, or KES amounts\n"
-                "  Priority: HIGH = urgent | MEDIUM = moderate | LOW = informational"
+                "Write HIGH-LEVEL guidance only. Use directional language without "
+                "specific instrument names, percentages, or KES amounts, and do NOT "
+                "disclose specific tax liabilities or reallocation targets."
             )
             advice_tier = "SUMMARY"
 
@@ -187,65 +169,69 @@ def make_h_advisor_node(llm: Any = None) -> Any:  # llm kept for signature compa
 ## Instructions
 {scope}
 
-For each recommendation provide:
-  - recommendation: A single-sentence directive
-  - rationale: 1-2 sentences referencing specific data from the intelligence above
-  - priority: "HIGH", "MEDIUM", or "LOW"
+Compose your advice as `narrative_response`: 2-4 short paragraphs of Markdown that
+weave the most important observations and next steps into clear prose grounded in
+the figures above. Do not fabricate numbers not present in the intelligence.
 
-Also provide:
-  - advice_tier: "{advice_tier}"
-  - overall_outlook: 1-2 sentences framing the business's financial trajectory in KES context
+{H_ADVISOR_GENUI_CATALOG}
 
-Return JSON with fields: recommendations (array), advice_tier (string), overall_outlook (string).
+Return JSON with fields: narrative_response (string), ui_widgets (array — may be empty).
 """
 
         try:
-            advisor_out = await generate_structured_content(prompt, _AdvisorOutput)
+            advisor_out = await generate_structured_content(
+                prompt, AgentHOutput, temperature=0.0
+            )
         except Exception as exc:
             logger.warning("Agent H: Gemini advisory failed", error=str(exc))
-            advisor_out = _AdvisorOutput(
-                recommendations=[
-                    _FinancialRecommendation(
-                        recommendation=(
-                            "Review current budget allocation against actuals "
-                            "and identify variance drivers."
-                        ),
-                        rationale=(
-                            f"Budget watchdog reports a "
-                            f"'{watchdog.get('current_state', 'UNKNOWN')}' "
-                            f"state with anomaly score {watchdog.get('anomaly_score', 0):.2f}."
-                        ),
-                        priority="HIGH",
-                    ),
-                ],
-                advice_tier=advice_tier,
-                overall_outlook=(
-                    "Full advisory unavailable — ensure upstream agents (E, D, G, F) "
-                    "have executed before requesting advisory analysis."
+            advisor_out = AgentHOutput(
+                narrative_response=(
+                    "Full advisory is temporarily unavailable. As a starting point, "
+                    "review your current budget allocation against actuals and identify "
+                    "the main variance drivers. The budget watchdog reports a "
+                    f"'{watchdog.get('current_state', 'UNKNOWN')}' state "
+                    f"(anomaly score {watchdog.get('anomaly_score', 0):.2f})."
                 ),
+                ui_widgets=[],
             )
+
+        # Only emit widgets whose component_id is a known, registered library
+        # component — never forward a hallucinated id into the render stream.
+        valid_widgets: list[GenUIPayload] = []
+        for w in advisor_out.ui_widgets:
+            if w.component_id in H_ADVISOR_ALLOWED_COMPONENTS:
+                valid_widgets.append(w)
+            else:
+                logger.warning(
+                    "Agent H: dropping widget with unknown component_id",
+                    component_id=w.component_id,
+                )
 
         updated_ctx = dict(ctx)
         updated_ctx["advice"] = {
-            "recommendations": [r.model_dump() for r in advisor_out.recommendations],
-            "advice_tier": advisor_out.advice_tier,
-            "overall_outlook": advisor_out.overall_outlook,
+            "narrative_response": advisor_out.narrative_response,
+            # Back-compat: Agent J's fallback path reads overall_outlook.
+            "overall_outlook": advisor_out.narrative_response,
+            "advice_tier": advice_tier,
             "user_role": user_role,
         }
         if crm_profile:
             updated_ctx["crm_profile"] = crm_profile
 
-        n = len(advisor_out.recommendations)
-        outlook_preview = advisor_out.overall_outlook[:80]
         summary_msg = (
-            f"[h_advisor] {n} {advisor_out.advice_tier.lower()} recommendation(s) "
-            f"| role: {user_role} | {outlook_preview}"
+            f"[h_advisor] {advice_tier.lower()} advisory "
+            f"| role: {user_role} | {len(valid_widgets)} widget(s) "
+            f"| {advisor_out.narrative_response[:80]}"
         )
         logger.info(summary_msg, mode=mode)
 
+        # narrative → context["advice"]; widgets → appended to gen_ui_payloads
+        # (the OrchestratorState reducer is operator.add, so returning the list
+        # appends rather than overwrites).
         return {
             "messages": [AIMessage(content=summary_msg, name="h_advisor")],
             "context": updated_ctx,
+            "gen_ui_payloads": valid_widgets,
         }
 
     return h_advisor_node

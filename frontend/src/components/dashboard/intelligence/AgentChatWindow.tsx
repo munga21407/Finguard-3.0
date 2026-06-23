@@ -30,6 +30,7 @@ import { Send, Loader2, Bot, User, Sparkles, GitBranch, AlertTriangle, RefreshCw
 import { cn } from "@/lib/utils/cn";
 import { CoveTimeline } from "./CoveTimeline";
 import GenUiRegistry from "./GenUiRegistry";
+import { GenUiBoundary } from "./GenUiBoundary";
 import { CompositeInsightBlock } from "./CompositeInsightBlock";
 import { CompositeInsightSkeleton } from "./CompositeInsightSkeleton";
 import { useRole } from "@/lib/hooks/useRole";
@@ -590,7 +591,9 @@ function AgentBubble({ message, isPending, canAct }: { message: ChatMessage; isP
 // ── GenUiBlock ─────────────────────────────────────────────────────────────────
 // Intercepts a GenUIPayload, resolves the component_id against the registry,
 // and mounts the component with its props.  Falls back to plain text when the
-// component_id is unknown so the chat never shows a blank bubble.
+// component_id is unknown, and wraps the mounted component in a GenUiBoundary so
+// a malformed-prop render crash degrades to fallback_text instead of taking down
+// the whole chat (same protection the composite path already has).
 
 function GenUiBlock({ payload, canAct }: { payload: GenUIPayload; canAct: boolean }) {
   const Component = GenUiRegistry[payload.component_id];
@@ -607,10 +610,16 @@ function GenUiBlock({ payload, canAct }: { payload: GenUIPayload; canAct: boolea
   }
 
   return (
-    <Component
-      {...(payload.props as Record<string, unknown>)}
-      canAct={canAct}
-    />
+    <GenUiBoundary
+      fallbackText={payload.fallback_text}
+      findings={[]}
+      componentId={payload.component_id}
+    >
+      <Component
+        {...(payload.props as Record<string, unknown>)}
+        canAct={canAct}
+      />
+    </GenUiBoundary>
   );
 }
 

@@ -3,24 +3,6 @@
 // ─── UserDiagnosticCard ───────────────────────────────────────────────────────
 // Category B · Specialized Visualization. Dense micro-analytical card: avatar
 // profile block, an inline badge array, and mini activity dots for recent actions.
-//
-// @example props
-// {
-//   "name": "Jane Mwangi",
-//   "role": "Accountant",
-//   "initials": "JM",
-//   "badges": [
-//     { "label": "Verified",  "tone": "success" },
-//     { "label": "MFA",       "tone": "neutral" },
-//     { "label": "2 flags",   "tone": "warning" }
-//   ],
-//   "activity": [
-//     { "label": "Invoice approved", "status": "success" },
-//     { "label": "Login",            "status": "neutral" },
-//     { "label": "Failed payment",   "status": "danger" }
-//   ]
-// }
-
 import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────

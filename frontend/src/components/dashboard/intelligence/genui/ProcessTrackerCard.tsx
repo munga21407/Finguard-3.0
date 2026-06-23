@@ -3,18 +3,6 @@
 // ─── ProcessTrackerCard ───────────────────────────────────────────────────────
 // Category A · Micro-Widget. Prominent task status with a circular progress arc
 // and a checklist of verifications.
-//
-// @example props
-// {
-//   "title": "Onboarding",
-//   "steps": [
-//     { "label": "KRA PIN verified",     "done": true },
-//     { "label": "Bank account linked",  "done": true },
-//     { "label": "First invoice issued", "done": false },
-//     { "label": "M-Pesa till connected","done": false }
-//   ]
-// }
-
 import { Check } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 

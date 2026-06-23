@@ -3,18 +3,6 @@
 // ─── SemiCircleGaugeCard ──────────────────────────────────────────────────────
 // Category A · Metric Callout. Compact card with a bold percentage centred inside
 // an SVG semi-circle gauge over a subtle capacity track.
-//
-// @example props
-// {
-//   "title": "Budget Utilisation",
-//   "value": 68,
-//   "max": 100,
-//   "unit": "%",
-//   "label": "of monthly cap",
-//   "color": "#6b38d4",
-//   "icon": "wallet"
-// }
-
 import { resolveIcon } from "./_icons";
 import { EmptyState } from "@/components/ui/EmptyState";
 

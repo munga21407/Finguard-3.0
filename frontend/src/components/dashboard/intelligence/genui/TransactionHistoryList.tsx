@@ -3,17 +3,6 @@
 // ─── TransactionHistoryList ───────────────────────────────────────────────────
 // Category C · Rich Layout Container. Clean tabular activity log: item/platform
 // (with logo/icon), date & time, type, amount, and a colour-coded status pill.
-//
-// @example props
-// {
-//   "title": "Recent Transactions",
-//   "transactions": [
-//     { "name": "Safaricom M-Pesa", "icon": "wallet",     "datetime": "2026-06-21T14:32:00Z", "type": "Credit", "amount": 21650, "currency": "KES", "status": "completed" },
-//     { "name": "KRA iTax",         "icon": "landmark",   "datetime": "2026-06-20T09:10:00Z", "type": "Debit",  "amount": 48000, "currency": "KES", "status": "pending" },
-//     { "name": "Equity Bank",      "icon": "building2",  "datetime": "2026-06-19T16:05:00Z", "type": "Transfer","amount": 12000, "currency": "KES", "status": "failed" }
-//   ]
-// }
-
 import { resolveIcon } from "./_icons";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatMoney, formatDateTime } from "@/lib/utils/format";

@@ -3,17 +3,6 @@
 // ─── NeomorphicKPICard ────────────────────────────────────────────────────────
 // Category C · Rich Layout Card. Premium soft surface using paired inset + outset
 // shadows for tactile depth. Title, top-right icon slot, large centred metric.
-//
-// @example props
-// {
-//   "title": "Total Revenue",
-//   "value": "KES 4.82M",
-//   "icon": "trending-up",
-//   "accent": "#6b38d4",
-//   "deltaPct": 12.5,
-//   "deltaLabel": "vs last month"
-// }
-
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { resolveIcon } from "./_icons";
 import { EmptyState } from "@/components/ui/EmptyState";
