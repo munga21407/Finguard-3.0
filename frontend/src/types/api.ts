@@ -93,6 +93,12 @@ export type ApiPayment           = S["PaymentResponse"];
 export type ApiPaymentCreate     = S["PaymentCreate"];
 export type ApiTransactionType   = S["TransactionType"];
 export type ApiVaultType         = S["VaultType"];
+// Accounts-payable approval queue (maker-checker state machine on expenses).
+export type ApiPayable              = S["PayableResponse"];
+export type ApiPayableCreate        = S["PayableCreate"];
+export type ApiPayableQueue         = S["PayableQueueResponse"];
+export type ApiPayableQueueKpis     = S["PayableQueueKpis"];
+export type ApiExpenseApprovalStatus = S["ExpenseApprovalStatus"];
 // Invoice-lifecycle → settlement-rail Sankey for the Overview dashboard.
 export type ApiReconciliationFlow = S["ReconciliationFlowResponse"];
 export type ApiSankeyNode         = S["SankeyNode"];

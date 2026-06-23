@@ -245,3 +245,21 @@ export async function listAgentTelemetry(): Promise<ApiAgentTelemetry[]> {
   );
   return data;
 }
+
+// ── GenUI error telemetry ──────────────────────────────────────────────────────
+
+export interface GenUiErrorReport {
+  component_id: string;
+  message: string;
+  component_stack?: string | null;
+  pathname?: string | null;
+}
+
+/**
+ * Report a GenUI widget render crash to operational telemetry. Fire-and-forget:
+ * the dashboard must never break because the error report failed, so callers
+ * should swallow rejections (the boundary already shows its fallback UI).
+ */
+export async function reportGenUiError(report: GenUiErrorReport): Promise<void> {
+  await httpClient.post(ENDPOINTS.INTELLIGENCE.GENUI_ERROR, report);
+}

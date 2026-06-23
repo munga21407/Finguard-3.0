@@ -10,6 +10,10 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
     full_name: str = Field(min_length=1, max_length=255)
+    # Optional one-time bootstrap secret. When it matches the configured
+    # INITIAL_BOOTSTRAP_KEY and this is the first account, the registrant claims
+    # the OWNER role. Absent/empty for every ordinary self-registration.
+    bootstrap_key: str | None = Field(default=None, repr=False)
 
 
 class UserUpdate(BaseModel):

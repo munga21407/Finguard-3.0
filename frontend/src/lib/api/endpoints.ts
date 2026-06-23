@@ -28,6 +28,12 @@ export const ENDPOINTS = {
     VAULT_TRANSFERS: "/api/v1/finance/vault-transfers",
     PAYMENTS_CASH: "/api/v1/finance/payments/cash",
     MPESA_CALLBACK: "/api/v1/finance/mpesa/callback",
+    // Accounts-payable approval queue (maker-checker)
+    PAYABLES_QUEUE: "/api/v1/finance/payables/queue",
+    PAYABLES: "/api/v1/finance/payables",
+    PAYABLE_APPROVE: (id: string) => `/api/v1/finance/payables/${id}/approve`,
+    PAYABLE_REJECT: (id: string) => `/api/v1/finance/payables/${id}/reject`,
+    PAYABLE_SCHEDULE: (id: string) => `/api/v1/finance/payables/${id}/schedule`,
   },
 
   // CRM
@@ -55,6 +61,7 @@ export const ENDPOINTS = {
     CONVERSATION: "/api/v1/intelligence/conversation",
     CONVERSATION_STATUS: (sessionId: string) =>
       `/api/v1/intelligence/conversation/${sessionId}/status`,
+    GENUI_ERROR: "/api/v1/intelligence/genui/error",
   },
 
   // Alerts (agent-raised finance/compliance alerts)

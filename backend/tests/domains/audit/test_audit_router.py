@@ -20,7 +20,6 @@ from src.domains.audit.models import AuditAction, AuditActorType
 from src.domains.audit.service import AuditService
 from src.domains.identity.models import User, UserRole
 
-
 # ── RBAC ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -85,6 +84,10 @@ async def test_resolving_alert_writes_audit_row(
     client: AsyncClient, auth_as: Callable[..., User], db_session: AsyncSession
 ) -> None:
     user = auth_as(UserRole.MANAGER)
+    # The resolve endpoint writes an audit row whose actor_id FKs to users, so the
+    # acting user must exist in the DB (as it does in production).
+    db_session.add(user)
+    await db_session.commit()
 
     # Seed an alert directly, then resolve it through the API.
     alert = await AlertService(db_session).create_alert(

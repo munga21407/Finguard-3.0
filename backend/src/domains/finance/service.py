@@ -13,7 +13,12 @@ from src.core.exceptions import (
     NotFoundError,
     UnprocessableError,
 )
-from src.domains.finance.events import InvoiceState, fold_invoice_events
+from src.domains.finance.events import (
+    SNAPSHOT_INTERVAL,
+    InvoiceState,
+    fold_from_snapshot,
+    fold_invoice_events,
+)
 from src.domains.finance.models import (
     BANK_REVIEW_APPROVED,
     BANK_REVIEW_PENDING,
@@ -21,9 +26,11 @@ from src.domains.finance.models import (
     BankStatementLine,
     Budget,
     Expense,
+    ExpenseApprovalStatus,
     Invoice,
     InvoiceEvent,
     InvoiceEventType,
+    InvoiceSnapshot,
     InvoiceStatus,
     LedgerEntry,
     MpesaTransaction,
@@ -37,6 +44,7 @@ from src.domains.finance.repository import (
     ExpenseRepository,
     InvoiceEventRepository,
     InvoiceRepository,
+    InvoiceSnapshotRepository,
     LedgerRepository,
     MpesaRepository,
     PaymentRepository,
@@ -52,6 +60,10 @@ from src.domains.finance.schemas import (
     MpesaCallbackPayload,
     MpesaStkCallback,
     MpesaTransactionResponse,
+    PayableCreate,
+    PayableQueueKpis,
+    PayableQueueResponse,
+    PayableResponse,
     PaymentCreate,
     ReceiptExpenseCreate,
     ReconciliationFlowResponse,
@@ -76,6 +88,7 @@ class FinanceService:
         self._mpesa_repo = MpesaRepository(session)
         self._payment_repo = PaymentRepository(session)
         self._invoice_event_repo = InvoiceEventRepository(session)
+        self._invoice_snapshot_repo = InvoiceSnapshotRepository(session)
         self._bank_repo = BankStatementRepository(session)
         self._vault_transfer_repo = VaultTransferRepository(session)
         self._session = session
@@ -126,20 +139,56 @@ class FinanceService:
     async def _project_invoice_from_events(self, invoice: Invoice) -> InvoiceState:
         """Re-derive an invoice's monetary fields from its event log.
 
-        Folds the full event history and applies the result to the materialized
-        ``invoices`` row in-place (caller owns the commit).  ``amount_paid`` and
-        ``balance_due`` are always overwritten so the row provably equals the
-        fold; ``status``/``paid_at`` are only touched when a payment has been
-        applied — manual statuses (DRAFT/SENT/OVERDUE) are left intact.
+        Resumes the fold from the latest snapshot (replaying only the events
+        after it) and applies the result to the materialized ``invoices`` row
+        in-place (caller owns the commit).  ``amount_paid`` and ``balance_due``
+        are always overwritten so the row provably equals the fold;
+        ``status``/``paid_at`` are only touched when the fold owns the status (a
+        payment/credit/cancel has been applied) — manual statuses
+        (DRAFT/SENT/OVERDUE) are left intact.  This is the synchronous projection;
+        moving it onto the outbox consumer is a documented follow-up.
         """
-        events = await self._invoice_event_repo.list_by_invoice(invoice.id)
-        state = fold_invoice_events(events)
+        snapshot = await self._invoice_snapshot_repo.latest(invoice.id)
+        if snapshot is None:
+            events = await self._invoice_event_repo.list_by_invoice(invoice.id)
+            state = fold_invoice_events(events)
+        else:
+            base = InvoiceState.from_snapshot(snapshot.state)
+            tail = await self._invoice_event_repo.list_after_sequence(
+                invoice.id, snapshot.sequence
+            )
+            state = fold_from_snapshot(base, tail)
+
         invoice.amount_paid = state.amount_paid
+        invoice.amount_credited = state.credited
         invoice.balance_due = state.balance_due
         if state.payment_status is not None:
             invoice.status = state.payment_status
             invoice.paid_at = state.paid_at
+
+        await self._maybe_snapshot(invoice.id, state)
         return state
+
+    async def _maybe_snapshot(self, invoice_id: uuid.UUID, state: InvoiceState) -> None:
+        """Persist a fresh snapshot once the log crosses a ``SNAPSHOT_INTERVAL`` boundary.
+
+        Caps replay cost: the next projection folds at most ``SNAPSHOT_INTERVAL``
+        tail events.  A snapshot is a pure cache — skipping it only makes the next
+        replay longer, never wrong — so we no-op if one already exists at this
+        sequence (the ``(invoice_id, sequence)`` uniqueness would otherwise clash).
+        """
+        if state.event_count == 0 or state.event_count % SNAPSHOT_INTERVAL != 0:
+            return
+        latest = await self._invoice_snapshot_repo.latest(invoice_id)
+        if latest is not None and latest.sequence >= state.sequence:
+            return
+        await self._invoice_snapshot_repo.create(
+            InvoiceSnapshot(
+                invoice_id=invoice_id,
+                sequence=state.sequence,
+                state=state.to_snapshot(),
+            )
+        )
 
     async def update_invoice(self, invoice_id: uuid.UUID, data: InvoiceUpdate) -> Invoice:
         invoice = await self._invoice_repo.get_by_id(invoice_id)
@@ -199,6 +248,92 @@ class FinanceService:
                 )
             )
             await self._project_invoice_from_events(invoice)
+        invoice = await self._invoice_repo.save(invoice)
+        await self._session.commit()
+        return invoice
+
+    async def apply_credit_note(
+        self,
+        invoice_id: uuid.UUID,
+        amount: Decimal,
+        current_user: User | None = None,
+        reason: str | None = None,
+    ) -> Invoice:
+        """Reduce an invoice's receivable by a credit note (event-sourced).
+
+        Appends a ``credit_note_applied`` event and re-projects, so the credit
+        flows through the same fold as payments — ``balance_due`` becomes
+        ``total - credited - amount_paid``.  Holds the invoice ``FOR UPDATE`` so a
+        concurrent payment/credit cannot allocate the same ``sequence``.  Guards:
+        a cancelled invoice cannot be credited, and the credit cannot exceed the
+        current outstanding balance (no negative balance / over-credit).
+        """
+        if amount <= Decimal("0"):
+            raise UnprocessableError("Credit note amount must be positive")
+        invoice = await self._invoice_repo.get_by_id_for_update(invoice_id)
+        if not invoice:
+            raise NotFoundError("Invoice not found")
+        if invoice.status == InvoiceStatus.CANCELLED:
+            raise UnprocessableError("Cannot credit a cancelled invoice")
+        if amount > invoice.balance_due:
+            raise UnprocessableError(
+                "Credit note exceeds the invoice's outstanding balance"
+            )
+        now = datetime.now(UTC)
+        recorded_by = current_user.id if current_user else None
+        sequence = await self._invoice_event_repo.next_sequence(invoice.id)
+        await self._invoice_event_repo.append(
+            InvoiceEvent(
+                invoice_id=invoice.id,
+                sequence=sequence,
+                event_type=InvoiceEventType.CREDIT_NOTE_APPLIED,
+                amount=amount,
+                payload={"reason": reason or "credit_note"},
+                occurred_at=now,
+                recorded_by=recorded_by,
+            )
+        )
+        await self._project_invoice_from_events(invoice)
+        invoice = await self._invoice_repo.save(invoice)
+        await self._session.commit()
+        return invoice
+
+    async def cancel_invoice(
+        self,
+        invoice_id: uuid.UUID,
+        current_user: User | None = None,
+        reason: str | None = None,
+    ) -> Invoice:
+        """Void an invoice (terminal, event-sourced).
+
+        Appends an ``invoice_cancelled`` event and re-projects; the fold derives
+        status ``CANCELLED`` and stops accruing monetary state.  A paid or
+        already-cancelled invoice cannot be cancelled — cancellation is for
+        receivables that will never be collected, not for reversing settled cash
+        (use a credit note / refund flow for that).
+        """
+        invoice = await self._invoice_repo.get_by_id_for_update(invoice_id)
+        if not invoice:
+            raise NotFoundError("Invoice not found")
+        if invoice.status == InvoiceStatus.CANCELLED:
+            raise UnprocessableError("Invoice is already cancelled")
+        if invoice.status == InvoiceStatus.PAID:
+            raise UnprocessableError("Cannot cancel a fully-paid invoice")
+        now = datetime.now(UTC)
+        recorded_by = current_user.id if current_user else None
+        sequence = await self._invoice_event_repo.next_sequence(invoice.id)
+        await self._invoice_event_repo.append(
+            InvoiceEvent(
+                invoice_id=invoice.id,
+                sequence=sequence,
+                event_type=InvoiceEventType.INVOICE_CANCELLED,
+                amount=Decimal("0"),
+                payload={"reason": reason or "cancelled"},
+                occurred_at=now,
+                recorded_by=recorded_by,
+            )
+        )
+        await self._project_invoice_from_events(invoice)
         invoice = await self._invoice_repo.save(invoice)
         await self._session.commit()
         return invoice
@@ -286,6 +421,114 @@ class FinanceService:
 
     async def list_expenses(self, limit: int = 100, offset: int = 0) -> list[Expense]:
         return await self._expense_repo.list_all(limit=limit, offset=offset)
+
+    # ── Accounts payable (approval workflow) ───────────────────────────────────
+
+    # Legal approval-status edges.  A payable is submitted straight into review;
+    # a reviewer (≠ submitter) approves or rejects it, and an approved bill can be
+    # scheduled for payment.  Anything not listed here is rejected by
+    # ``transition_payable`` (e.g. re-approving, reviving a rejected bill).
+    _PAYABLE_TRANSITIONS: dict[ExpenseApprovalStatus, frozenset[ExpenseApprovalStatus]] = {
+        ExpenseApprovalStatus.DRAFT: frozenset({ExpenseApprovalStatus.PENDING_REVIEW}),
+        ExpenseApprovalStatus.PENDING_REVIEW: frozenset(
+            {ExpenseApprovalStatus.APPROVED, ExpenseApprovalStatus.REJECTED}
+        ),
+        ExpenseApprovalStatus.APPROVED: frozenset({ExpenseApprovalStatus.SCHEDULED}),
+    }
+    _REVIEW_DECISIONS = frozenset(
+        {ExpenseApprovalStatus.APPROVED, ExpenseApprovalStatus.REJECTED}
+    )
+
+    async def create_payable(self, data: PayableCreate, current_user: User) -> Expense:
+        """Submit a bill into the AP queue at PENDING_REVIEW.
+
+        Deliberately applies NO side effects: a payable awaiting review must not
+        burn budget or emit the ``expenses.created`` watchdog event until a
+        reviewer approves it (see ``transition_payable``).
+        """
+        expense = Expense(
+            expense_ref=data.expense_ref,
+            customer_id=data.customer_id,
+            category=data.category,
+            amount=data.amount,
+            vault=data.vault,
+            description=data.description,
+            merchant_name=data.merchant_name,
+            approval_status=ExpenseApprovalStatus.PENDING_REVIEW,
+            submitted_by=current_user.id,
+        )
+        expense = await self._expense_repo.create(expense)
+        await self._session.commit()
+        return expense
+
+    async def transition_payable(
+        self,
+        expense_id: uuid.UUID,
+        current_user: User,
+        *,
+        target: ExpenseApprovalStatus,
+        scheduled_for: datetime | None = None,
+    ) -> Expense:
+        """Move a payable along its approval state machine (maker-checker).
+
+        Enforces the legal edges in ``_PAYABLE_TRANSITIONS`` and segregation of
+        duties — the submitter cannot review (approve/reject) their own payable,
+        mirroring the bank-statement review gate.  The expense is held
+        ``FOR UPDATE`` so two reviewers cannot both approve it and double-burn the
+        budget.  Budget burn-down + the watchdog event are applied exactly once,
+        on the transition into APPROVED.
+        """
+        expense = await self._expense_repo.get_by_id_for_update(expense_id)
+        if not expense:
+            raise NotFoundError("Payable not found")
+
+        allowed = self._PAYABLE_TRANSITIONS.get(expense.approval_status, frozenset())
+        if target not in allowed:
+            raise UnprocessableError(
+                f"Cannot move payable from {expense.approval_status} to {target}"
+            )
+        if target in self._REVIEW_DECISIONS and expense.submitted_by == current_user.id:
+            raise ForbiddenError("The submitter cannot review their own payable")
+
+        now = datetime.now(UTC)
+        expense.approval_status = target
+        if target in self._REVIEW_DECISIONS:
+            expense.reviewed_by = current_user.id
+            expense.reviewed_at = now
+        if target == ExpenseApprovalStatus.APPROVED:
+            # Deferred side effects fire now, once, as the bill is signed off.
+            await self._apply_expense_side_effects(expense, source="payable.approved")
+        if target == ExpenseApprovalStatus.SCHEDULED:
+            expense.scheduled_for = scheduled_for or now
+
+        await self._session.commit()
+        await self._session.refresh(expense)
+        return expense
+
+    async def list_payable_queue(self, limit: int = 100) -> PayableQueueResponse:
+        """In-flight payables (pending + approved) plus summary KPIs for the page."""
+        items = await self._expense_repo.list_by_approval_statuses(
+            (
+                ExpenseApprovalStatus.PENDING_REVIEW,
+                ExpenseApprovalStatus.APPROVED,
+                ExpenseApprovalStatus.SCHEDULED,
+            ),
+            limit=limit,
+        )
+        aggregates = await self._expense_repo.approval_status_aggregates()
+        pending = aggregates.get(ExpenseApprovalStatus.PENDING_REVIEW, (0, Decimal("0")))
+        approved = aggregates.get(ExpenseApprovalStatus.APPROVED, (0, Decimal("0")))
+        scheduled = aggregates.get(ExpenseApprovalStatus.SCHEDULED, (0, Decimal("0")))
+        return PayableQueueResponse(
+            kpis=PayableQueueKpis(
+                pending_count=pending[0],
+                pending_amount=pending[1],
+                approved_count=approved[0],
+                approved_amount=approved[1],
+                scheduled_count=scheduled[0],
+            ),
+            items=[PayableResponse.model_validate(e) for e in items],
+        )
 
     # ── M-Pesa ────────────────────────────────────────────────────────────────
 

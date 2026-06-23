@@ -92,6 +92,35 @@ class AuditService:
             metadata=metadata,
         )
 
+    async def record_user_action_safe(
+        self,
+        user: User,
+        action: AuditAction | str,
+        resource_type: str,
+        *,
+        resource_id: str | uuid.UUID | None = None,
+        outcome: AuditOutcome = AuditOutcome.SUCCESS,
+        metadata: dict[str, Any] | None = None,
+    ) -> AuditLog | None:
+        """Best-effort "an authenticated user did X" — never raises.
+
+        The boilerplate-free helper for instrumenting state-mutating endpoints:
+        call it *after* the business action has committed so a missing audit row
+        can never turn a successful action into a 500. Combines
+        :meth:`record_user_action`'s ergonomics with :meth:`record_safe`'s
+        failure isolation.
+        """
+        return await self.record_safe(
+            action=action,
+            actor_type=AuditActorType.USER,
+            actor_id=user.id,
+            actor_label=user.email,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            outcome=outcome,
+            metadata=metadata,
+        )
+
     async def record_safe(
         self,
         *,

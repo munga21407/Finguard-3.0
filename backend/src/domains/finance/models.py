@@ -35,12 +35,18 @@ class InvoiceEventType(enum.StrEnum):
 
     The invoice's monetary state (``amount_paid`` / ``balance_due`` / ``status``)
     is *derived* by folding these events — the materialized ``invoices`` row is a
-    synchronous projection of the fold (see ``finance/events.py``).  Extend with
-    ``CREDIT_NOTE_APPLIED`` / ``INVOICE_CANCELLED`` when those flows are wired.
+    synchronous projection of the fold (see ``finance/events.py``).
     """
 
     INVOICE_ISSUED = "invoice_issued"
     PAYMENT_APPLIED = "payment_applied"
+    # A credit note reduces the receivable (e.g. a post-issuance discount, returned
+    # goods, or a billing correction) without moving cash — it lowers the effective
+    # total and therefore the balance due.
+    CREDIT_NOTE_APPLIED = "credit_note_applied"
+    # Cancellation voids the invoice: a terminal event after which the fold derives
+    # status CANCELLED and stops accruing further monetary state.
+    INVOICE_CANCELLED = "invoice_cancelled"
 
 
 class InvoiceStatus(enum.StrEnum):
@@ -57,6 +63,28 @@ class PaymentMethod(enum.StrEnum):
     CARD = "card"
     MPESA = "mpesa"
     CASH = "cash"
+
+
+class ExpenseApprovalStatus(enum.StrEnum):
+    """Accounts-payable approval lifecycle for an :class:`Expense`.
+
+    The state machine is::
+
+        DRAFT ─submit─▶ PENDING_REVIEW ─approve─▶ APPROVED ─schedule─▶ SCHEDULED
+                              └────────reject────▶ REJECTED
+
+    Budget is burned down only on the transition into APPROVED (deferred from
+    creation) so a pending payable does not consume budget before a reviewer
+    signs off.  Expenses created by the immediate paths (receipt scan, M-Pesa
+    reconciliation, direct ``create_expense``) default to APPROVED so their
+    behaviour — and budget burn — is unchanged.
+    """
+
+    DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+    SCHEDULED = "scheduled"
+    REJECTED = "rejected"
 
 
 class LedgerEntry(Base):
@@ -91,6 +119,13 @@ class Invoice(Base):
     tax: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
     total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     amount_paid: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), default=Decimal("0"), nullable=False
+    )
+    # Sum of credit notes applied (CREDIT_NOTE_APPLIED events).  Reduces the
+    # receivable without moving cash; the projection keeps
+    # ``balance_due = total - amount_credited - amount_paid`` (enforced by the
+    # ck_invoices_balance_due_consistent check constraint).
+    amount_credited: Mapped[Decimal] = mapped_column(
         Numeric(18, 2), default=Decimal("0"), nullable=False
     )
     balance_due: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
@@ -140,6 +175,37 @@ class InvoiceEvent(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     recorded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class InvoiceSnapshot(Base):
+    """Cached fold result for an invoice at a given event ``sequence``.
+
+    A snapshot is a *pure optimisation* of the event-sourcing read path: instead
+    of replaying the whole ``invoice_events`` log on every projection, the fold
+    resumes from the latest snapshot (state at ``sequence``) and folds only the
+    events after it (see ``events.fold_from_snapshot``).  Snapshots are written
+    every ``SNAPSHOT_INTERVAL`` events and are never the source of truth — they
+    can be deleted and rebuilt from the log at any time.  The ``(invoice_id,
+    sequence)`` uniqueness keeps at most one snapshot per version.
+    """
+
+    __tablename__ = "invoice_snapshots"
+    __table_args__ = (
+        UniqueConstraint("invoice_id", "sequence", name="uq_invoice_snapshots_invoice_seq"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id"), nullable=False, index=True
+    )
+    # The event sequence this snapshot reflects: folding events with
+    # ``sequence <= this`` yields exactly ``state``.
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Serialized InvoiceState (decimals as strings, datetimes as ISO-8601).
+    state: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -204,6 +270,22 @@ class Expense(Base):
     invoice_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoices.id"), index=True
     )
+    # ── Accounts-payable approval state machine (maker-checker) ──────────────────
+    # Defaults to APPROVED so the immediate creation paths (receipt scan, M-Pesa
+    # reconciliation, direct create_expense) keep burning budget on insert; the AP
+    # queue creates payables at PENDING_REVIEW with no burn until a reviewer
+    # approves.  ``native_enum=False`` stores the value as a varchar so adding the
+    # column is a plain, idempotent migration (no PostgreSQL enum type to manage).
+    approval_status: Mapped[ExpenseApprovalStatus] = mapped_column(
+        Enum(ExpenseApprovalStatus, native_enum=False, length=20),
+        nullable=False,
+        default=ExpenseApprovalStatus.APPROVED,
+        index=True,
+    )
+    submitted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # ── Receipt-scan provenance (nullable; populated by POST /finance/receipts) ──
     # merchant_name + kra_pin preserve the OCR audit trail; kra_pin feeds Agent F
     # (tax compliance).  receipt_date is the printed transaction date, which may
@@ -346,7 +428,15 @@ class VaultTransfer(Base):
 
 
 class OutboxEvent(Base):
-    """Transactional outbox table for guaranteed message delivery."""
+    """Transactional outbox table for guaranteed message delivery.
+
+    The projector publishes each pending row to the broker with **per-event**
+    failure isolation: a publish failure increments ``retry_count`` and records
+    ``last_error`` without affecting the other events in the batch.  Once
+    ``retry_count`` reaches ``OUTBOX_MAX_RETRIES`` the event is moved out of this
+    table into :class:`OutboxDeadLetter` so a single poison message can never
+    block the pipeline.
+    """
 
     __tablename__ = "outbox_events"
 
@@ -355,6 +445,38 @@ class OutboxEvent(Base):
     routing_key: Mapped[str] = mapped_column(String(255), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    # Number of failed publish attempts; drives the OUTBOX_MAX_RETRIES → dead-letter
+    # decision.  ``last_error`` keeps the most recent failure for diagnosis.
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class OutboxDeadLetter(Base):
+    """Terminal resting place for outbox events that exhausted their retries.
+
+    A dead-lettered event is *moved* here (copied, then deleted from
+    ``outbox_events``) so the projector's pending query stays small and a poison
+    message never re-enters the publish loop.  Rows are retained for operator
+    inspection / manual replay; nothing reads them automatically.
+    """
+
+    __tablename__ = "outbox_dead_letters"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # The original outbox_events.id, kept for traceability (no FK — the source row
+    # is deleted when the event is dead-lettered).
+    original_event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    exchange: Mapped[str] = mapped_column(String(100), nullable=False)
+    routing_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    original_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    dead_lettered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

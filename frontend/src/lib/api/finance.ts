@@ -14,6 +14,9 @@ import type {
   ApiExpense,
   ApiInvoice,
   ApiInvoiceCreate,
+  ApiPayable,
+  ApiPayableCreate,
+  ApiPayableQueue,
   ApiReceiptExpenseCreate,
   ApiReconciliationFlow,
   ApiVaultBalances,
@@ -152,6 +155,46 @@ export async function createReceiptExpense(
   const { data } = await httpClient.post<ApiExpense>(
     ENDPOINTS.FINANCE.RECEIPTS,
     body
+  );
+  return data;
+}
+
+// ─── Accounts payable (approval queue) ──────────────────────────────────────
+
+/** In-flight payables (pending/approved/scheduled) plus summary KPIs. */
+export async function getPayableQueue(): Promise<ApiPayableQueue> {
+  const { data } = await httpClient.get<ApiPayableQueue>(
+    ENDPOINTS.FINANCE.PAYABLES_QUEUE
+  );
+  return data;
+}
+
+/** Submit a bill into the AP queue (lands at PENDING_REVIEW, no budget burn). */
+export async function createPayable(body: ApiPayableCreate): Promise<ApiPayable> {
+  const { data } = await httpClient.post<ApiPayable>(ENDPOINTS.FINANCE.PAYABLES, body);
+  return data;
+}
+
+/** Approve a pending payable (reviewer must differ from submitter). */
+export async function approvePayable(id: string): Promise<ApiPayable> {
+  const { data } = await httpClient.post<ApiPayable>(
+    ENDPOINTS.FINANCE.PAYABLE_APPROVE(id)
+  );
+  return data;
+}
+
+/** Reject a pending payable. */
+export async function rejectPayable(id: string): Promise<ApiPayable> {
+  const { data } = await httpClient.post<ApiPayable>(
+    ENDPOINTS.FINANCE.PAYABLE_REJECT(id)
+  );
+  return data;
+}
+
+/** Schedule an approved payable for payment. */
+export async function schedulePayable(id: string): Promise<ApiPayable> {
+  const { data } = await httpClient.post<ApiPayable>(
+    ENDPOINTS.FINANCE.PAYABLE_SCHEDULE(id)
   );
   return data;
 }

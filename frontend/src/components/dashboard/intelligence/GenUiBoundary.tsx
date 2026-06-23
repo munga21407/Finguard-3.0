@@ -2,6 +2,7 @@
 
 import React from "react";
 import type { KeyFinding } from "@/lib/api/intelligence";
+import { reportGenUiError } from "@/lib/api/intelligence";
 
 interface Props {
   children: React.ReactNode;
@@ -23,6 +24,17 @@ export class GenUiBoundary extends React.Component<Props, State> {
 
   componentDidCatch(err: Error, info: React.ErrorInfo) {
     console.error("[GenUI render error]", this.props.componentId, err, info.componentStack);
+    // Dispatch to operational telemetry so a consistently-crashing generative
+    // widget is visible server-side, not just in the user's console. Best-effort:
+    // never let a failed report surface over the fallback UI already rendered.
+    void reportGenUiError({
+      component_id: this.props.componentId,
+      message: err.message || String(err),
+      component_stack: info.componentStack?.slice(0, 8000) ?? null,
+      pathname: typeof window !== "undefined" ? window.location.pathname : null,
+    }).catch(() => {
+      /* swallow — telemetry must not break the dashboard */
+    });
   }
 
   render() {

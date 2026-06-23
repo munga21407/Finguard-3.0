@@ -4,6 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.domains.audit.models import AuditAction
+from src.domains.audit.service import AuditService
 from src.domains.crm.schemas import CustomerCreate, CustomerResponse, CustomerUpdate
 from src.domains.crm.service import CRMService
 from src.domains.identity.dependencies import RequireCrmRead, RequireCrmWrite
@@ -16,10 +18,20 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 
 @router.post("/customers", response_model=CustomerResponse, status_code=201)
 async def create_customer(
-    data: CustomerCreate, db: DBSession, _: RequireCrmWrite
+    data: CustomerCreate, db: DBSession, current_user: RequireCrmWrite
 ) -> CustomerResponse:
     customer = await CRMService(db).create_customer(data)
-    return CustomerResponse.model_validate(customer)
+    # Serialise before auditing: a best-effort audit write that fails rolls back
+    # the session and would expire ``customer``, so build the response first.
+    result = CustomerResponse.model_validate(customer)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.CRM_CUSTOMER_CREATED,
+        "customer",
+        resource_id=customer.id,
+        metadata={"name": customer.name},
+    )
+    return result
 
 
 @router.get("/customers", response_model=list[CustomerResponse])
@@ -43,7 +55,18 @@ async def get_customer(
 
 @router.patch("/customers/{customer_id}", response_model=CustomerResponse)
 async def update_customer(
-    customer_id: uuid.UUID, data: CustomerUpdate, db: DBSession, _: RequireCrmWrite
+    customer_id: uuid.UUID,
+    data: CustomerUpdate,
+    db: DBSession,
+    current_user: RequireCrmWrite,
 ) -> CustomerResponse:
     customer = await CRMService(db).update_customer(customer_id, data)
-    return CustomerResponse.model_validate(customer)
+    result = CustomerResponse.model_validate(customer)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.CRM_CUSTOMER_UPDATED,
+        "customer",
+        resource_id=customer.id,
+        metadata=data.model_dump(exclude_none=True, mode="json"),
+    )
+    return result
