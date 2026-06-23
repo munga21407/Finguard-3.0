@@ -14,8 +14,28 @@ import type {
   ApiActionFeedItem,
   ApiAgentTelemetry,
   ApiInsightFeedItem,
+  ApiKnowledgeIngestResponse,
   ApiNotificationItem,
 } from "@/types/api";
+
+/**
+ * Admin only — upload a KRA regulatory document (.txt/.md) into the Tax RAG
+ * knowledge base. The backend chunks, embeds, and stores it in pgvector. The
+ * Axios interceptor adds the CSRF token; we override Content-Type so the browser
+ * sets the multipart boundary.
+ */
+export async function ingestKnowledgeBase(
+  file: File,
+): Promise<ApiKnowledgeIngestResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await httpClient.post<ApiKnowledgeIngestResponse>(
+    ENDPOINTS.INTELLIGENCE.KB_INGEST,
+    form,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  );
+  return data;
+}
 
 // ── Generative UI contract ────────────────────────────────────────────────────
 

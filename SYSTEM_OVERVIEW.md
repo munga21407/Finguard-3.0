@@ -135,7 +135,7 @@ Finguard-3.0/
 │       │       │   ├── e_watchdog.py
 │       │       │   └── supervisor.py
 │       │       ├── security/
-│       │       │   ├── vc_issuer.py   # Ed25519-signed Verifiable Credentials (SOC-2 audit; HS256 legacy verify)
+│       │       │   ├── vc_issuer.py   # Ed25519-signed Verifiable Credentials (SOC-2 audit; EdDSA-only, HS256 sunset)
 │       │       │   ├── agent_cards.py # Agent identity metadata
 │       │       │   └── key_manager.py # Ed25519 internal CA — key loading + sign/verify
 │       │       ├── services/
@@ -1275,7 +1275,7 @@ After `MAX_LOGIN_ATTEMPTS` (default 5) consecutive failures, `TooManyRequestsErr
 | M-Pesa callback auth | Source-IP allowlist (`MPESA_CALLBACK_ALLOWED_IPS`) of Safaricom's callback ranges; optional HMAC-SHA256 body signature layered on top; **fail-closed** (503) when neither is configured |
 | Trusted client IP | nginx **sets** `X-Forwarded-For` to `$remote_addr` (not append) on API routes, so the source IP behind the per-IP lockout and the M-Pesa allowlist cannot be spoofed |
 | Password hashing | Direct `bcrypt.hashpw` / `bcrypt.checkpw` — passlib not used (bcrypt ≥5.0 incompatibility) |
-| Verifiable Credentials | **Ed25519-signed** compact tokens (`header.payload.signature`) — Audit VCs (365-day) and Task-Scoped VCs (5-min) in MongoDB `trust_log`. Legacy HS256 tokens still verify via a fallback branch |
+| Verifiable Credentials | **Ed25519-signed** compact tokens (`header.payload.signature`) — Audit VCs (365-day) and Task-Scoped VCs (5-min) in MongoDB `trust_log`. **EdDSA-only**: the legacy HS256/`SECRET_KEY` fallback was removed (`HS256_VC_SUNSET`); pre-sunset entries re-signed by `scripts.migrate_hs256_vcs` |
 | Internal CA (Ed25519) | `security/key_manager.py` — production: `FINGUARD_CA_PRIVATE_KEY_HEX` (required, fail-fast); dev: a fixed dev-only seed **decoupled from `SECRET_KEY`** |
 | Metrics endpoint auth | `GET /metrics` guarded by `METRICS_AUTH_SECRET` Bearer token |
 | Text-to-SQL role | `finguard_readonly` PostgreSQL role; `DATABASE_READONLY_URL` fail-closed in production |
@@ -1296,7 +1296,7 @@ After `MAX_LOGIN_ATTEMPTS` (default 5) consecutive failures, `TooManyRequestsErr
 # Application
 ENVIRONMENT=development         # development | staging | production
 DEBUG=false
-SECRET_KEY=<64+ char random secret>      # general app secret + legacy-HS256 VC verification
+SECRET_KEY=<64+ char random secret>      # general app secret / JWT auth (NOT a VC trust root)
 JWT_SECRET_KEY=                  # auth-token signing key; defaults to SECRET_KEY if empty
 CSRF_ENABLED=true                # double-submit CSRF on mutations; never disable in production
 
@@ -1407,7 +1407,7 @@ KRA regulation chunks stored with 768-dim Gemini embeddings. Agent F retrieves t
 **File**: `domains/intelligence/services/tax_rag_service.py`
 
 ### 8. Verifiable Credentials Audit Trail
-Before Agent E writes a budget alert, an **Ed25519-signed** VC is issued (agent identity + payload hash + timestamp) and stored in MongoDB `trust_log`. The VC is a compact `header.payload.signature` token signed by the internal CA (`key_manager.py`), so it is independently verifiable with the CA public key and not forgeable by holders of the symmetric app secret. VCs minted before the Ed25519 migration (HS256) still verify via a legacy fallback keyed by the token's `alg` header.
+Before Agent E writes a budget alert, an **Ed25519-signed** VC is issued (agent identity + payload hash + timestamp) and stored in MongoDB `trust_log`. The VC is a compact `header.payload.signature` token signed by the internal CA (`key_manager.py`), so it is independently verifiable with the CA public key and not forgeable by holders of the symmetric app secret. The legacy HS256/`SECRET_KEY` verification fallback has been **removed** (`HS256_VC_SUNSET`) — verification is EdDSA-only, so a leaked `SECRET_KEY` can no longer forge a verifiable VC. Pre-sunset `trust_log` entries were re-signed with Ed25519 by the one-time `scripts.migrate_hs256_vcs` migration.
 **Files**: `domains/intelligence/security/vc_issuer.py`, `security/key_manager.py`, `agents/e_watchdog.py`
 
 ### 9. Deterministic Compute + LLM Narrative

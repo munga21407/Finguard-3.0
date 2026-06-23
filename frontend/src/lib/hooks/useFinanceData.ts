@@ -12,6 +12,8 @@ import {
   createVaultTransfer,
   getPayableQueue,
   getReconciliationFlow,
+  getReport,
+  getReportCatalog,
   getVaultBalances,
   importBankStatements,
   listBankStatements,
@@ -30,9 +32,12 @@ import type {
   ApiBudget,
   ApiCustomer,
   ApiExpense,
+  ApiFinancialReport,
   ApiInvoice,
   ApiPayableQueue,
   ApiReconciliationFlow,
+  ApiReportCatalog,
+  ApiReportType,
   ApiVaultBalances,
   ApiVaultTransfer,
 } from "@/types/api";
@@ -48,6 +53,8 @@ export const financeKeys = {
   bankStatements: (status?: string) =>
     ["finance", "bank-statements", status ?? "all"] as const,
   payableQueue: ["finance", "payables", "queue"] as const,
+  reportCatalog: ["finance", "reports"] as const,
+  report: (type: string) => ["finance", "reports", type] as const,
 };
 
 export function useInvoices() {
@@ -82,6 +89,22 @@ export function useReconciliationFlow() {
   return useQuery<ApiReconciliationFlow>({
     queryKey: financeKeys.reconciliationFlow,
     queryFn: getReconciliationFlow,
+  });
+}
+
+export function useReportCatalog() {
+  return useQuery<ApiReportCatalog>({
+    queryKey: financeKeys.reportCatalog,
+    queryFn: getReportCatalog,
+  });
+}
+
+/** Fetch a single report; pass `enabled: false` to defer until the user opens it. */
+export function useReport(type: ApiReportType | null) {
+  return useQuery<ApiFinancialReport>({
+    queryKey: financeKeys.report(type ?? "none"),
+    queryFn: () => getReport(type as ApiReportType),
+    enabled: type !== null,
   });
 }
 

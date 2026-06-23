@@ -38,6 +38,11 @@ from src.domains.finance.models import (
     Payment,
     VaultTransfer,
 )
+from src.domains.finance.reports import (
+    build_cash_flow,
+    build_income_statement,
+    build_tax_liability,
+)
 from src.domains.finance.repository import (
     BankStatementRepository,
     BudgetRepository,
@@ -54,6 +59,7 @@ from src.domains.finance.schemas import (
     BankStatementLineImport,
     BudgetCreate,
     ExpenseCreate,
+    FinancialReport,
     InvoiceCreate,
     InvoiceUpdate,
     LedgerEntryCreate,
@@ -67,6 +73,9 @@ from src.domains.finance.schemas import (
     PaymentCreate,
     ReceiptExpenseCreate,
     ReconciliationFlowResponse,
+    ReportCatalogItem,
+    ReportCatalogResponse,
+    ReportType,
     SankeyLink,
     SankeyNode,
     VaultBalance,
@@ -1207,3 +1216,121 @@ class FinanceService:
 
         await self._session.commit()
         return payment
+
+    # ── Financial reports (CoreReports) ────────────────────────────────────────
+
+    async def _fetch_report_aggregates(
+        self, period_days: int
+    ) -> tuple[list[tuple[str, Decimal, Decimal]], list[tuple[str, Decimal]], Decimal]:
+        """Pull the trailing-window aggregates the report builders consume.
+
+        Returns ``(monthly, expense_categories, output_vat)`` where ``monthly`` is
+        oldest-first ``(YYYY-MM, revenue, opex)`` from ``ledger_entries``,
+        ``expense_categories`` is debit totals by category (largest first), and
+        ``output_vat`` is the VAT collected on invoices issued in the window.
+        """
+        monthly_rows = (
+            await self._session.execute(
+                text("""
+                    SELECT
+                        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+                        COALESCE(SUM(CASE WHEN transaction_type = 'credit'
+                                         THEN amount ELSE 0 END), 0) AS revenue,
+                        COALESCE(SUM(CASE WHEN transaction_type = 'debit'
+                                         THEN amount ELSE 0 END), 0) AS opex
+                    FROM ledger_entries
+                    WHERE created_at >= NOW() - make_interval(days => :days)
+                    GROUP BY 1
+                    ORDER BY 1
+                """),
+                {"days": period_days},
+            )
+        ).all()
+        monthly = [
+            (r[0], Decimal(r[1]), Decimal(r[2])) for r in monthly_rows
+        ]
+
+        category_rows = (
+            await self._session.execute(
+                text("""
+                    SELECT COALESCE(category, 'Uncategorised') AS category,
+                           COALESCE(SUM(amount), 0) AS amt
+                    FROM ledger_entries
+                    WHERE transaction_type = 'debit'
+                      AND created_at >= NOW() - make_interval(days => :days)
+                    GROUP BY 1
+                    ORDER BY amt DESC
+                """),
+                {"days": period_days},
+            )
+        ).all()
+        expense_categories = [(r[0], Decimal(r[1])) for r in category_rows]
+
+        output_vat = Decimal(
+            (
+                await self._session.execute(
+                    text("""
+                        SELECT COALESCE(SUM(tax), 0)
+                        FROM invoices
+                        WHERE created_at >= NOW() - make_interval(days => :days)
+                    """),
+                    {"days": period_days},
+                )
+            ).scalar_one()
+        )
+        return monthly, expense_categories, output_vat
+
+    async def generate_report(
+        self, report_type: ReportType, period_days: int = 365
+    ) -> FinancialReport:
+        """Generate one financial report from live ledger/invoice data."""
+        monthly, expense_categories, output_vat = await self._fetch_report_aggregates(
+            period_days
+        )
+        now = datetime.now(UTC)
+        if report_type == ReportType.INCOME_STATEMENT:
+            return build_income_statement(
+                monthly=monthly,
+                expense_categories=expense_categories,
+                period_days=period_days,
+                now=now,
+            )
+        if report_type == ReportType.CASH_FLOW:
+            return build_cash_flow(monthly=monthly, period_days=period_days, now=now)
+        return build_tax_liability(
+            monthly=monthly,
+            output_vat=output_vat,
+            period_days=period_days,
+            now=now,
+        )
+
+    async def get_report_catalog(self, period_days: int = 365) -> ReportCatalogResponse:
+        """List the available reports with a live ready/no_data status."""
+        monthly, _, output_vat = await self._fetch_report_aggregates(period_days)
+        has_ledger = any(rev or opex for _, rev, opex in monthly)
+        has_tax = output_vat > 0
+
+        def status(ready: bool) -> str:
+            return "ready" if ready else "no_data"
+
+        reports = [
+            ReportCatalogItem(
+                report_type=ReportType.INCOME_STATEMENT,
+                title="Income Statement",
+                description="Revenue, operating expenses and net profit (P&L).",
+                status=status(has_ledger),
+            ),
+            ReportCatalogItem(
+                report_type=ReportType.CASH_FLOW,
+                title="Cash Flow",
+                description="Inflows, outflows and monthly burn over the period.",
+                status=status(has_ledger),
+            ),
+            ReportCatalogItem(
+                report_type=ReportType.TAX_LIABILITY,
+                title="Tax Liability",
+                description="Output VAT and an estimated corporate income-tax charge.",
+                status=status(has_ledger or has_tax),
+            ),
+        ]
+        return ReportCatalogResponse(reports=reports, currency="KES")

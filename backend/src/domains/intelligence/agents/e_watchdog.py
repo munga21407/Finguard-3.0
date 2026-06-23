@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import math
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -34,6 +35,11 @@ from src.core.metrics import (
     AGENT_E_STATE_PROBABILITY,
 )
 from src.domains.intelligence.llm_client import generate_structured_content
+from src.domains.intelligence.ml.model_store import (
+    load_model,
+    predict_is_anomaly,
+    score_amount,
+)
 from src.domains.intelligence.prompts.e_watchdog import WATCHDOG_SYSTEM
 from src.domains.intelligence.schemas import (
     CompositeGenUIPayload,
@@ -298,6 +304,43 @@ async def _fetch_recent_invoices(limit: int = 30) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Persisted-model helpers
+# ---------------------------------------------------------------------------
+
+def _coerce_customer_id(account_id: str) -> uuid.UUID | None:
+    """Parse the watchdog's account scope into a ``customer_id`` UUID, or None.
+
+    ``account_id`` is a UUID string for a real SME account; insights-mode runs
+    may pass an empty/non-UUID value, in which case there is no per-customer
+    model to load and we stay on the on-the-fly path.
+    """
+    try:
+        return uuid.UUID(str(account_id))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _trigger_background_fit(customer_id: uuid.UUID) -> None:
+    """Best-effort enqueue of a one-off background fit for a new customer.
+
+    Idempotent at the data layer — the fit task upserts the customer's row — so
+    a duplicate enqueue is harmless.  Swallows broker errors: training must never
+    break the scoring path.
+    """
+    try:
+        from src.workers.tasks.batch import fit_agent_e_model  # noqa: PLC0415
+
+        fit_agent_e_model.delay(str(customer_id))
+        logger.info("Agent E: background fit enqueued", customer_id=str(customer_id))
+    except Exception as exc:  # noqa: BLE001 — async fit is best-effort
+        logger.warning(
+            "Agent E: background fit enqueue failed",
+            customer_id=str(customer_id),
+            error=str(exc),
+        )
+
+
+# ---------------------------------------------------------------------------
 # LangGraph node
 # ---------------------------------------------------------------------------
 
@@ -308,11 +351,20 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
         mode: str = state.get("mode", "insights")
         candidate_invoice: dict[str, Any] = state["context"].get("candidate_invoice", {})
 
+        customer_id = _coerce_customer_id(account_id)
+
         # Agent E creates and tears down its own session (thread-isolated pool)
         async with AsyncSessionLocal() as session:
             ratios = await _fetch_spending_ratios(account_id, session, period_days)
             amounts = await _fetch_recent_amounts()
             recent_invoices = await _fetch_recent_invoices()
+            # Load this customer's weekly-retrained IsolationForest from
+            # finguard.agent_e_models.  A brand-new customer has none yet.
+            persisted_model = (
+                await load_model(session, customer_id)
+                if customer_id is not None
+                else None
+            )
 
         # ── HMM ──────────────────────────────────────────────────────────────
         state_probs: np.ndarray = _forward_algorithm(ratios)
@@ -328,7 +380,30 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
             AGENT_E_STATE_PROBABILITY.labels(state=label).set(prob)
 
         # ── IsolationForest ──────────────────────────────────────────────────
-        iso_score: float = _isolation_score(amounts)
+        # Inference target: the current transaction amount (falls back to the
+        # most recent ledger debit when there's no explicit candidate).
+        score_target = float(
+            candidate_invoice.get("amount", amounts[-1] if amounts else 0.0)
+        )
+        if persisted_model is not None:
+            # Load the persisted weights and run inference directly — `.predict()`
+            # for the anomaly label, decision_function for the [0,1] severity.
+            iso_model, _ = persisted_model
+            iso_is_anomaly = predict_is_anomaly(iso_model, score_target)
+            iso_score = score_amount(iso_model, score_target)
+        else:
+            # Brand-new customer (no persisted model): log it, gracefully degrade
+            # to the legacy on-the-fly fit, and kick off an async background fit
+            # so the next run scores against persisted weights.
+            logger.warning(
+                "Agent E: no persisted model — degrading to on-the-fly fit",
+                customer_id=str(customer_id) if customer_id else None,
+                account_id=account_id,
+            )
+            iso_score = _isolation_score(amounts)
+            iso_is_anomaly = iso_score > 0.7
+            if customer_id is not None and mode == "actions":
+                _trigger_background_fit(customer_id)
 
         # ── rapidfuzz duplicate detection ─────────────────────────────────
         is_dup, dup_score = _detect_duplicate(candidate_invoice, recent_invoices)
@@ -376,8 +451,11 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
                 logger.warning("Agent E: VC issuance failed", error=str(exc))
 
         # ── RabbitMQ event ────────────────────────────────────────────────
+        # `iso_is_anomaly` is the model's direct `.predict()` verdict; combined
+        # with the HMM state and the score threshold so a persisted model's call
+        # alone is enough to raise the anomaly event.
         event_published = False
-        if (anomaly_detected or iso_score > 0.7) and mode == "actions":
+        if (anomaly_detected or iso_is_anomaly or iso_score > 0.7) and mode == "actions":
             try:
                 publisher = make_event_publisher(mode)
                 await publisher.ainvoke({

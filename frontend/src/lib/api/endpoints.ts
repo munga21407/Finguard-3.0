@@ -18,6 +18,8 @@ export const ENDPOINTS = {
     RECEIPTS: "/api/v1/finance/receipts",
     BUDGETS: "/api/v1/finance/budgets",
     RECONCILIATION_FLOW: "/api/v1/finance/reconciliation-flow",
+    REPORTS: "/api/v1/finance/reports",
+    REPORT: (type: string) => `/api/v1/finance/reports/${type}`,
     BANK_STATEMENTS: "/api/v1/finance/reconciliation/bank-statements",
     BANK_STATEMENTS_IMPORT: "/api/v1/finance/reconciliation/bank-statements/import",
     BANK_STATEMENT_APPROVE: (id: string) =>
@@ -62,6 +64,8 @@ export const ENDPOINTS = {
     CONVERSATION_STATUS: (sessionId: string) =>
       `/api/v1/intelligence/conversation/${sessionId}/status`,
     GENUI_ERROR: "/api/v1/intelligence/genui/error",
+    // Admin: upload a KRA regulatory doc into the Tax RAG knowledge base.
+    KB_INGEST: "/api/v1/intelligence/admin/knowledge-base/ingest",
   },
 
   // Alerts (agent-raised finance/compliance alerts)

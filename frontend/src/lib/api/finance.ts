@@ -12,6 +12,7 @@ import type {
   ApiCustomer,
   ApiCustomerCreate,
   ApiExpense,
+  ApiFinancialReport,
   ApiInvoice,
   ApiInvoiceCreate,
   ApiPayable,
@@ -19,6 +20,8 @@ import type {
   ApiPayableQueue,
   ApiReceiptExpenseCreate,
   ApiReconciliationFlow,
+  ApiReportCatalog,
+  ApiReportType,
   ApiVaultBalances,
   ApiVaultTransfer,
   ApiVaultTransferCreate,
@@ -53,6 +56,24 @@ export async function getReconciliationFlow(): Promise<ApiReconciliationFlow> {
   const { data } = await httpClient.get<ApiReconciliationFlow>(
     ENDPOINTS.FINANCE.RECONCILIATION_FLOW
   );
+  return data;
+}
+
+/**
+ * CoreReports catalog — the available financial reports with a live
+ * ready/no_data status, computed server-side from the ledger/invoices.
+ */
+export async function getReportCatalog(): Promise<ApiReportCatalog> {
+  const { data } = await httpClient.get<ApiReportCatalog>(ENDPOINTS.FINANCE.REPORTS);
+  return data;
+}
+
+/**
+ * Generate one financial report (income_statement / cash_flow / tax_liability),
+ * with summary metrics, a category breakdown and a monthly series.
+ */
+export async function getReport(type: ApiReportType): Promise<ApiFinancialReport> {
+  const { data } = await httpClient.get<ApiFinancialReport>(ENDPOINTS.FINANCE.REPORT(type));
   return data;
 }
 
