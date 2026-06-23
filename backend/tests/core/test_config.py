@@ -19,6 +19,7 @@ _STRONG_SECRET = "x" * 40
 _RO_URL = "postgresql+asyncpg://finguard_readonly:pw@h:5432/finguard"
 _METRICS = "m" * 32
 _CA_KEY = "a" * 64  # 32-byte Ed25519 CA key, hex-encoded
+_BOOTSTRAP = "b" * 40  # one-time OWNER bootstrap secret
 
 
 def _settings(**over: object) -> Settings:
@@ -49,6 +50,7 @@ def test_production_valid_config_boots() -> None:
         DATABASE_READONLY_URL=_RO_URL,
         METRICS_AUTH_SECRET=_METRICS,
         FINGUARD_CA_PRIVATE_KEY_HEX=_CA_KEY,
+        INITIAL_BOOTSTRAP_KEY=_BOOTSTRAP,
         ALLOWED_ORIGINS=["https://app.finguard.io"],
     )
     assert s.ENVIRONMENT == "production"
@@ -64,6 +66,9 @@ def test_production_valid_config_boots() -> None:
         {"METRICS_AUTH_SECRET": ""},
         {"ALLOWED_ORIGINS": ["*"]},
         {"FINGUARD_CA_PRIVATE_KEY_HEX": ""},  # CA key required in production
+        {"INITIAL_BOOTSTRAP_KEY": ""},                       # bootstrap key required
+        {"INITIAL_BOOTSTRAP_KEY": "short"},                  # too weak
+        {"INITIAL_BOOTSTRAP_KEY": "change-me-" + "x" * 30},  # placeholder (>=32 chars)
     ],
 )
 def test_production_rejects_unsafe_config(override: dict) -> None:
@@ -74,6 +79,7 @@ def test_production_rejects_unsafe_config(override: dict) -> None:
         "DATABASE_READONLY_URL": _RO_URL,
         "METRICS_AUTH_SECRET": _METRICS,
         "FINGUARD_CA_PRIVATE_KEY_HEX": _CA_KEY,
+        "INITIAL_BOOTSTRAP_KEY": _BOOTSTRAP,
         "ALLOWED_ORIGINS": ["https://app.finguard.io"],
     }
     base.update(override)

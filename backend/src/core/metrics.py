@@ -62,6 +62,14 @@ AGENT_LLM_TOKENS = Counter(
     labelnames=["agent_id", "model", "kind"],
 )
 
+# Frontend GenUI widget render crashes reported via the error boundary, labelled
+# by the widget component id so a consistently-failing generative widget is visible.
+GENUI_RENDER_ERRORS = Counter(
+    "finguard_genui_render_errors_total",
+    "GenUI widget render crashes reported from the frontend error boundary",
+    labelnames=["component_id"],
+)
+
 # Estimated per-agent LLM spend (tokens × configured Gemini list price). USD.
 AGENT_LLM_COST_USD = Counter(
     "agent_llm_cost_usd_total",
@@ -129,6 +137,18 @@ OUTBOX_PENDING_EVENTS = Gauge(
 OUTBOX_EVENTS_PUBLISHED = Counter(
     "finguard_outbox_events_published_total",
     "Total outbox events successfully published to RabbitMQ since process start",
+)
+
+# Monotonic count of failed publish attempts (each increments an event's retry_count).
+OUTBOX_EVENTS_RETRIED = Counter(
+    "finguard_outbox_events_retried_total",
+    "Total outbox publish attempts that failed and bumped an event's retry_count",
+)
+
+# Monotonic count of events moved to the dead-letter table after exhausting retries.
+OUTBOX_EVENTS_DEAD_LETTERED = Counter(
+    "finguard_outbox_events_dead_lettered_total",
+    "Total outbox events moved to outbox_dead_letters after exceeding OUTBOX_MAX_RETRIES",
 )
 
 # ── AMQP consumer (watchdog) ──────────────────────────────────────────────────

@@ -8,8 +8,10 @@ from src.domains.finance.models import (
     BankStatementLine,
     Budget,
     Expense,
+    ExpenseApprovalStatus,
     Invoice,
     InvoiceEvent,
+    InvoiceSnapshot,
     InvoiceStatus,
     LedgerEntry,
     MpesaTransaction,
@@ -134,6 +136,46 @@ class InvoiceEventRepository:
         )
         return list(result.scalars().all())
 
+    async def list_after_sequence(
+        self, invoice_id: uuid.UUID, sequence: int
+    ) -> list[InvoiceEvent]:
+        """Events with ``sequence > sequence`` — the tail to fold onto a snapshot."""
+        result = await self._session.execute(
+            select(InvoiceEvent)
+            .where(
+                InvoiceEvent.invoice_id == invoice_id,
+                InvoiceEvent.sequence > sequence,
+            )
+            .order_by(InvoiceEvent.sequence.asc())
+        )
+        return list(result.scalars().all())
+
+
+class InvoiceSnapshotRepository:
+    """Read/write the fold-result cache for the invoice event log.
+
+    Snapshots are a pure optimisation: ``latest`` returns the most recent one so
+    the projection can fold only the tail, and ``create`` appends a new one.  No
+    update or delete — a stale snapshot is simply superseded by a newer sequence.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def latest(self, invoice_id: uuid.UUID) -> InvoiceSnapshot | None:
+        result = await self._session.execute(
+            select(InvoiceSnapshot)
+            .where(InvoiceSnapshot.invoice_id == invoice_id)
+            .order_by(InvoiceSnapshot.sequence.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def create(self, snapshot: InvoiceSnapshot) -> InvoiceSnapshot:
+        self._session.add(snapshot)
+        await self._session.flush()
+        return snapshot
+
 
 class ExpenseRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -154,17 +196,55 @@ class ExpenseRepository:
     async def get_by_id(self, expense_id: uuid.UUID) -> Expense | None:
         return await self._session.get(Expense, expense_id)
 
+    async def get_by_id_for_update(self, expense_id: uuid.UUID) -> Expense | None:
+        """Fetch an expense with a row-level write lock (SELECT … FOR UPDATE).
+
+        Serialises approval transitions on the same payable so two reviewers
+        cannot both approve it and double-burn its budget.
+        """
+        return await self._session.get(Expense, expense_id, with_for_update=True)
+
     async def totals_by_vault(self) -> dict[VaultType, Decimal]:
         """Σ expense amount per vault — the outflow side of each vault balance.
 
-        Includes transfer fees (booked as expenses on the source vault).
+        Only counts *signed-off* expenses (APPROVED or SCHEDULED) plus the legacy
+        default — a pending payable awaiting review is a proposed bill, not cash
+        out, so it must not reduce a vault balance until a reviewer approves it.
+        Includes transfer fees (booked as APPROVED expenses on the source vault).
         """
         result = await self._session.execute(
-            select(Expense.vault, func.coalesce(func.sum(Expense.amount), 0)).group_by(
-                Expense.vault
+            select(Expense.vault, func.coalesce(func.sum(Expense.amount), 0))
+            .where(
+                Expense.approval_status.in_(
+                    (ExpenseApprovalStatus.APPROVED, ExpenseApprovalStatus.SCHEDULED)
+                )
             )
+            .group_by(Expense.vault)
         )
         return {row[0]: Decimal(row[1]) for row in result.all()}
+
+    async def list_by_approval_statuses(
+        self, statuses: tuple[ExpenseApprovalStatus, ...], limit: int = 100
+    ) -> list[Expense]:
+        """Payables in the given approval states, most recently created first."""
+        result = await self._session.execute(
+            select(Expense)
+            .where(Expense.approval_status.in_(statuses))
+            .order_by(Expense.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def approval_status_aggregates(self) -> dict[ExpenseApprovalStatus, tuple[int, Decimal]]:
+        """(count, Σ amount) grouped by approval status — backs the queue KPIs."""
+        result = await self._session.execute(
+            select(
+                Expense.approval_status,
+                func.count(),
+                func.coalesce(func.sum(Expense.amount), 0),
+            ).group_by(Expense.approval_status)
+        )
+        return {row[0]: (int(row[1]), Decimal(row[2])) for row in result.all()}
 
 
 class MpesaRepository:

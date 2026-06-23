@@ -268,6 +268,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/invoices/{invoice_id}/credit-note": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Credit Note
+         * @description Reduce an invoice's receivable by a credit note (event-sourced).
+         */
+        post: operations["apply_credit_note_api_v1_finance_invoices__invoice_id__credit_note_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/invoices/{invoice_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Invoice
+         * @description Void an uncollectable invoice (terminal, event-sourced).
+         */
+        post: operations["cancel_invoice_api_v1_finance_invoices__invoice_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/invoices/{invoice_id}/events": {
         parameters: {
             query?: never;
@@ -515,6 +555,106 @@ export interface paths {
          *     event) in a single transaction.
          */
         post: operations["create_receipt_expense_api_v1_finance_receipts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/payables/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Payable Queue
+         * @description In-flight payables (pending/approved/scheduled) + KPIs for the AP queue.
+         */
+        get: operations["payable_queue_api_v1_finance_payables_queue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/payables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Payable
+         * @description Submit a bill into the AP queue (lands at PENDING_REVIEW, no budget burn).
+         */
+        post: operations["create_payable_api_v1_finance_payables_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/payables/{payable_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Payable
+         * @description Approve a pending payable (reviewer must differ from submitter).
+         */
+        post: operations["approve_payable_api_v1_finance_payables__payable_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/payables/{payable_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Payable
+         * @description Reject a pending payable (reviewer must differ from submitter).
+         */
+        post: operations["reject_payable_api_v1_finance_payables__payable_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/payables/{payable_id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Schedule Payable
+         * @description Schedule an approved payable for payment.
+         */
+        post: operations["schedule_payable_api_v1_finance_payables__payable_id__schedule_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -840,6 +980,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/intelligence/genui/error": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Genui Error
+         * @description Record a GenUI render crash from the frontend error boundary.
+         *
+         *     Fire-and-forget from the client's perspective: it returns 202 and never
+         *     fails the page.  Attribution (who saw the crash) comes from the authenticated
+         *     session, so the report cannot be spoofed for an arbitrary user.
+         */
+        post: operations["report_genui_error_api_v1_intelligence_genui_error_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/alerts": {
         parameters: {
             query?: never;
@@ -918,6 +1082,66 @@ export interface paths {
          * @description Mark an alert resolved (MANAGER+ via the intelligence-act permission).
          */
         post: operations["resolve_alert_api_v1_alerts__alert_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Audit Logs
+         * @description Filtered, paginated, most-recent-first activity trail (managers+).
+         */
+        get: operations["list_audit_logs_api_v1_audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit/kpis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Audit Kpis
+         * @description Summary counts for the activity-log dashboard cards.
+         */
+        get: operations["audit_kpis_api_v1_audit_kpis_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit/{audit_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Audit Log
+         * @description A single audit entry (full metadata payload) by id.
+         */
+        get: operations["get_audit_log_api_v1_audit__audit_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1148,6 +1372,78 @@ export interface components {
          */
         AlertType: "duplicate_invoice" | "anomaly" | "vendor_activity" | "budget_overspend";
         /**
+         * AuditActorType
+         * @description Who initiated the recorded activity.
+         * @enum {string}
+         */
+        AuditActorType: "user" | "agent" | "system";
+        /**
+         * AuditKpis
+         * @description Summary counts for the activity-log dashboard cards.
+         */
+        AuditKpis: {
+            /** Total */
+            total: number;
+            /** Last 24H */
+            last_24h: number;
+            /** Failures Last 24H */
+            failures_last_24h: number;
+            /** Denied Last 24H */
+            denied_last_24h: number;
+        };
+        /**
+         * AuditLogPage
+         * @description A page of audit entries plus the total matching the filter (for paging).
+         */
+        AuditLogPage: {
+            /** Items */
+            items: components["schemas"]["AuditLogResponse"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** AuditLogResponse */
+        AuditLogResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            actor_type: components["schemas"]["AuditActorType"];
+            /** Actor Id */
+            actor_id: string | null;
+            /** Actor Label */
+            actor_label: string | null;
+            /** Action */
+            action: string;
+            /** Resource Type */
+            resource_type: string;
+            /** Resource Id */
+            resource_id: string | null;
+            outcome: components["schemas"]["AuditOutcome"];
+            /** Ip Address */
+            ip_address: string | null;
+            /** Request Id */
+            request_id: string | null;
+            /** Metadata Payload */
+            metadata_payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * AuditOutcome
+         * @enum {string}
+         */
+        AuditOutcome: "success" | "failure" | "denied";
+        /**
          * BankStatementLineImport
          * @description One bank statement line submitted to POST /finance/reconciliation/bank-statements/import.
          *
@@ -1312,6 +1608,18 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /**
+         * CreditNoteRequest
+         * @description Body for ``POST /invoices/{id}/credit-note`` — reduce the receivable.
+         *
+         *     ``amount`` must be positive and at most the invoice's outstanding balance.
+         */
+        CreditNoteRequest: {
+            /** Amount */
+            amount: number | string;
+            /** Reason */
+            reason?: string | null;
+        };
         /** CustomerCreate */
         CustomerCreate: {
             /** Name */
@@ -1380,6 +1688,23 @@ export interface components {
             /** Preferred Locale */
             preferred_locale?: string | null;
         };
+        /**
+         * ExpenseApprovalStatus
+         * @description Accounts-payable approval lifecycle for an :class:`Expense`.
+         *
+         *     The state machine is::
+         *
+         *         DRAFT ─submit─▶ PENDING_REVIEW ─approve─▶ APPROVED ─schedule─▶ SCHEDULED
+         *                               └────────reject────▶ REJECTED
+         *
+         *     Budget is burned down only on the transition into APPROVED (deferred from
+         *     creation) so a pending payable does not consume budget before a reviewer
+         *     signs off.  Expenses created by the immediate paths (receipt scan, M-Pesa
+         *     reconciliation, direct ``create_expense``) default to APPROVED so their
+         *     behaviour — and budget burn — is unchanged.
+         * @enum {string}
+         */
+        ExpenseApprovalStatus: "draft" | "pending_review" | "approved" | "scheduled" | "rejected";
         /** ExpenseCreate */
         ExpenseCreate: {
             /** Expense Ref */
@@ -1429,6 +1754,24 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * GenUiErrorReport
+         * @description A GenUI widget render crash reported from the frontend error boundary.
+         *
+         *     Dispatched by ``GenUiBoundary.componentDidCatch`` when an unexpected LLM
+         *     structure makes a generative widget throw, so the failure surfaces in
+         *     operational telemetry instead of dying silently in the browser console.
+         */
+        GenUiErrorReport: {
+            /** Component Id */
+            component_id: string;
+            /** Message */
+            message: string;
+            /** Component Stack */
+            component_stack?: string | null;
+            /** Pathname */
+            pathname?: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1497,6 +1840,14 @@ export interface components {
             /** Hub Artifact Id */
             hub_artifact_id?: string | null;
         };
+        /**
+         * InvoiceCancelRequest
+         * @description Body for ``POST /invoices/{id}/cancel`` — void an uncollectable invoice.
+         */
+        InvoiceCancelRequest: {
+            /** Reason */
+            reason?: string | null;
+        };
         /** InvoiceCreate */
         InvoiceCreate: {
             /**
@@ -1563,11 +1914,10 @@ export interface components {
          *
          *     The invoice's monetary state (``amount_paid`` / ``balance_due`` / ``status``)
          *     is *derived* by folding these events — the materialized ``invoices`` row is a
-         *     synchronous projection of the fold (see ``finance/events.py``).  Extend with
-         *     ``CREDIT_NOTE_APPLIED`` / ``INVOICE_CANCELLED`` when those flows are wired.
+         *     synchronous projection of the fold (see ``finance/events.py``).
          * @enum {string}
          */
-        InvoiceEventType: "invoice_issued" | "payment_applied";
+        InvoiceEventType: "invoice_issued" | "payment_applied" | "credit_note_applied" | "invoice_cancelled";
         /**
          * InvoiceReconstructionResponse
          * @description An invoice's event history plus the state derived by folding it.
@@ -1624,6 +1974,8 @@ export interface components {
             total: string;
             /** Amount Paid */
             amount_paid: string;
+            /** Amount Credited */
+            amount_credited: string;
             /** Balance Due */
             balance_due: string;
             /** Currency */
@@ -1762,6 +2114,88 @@ export interface components {
             context: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * PayableCreate
+         * @description A bill submitted into the AP approval queue (lands at PENDING_REVIEW).
+         */
+        PayableCreate: {
+            /** Category */
+            category: string;
+            /** Amount */
+            amount: number | string;
+            vault: components["schemas"]["VaultType"];
+            /** Description */
+            description?: string | null;
+            /** Merchant Name */
+            merchant_name?: string | null;
+            /** Expense Ref */
+            expense_ref?: string | null;
+            /** Customer Id */
+            customer_id?: string | null;
+        };
+        /** PayableQueueKpis */
+        PayableQueueKpis: {
+            /** Pending Count */
+            pending_count: number;
+            /** Pending Amount */
+            pending_amount: string;
+            /** Approved Count */
+            approved_count: number;
+            /** Approved Amount */
+            approved_amount: string;
+            /** Scheduled Count */
+            scheduled_count: number;
+        };
+        /**
+         * PayableQueueResponse
+         * @description The AP queue page payload: in-flight payables + summary KPIs.
+         */
+        PayableQueueResponse: {
+            kpis: components["schemas"]["PayableQueueKpis"];
+            /** Items */
+            items: components["schemas"]["PayableResponse"][];
+        };
+        /** PayableResponse */
+        PayableResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Expense Ref */
+            expense_ref: string | null;
+            /** Category */
+            category: string;
+            /** Amount */
+            amount: string;
+            vault: components["schemas"]["VaultType"];
+            /** Description */
+            description?: string | null;
+            /** Merchant Name */
+            merchant_name?: string | null;
+            approval_status: components["schemas"]["ExpenseApprovalStatus"];
+            /** Submitted By */
+            submitted_by: string | null;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Scheduled For */
+            scheduled_for: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * PayableScheduleRequest
+         * @description Body for ``POST /payables/{id}/schedule`` — when the approved bill pays.
+         */
+        PayableScheduleRequest: {
+            /** Scheduled For */
+            scheduled_for?: string | null;
         };
         /** PaymentCreate */
         PaymentCreate: {
@@ -2004,6 +2438,8 @@ export interface components {
             password: string;
             /** Full Name */
             full_name: string;
+            /** Bootstrap Key */
+            bootstrap_key?: string | null;
         };
         /** UserResponse */
         UserResponse: {
@@ -2674,6 +3110,76 @@ export interface operations {
             };
         };
     };
+    apply_credit_note_api_v1_finance_invoices__invoice_id__credit_note_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invoice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreditNoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_invoice_api_v1_finance_invoices__invoice_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invoice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["InvoiceCancelRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_invoice_events_api_v1_finance_invoices__invoice_id__events_get: {
         parameters: {
             query?: never;
@@ -3054,6 +3560,167 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExpenseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    payable_queue_api_v1_finance_payables_queue_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayableQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_payable_api_v1_finance_payables_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PayableCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayableResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_payable_api_v1_finance_payables__payable_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                payable_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayableResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_payable_api_v1_finance_payables__payable_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                payable_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayableResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    schedule_payable_api_v1_finance_payables__payable_id__schedule_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                payable_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PayableScheduleRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayableResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3505,6 +4172,41 @@ export interface operations {
             };
         };
     };
+    report_genui_error_api_v1_intelligence_genui_error_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GenUiErrorReport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_active_alerts_api_v1_alerts_get: {
         parameters: {
             query?: {
@@ -3642,6 +4344,96 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlertResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_audit_logs_api_v1_audit_get: {
+        parameters: {
+            query?: {
+                actor_id?: string | null;
+                action?: string | null;
+                resource_type?: string | null;
+                resource_id?: string | null;
+                outcome?: components["schemas"]["AuditOutcome"] | null;
+                since?: string | null;
+                until?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditLogPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    audit_kpis_api_v1_audit_kpis_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditKpis"];
+                };
+            };
+        };
+    };
+    get_audit_log_api_v1_audit__audit_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                audit_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditLogResponse"];
                 };
             };
             /** @description Validation Error */

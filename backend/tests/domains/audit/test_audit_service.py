@@ -39,6 +39,10 @@ def _user() -> User:
 @pytest.mark.asyncio
 async def test_record_user_action_persists_fields(db_session: AsyncSession) -> None:
     user = _user()
+    # actor_id is a real FK to users — persist the actor first, as it always is in
+    # production (the actor is the authenticated, DB-resident current_user).
+    db_session.add(user)
+    await db_session.commit()
     resource_id = uuid.uuid4()
 
     entry = await AuditService(db_session).record_user_action(

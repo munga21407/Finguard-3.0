@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     FINGUARD_CA_PRIVATE_KEY_HEX: str = ""
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
 
+    # One-time bootstrap secret that must be supplied in the registration payload
+    # to claim the OWNER role on the very first account. Closes the "anyone who
+    # registers first becomes owner" hijack on a public launch. Required in
+    # production (see validator); when unset outside production the first account
+    # bootstraps as OWNER unconditionally to keep local dev / CI frictionless.
+    INITIAL_BOOTSTRAP_KEY: str = ""
+
     DATABASE_URL: str
     DATABASE_READONLY_URL: str = ""   # finguard_readonly role — used by Text-to-SQL
     MONGODB_URL: str
@@ -146,6 +153,12 @@ class Settings(BaseSettings):
             problems.append(
                 "FINGUARD_CA_PRIVATE_KEY_HEX must be set (Ed25519 CA key for "
                 "agent cards / Verifiable Credentials)"
+            )
+        bootstrap = self.INITIAL_BOOTSTRAP_KEY
+        if len(bootstrap) < 32 or "change-me" in bootstrap.lower():
+            problems.append(
+                "INITIAL_BOOTSTRAP_KEY must be a strong (>=32 char) non-placeholder "
+                "value (required to claim the first OWNER account)"
             )
 
         if problems:

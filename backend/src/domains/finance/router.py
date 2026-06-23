@@ -11,13 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.core.exceptions import UnprocessableError
+from src.domains.audit.models import AuditAction
+from src.domains.audit.service import AuditService
+from src.domains.finance.models import ExpenseApprovalStatus
 from src.domains.finance.schemas import (
     BankStatementLineImport,
     BankStatementLineResponse,
     BudgetCreate,
     BudgetResponse,
+    CreditNoteRequest,
     ExpenseCreate,
     ExpenseResponse,
+    InvoiceCancelRequest,
     InvoiceCreate,
     InvoiceEventResponse,
     InvoiceReconstructionResponse,
@@ -27,6 +32,10 @@ from src.domains.finance.schemas import (
     LedgerEntryCreate,
     LedgerEntryResponse,
     MpesaCallbackPayload,
+    PayableCreate,
+    PayableQueueResponse,
+    PayableResponse,
+    PayableScheduleRequest,
     PaymentCreate,
     PaymentResponse,
     ReceiptExpenseCreate,
@@ -180,18 +189,39 @@ async def get_invoice(
 
 @router.post("/invoices", response_model=InvoiceResponse, status_code=201)
 async def create_invoice(
-    data: InvoiceCreate, db: DBSession, _: RequireFinanceWrite
+    data: InvoiceCreate, db: DBSession, current_user: RequireFinanceWrite
 ) -> InvoiceResponse:
     invoice = await FinanceService(db).create_invoice(data)
-    return InvoiceResponse.model_validate(invoice)
+    # Serialise before auditing: a best-effort audit write that fails rolls back
+    # the session and would expire ``invoice``, so build the response first.
+    result = InvoiceResponse.model_validate(invoice)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.INVOICE_CREATED,
+        "invoice",
+        resource_id=invoice.id,
+        metadata={"invoice_number": invoice.invoice_number, "total": str(invoice.total)},
+    )
+    return result
 
 
 @router.patch("/invoices/{invoice_id}", response_model=InvoiceResponse)
 async def update_invoice(
-    invoice_id: uuid.UUID, data: InvoiceUpdate, db: DBSession, _: RequireFinanceWrite
+    invoice_id: uuid.UUID,
+    data: InvoiceUpdate,
+    db: DBSession,
+    current_user: RequireFinanceWrite,
 ) -> InvoiceResponse:
     invoice = await FinanceService(db).update_invoice(invoice_id, data)
-    return InvoiceResponse.model_validate(invoice)
+    result = InvoiceResponse.model_validate(invoice)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.INVOICE_UPDATED,
+        "invoice",
+        resource_id=invoice.id,
+        metadata=data.model_dump(exclude_none=True, mode="json"),
+    )
+    return result
 
 
 @router.post("/invoices/{invoice_id}/pay", response_model=InvoiceResponse)
@@ -210,7 +240,60 @@ async def mark_invoice_paid(
     invoice = await FinanceService(db).mark_invoice_paid(
         invoice_id, current_user, vault=settle.vault, reference_note=settle.reference_note
     )
-    return InvoiceResponse.model_validate(invoice)
+    result = InvoiceResponse.model_validate(invoice)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.INVOICE_PAID,
+        "invoice",
+        resource_id=invoice.id,
+        metadata={"vault": settle.vault.value, "status": invoice.status.value},
+    )
+    return result
+
+
+@router.post("/invoices/{invoice_id}/credit-note", response_model=InvoiceResponse)
+async def apply_credit_note(
+    invoice_id: uuid.UUID,
+    data: CreditNoteRequest,
+    db: DBSession,
+    current_user: RequireFinanceWrite,
+) -> InvoiceResponse:
+    """Reduce an invoice's receivable by a credit note (event-sourced)."""
+    invoice = await FinanceService(db).apply_credit_note(
+        invoice_id, data.amount, current_user, reason=data.reason
+    )
+    result = InvoiceResponse.model_validate(invoice)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.CREDIT_NOTE_APPLIED,
+        "invoice",
+        resource_id=invoice.id,
+        metadata={"amount": str(data.amount), "reason": data.reason},
+    )
+    return result
+
+
+@router.post("/invoices/{invoice_id}/cancel", response_model=InvoiceResponse)
+async def cancel_invoice(
+    invoice_id: uuid.UUID,
+    db: DBSession,
+    current_user: RequireFinanceWrite,
+    data: InvoiceCancelRequest | None = None,
+) -> InvoiceResponse:
+    """Void an uncollectable invoice (terminal, event-sourced)."""
+    body = data or InvoiceCancelRequest()
+    invoice = await FinanceService(db).cancel_invoice(
+        invoice_id, current_user, reason=body.reason
+    )
+    result = InvoiceResponse.model_validate(invoice)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.INVOICE_CANCELLED,
+        "invoice",
+        resource_id=invoice.id,
+        metadata={"reason": body.reason},
+    )
+    return result
 
 
 @router.get("/invoices/{invoice_id}/events", response_model=list[InvoiceEventResponse])
@@ -238,6 +321,7 @@ async def reconstruct_invoice(
     invoice, state, events = await FinanceService(db).reconstruct_invoice(invoice_id)
     matches = (
         state.amount_paid == invoice.amount_paid
+        and state.credited == invoice.amount_credited
         and state.balance_due == invoice.balance_due
         and (state.payment_status is None or state.payment_status == invoice.status)
     )
@@ -381,10 +465,18 @@ async def list_vault_transfers(
 
 @router.post("/expenses", response_model=ExpenseResponse, status_code=201)
 async def create_expense(
-    data: ExpenseCreate, db: DBSession, _: RequireFinanceWrite
+    data: ExpenseCreate, db: DBSession, current_user: RequireFinanceWrite
 ) -> ExpenseResponse:
     expense = await FinanceService(db).create_expense(data)
-    return ExpenseResponse.model_validate(expense)
+    result = ExpenseResponse.model_validate(expense)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.EXPENSE_CREATED,
+        "expense",
+        resource_id=expense.id,
+        metadata={"category": expense.category, "amount": str(expense.amount)},
+    )
+    return result
 
 
 @router.get("/expenses", response_model=list[ExpenseResponse])
@@ -411,6 +503,103 @@ async def create_receipt_expense(
     """
     expense = await FinanceService(db).create_receipt_expense(data)
     return ExpenseResponse.model_validate(expense)
+
+
+# ── Accounts payable (approval workflow) ──────────────────────────────────────
+
+@router.get("/payables/queue", response_model=PayableQueueResponse)
+async def payable_queue(
+    db: DBSession,
+    _: RequireFinanceRead,
+    limit: int = Query(default=100, le=500),
+) -> PayableQueueResponse:
+    """In-flight payables (pending/approved/scheduled) + KPIs for the AP queue."""
+    return await FinanceService(db).list_payable_queue(limit=limit)
+
+
+@router.post("/payables", response_model=PayableResponse, status_code=201)
+async def create_payable(
+    data: PayableCreate, db: DBSession, current_user: RequireFinanceWrite
+) -> PayableResponse:
+    """Submit a bill into the AP queue (lands at PENDING_REVIEW, no budget burn)."""
+    expense = await FinanceService(db).create_payable(data, current_user)
+    result = PayableResponse.model_validate(expense)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.PAYABLE_SUBMITTED,
+        "payable",
+        resource_id=expense.id,
+        metadata={"category": expense.category, "amount": str(expense.amount)},
+    )
+    return result
+
+
+@router.post("/payables/{payable_id}/approve", response_model=PayableResponse)
+async def approve_payable(
+    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+) -> PayableResponse:
+    """Approve a pending payable (reviewer must differ from submitter)."""
+    expense = await FinanceService(db).transition_payable(
+        payable_id, current_user, target=ExpenseApprovalStatus.APPROVED
+    )
+    result = PayableResponse.model_validate(expense)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.PAYABLE_APPROVED,
+        "payable",
+        resource_id=expense.id,
+        metadata={"amount": str(expense.amount), "submitted_by": str(expense.submitted_by)},
+    )
+    return result
+
+
+@router.post("/payables/{payable_id}/reject", response_model=PayableResponse)
+async def reject_payable(
+    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+) -> PayableResponse:
+    """Reject a pending payable (reviewer must differ from submitter)."""
+    expense = await FinanceService(db).transition_payable(
+        payable_id, current_user, target=ExpenseApprovalStatus.REJECTED
+    )
+    result = PayableResponse.model_validate(expense)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.PAYABLE_REJECTED,
+        "payable",
+        resource_id=expense.id,
+        metadata={"amount": str(expense.amount), "submitted_by": str(expense.submitted_by)},
+    )
+    return result
+
+
+@router.post("/payables/{payable_id}/schedule", response_model=PayableResponse)
+async def schedule_payable(
+    payable_id: uuid.UUID,
+    db: DBSession,
+    current_user: RequireFinanceReconcile,
+    data: PayableScheduleRequest | None = None,
+) -> PayableResponse:
+    """Schedule an approved payable for payment."""
+    body = data or PayableScheduleRequest()
+    expense = await FinanceService(db).transition_payable(
+        payable_id,
+        current_user,
+        target=ExpenseApprovalStatus.SCHEDULED,
+        scheduled_for=body.scheduled_for,
+    )
+    result = PayableResponse.model_validate(expense)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.PAYABLE_SCHEDULED,
+        "payable",
+        resource_id=expense.id,
+        metadata={
+            "scheduled_for": expense.scheduled_for.isoformat()
+            if expense.scheduled_for
+            else None
+        },
+    )
+    return result
 
 
 # ── M-Pesa ────────────────────────────────────────────────────────────────────
@@ -449,17 +638,42 @@ async def record_cash_payment(
     current_user: RequireFinanceWrite,
 ) -> PaymentResponse:
     payment = await FinanceService(db).record_cash_payment(data, current_user)
-    return PaymentResponse.model_validate(payment)
+    result = PaymentResponse.model_validate(payment)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.PAYMENT_RECORDED,
+        "payment",
+        resource_id=payment.id,
+        metadata={
+            "invoice_id": str(payment.invoice_id),
+            "amount": str(payment.amount),
+            "vault": payment.vault.value,
+        },
+    )
+    return result
 
 
 # ── Budgets ───────────────────────────────────────────────────────────────────
 
 @router.post("/budgets", response_model=BudgetResponse, status_code=201)
 async def create_budget(
-    data: BudgetCreate, db: DBSession, _: RequireFinanceWrite
+    data: BudgetCreate, db: DBSession, current_user: RequireFinanceWrite
 ) -> BudgetResponse:
     budget = await FinanceService(db).create_budget(data)
-    return BudgetResponse.model_validate(budget)
+    result = BudgetResponse.model_validate(budget)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.BUDGET_CREATED,
+        "budget",
+        resource_id=budget.id,
+        metadata={
+            "name": budget.name,
+            "category": budget.category,
+            "amount": str(budget.amount),
+            "currency": budget.currency,
+        },
+    )
+    return result
 
 
 @router.get("/budgets", response_model=list[BudgetResponse])

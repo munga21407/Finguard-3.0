@@ -7,7 +7,10 @@ import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   approveBankStatement,
+  approvePayable,
+  createPayable,
   createVaultTransfer,
+  getPayableQueue,
   getReconciliationFlow,
   getVaultBalances,
   importBankStatements,
@@ -18,6 +21,8 @@ import {
   listInvoices,
   listVaultTransfers,
   rejectBankStatement,
+  rejectPayable,
+  schedulePayable,
 } from "@/lib/api/finance";
 import type {
   ApiBankStatementImport,
@@ -26,6 +31,7 @@ import type {
   ApiCustomer,
   ApiExpense,
   ApiInvoice,
+  ApiPayableQueue,
   ApiReconciliationFlow,
   ApiVaultBalances,
   ApiVaultTransfer,
@@ -41,6 +47,7 @@ export const financeKeys = {
   vaultTransfers: ["finance", "vault-transfers"] as const,
   bankStatements: (status?: string) =>
     ["finance", "bank-statements", status ?? "all"] as const,
+  payableQueue: ["finance", "payables", "queue"] as const,
 };
 
 export function useInvoices() {
@@ -135,6 +142,54 @@ export function useReviewBankStatement() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["finance", "bank-statements"] });
       queryClient.invalidateQueries({ queryKey: financeKeys.reconciliationFlow });
+    },
+  });
+}
+
+// ─── Accounts payable (approval queue) ──────────────────────────────────────────
+
+export function usePayableQueue() {
+  return useQuery<ApiPayableQueue>({
+    queryKey: financeKeys.payableQueue,
+    queryFn: getPayableQueue,
+  });
+}
+
+/** Submit a new bill into the AP queue; refresh the queue on success. */
+export function useCreatePayable() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: createPayable,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: financeKeys.payableQueue });
+    },
+  });
+}
+
+/**
+ * Move a payable along its approval state machine (approve / reject / schedule).
+ * Approving burns budget and reduces a vault balance, so refresh those too.
+ */
+export function useTransitionPayable() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      action,
+    }: {
+      id: string;
+      action: "approve" | "reject" | "schedule";
+    }) =>
+      action === "approve"
+        ? approvePayable(id)
+        : action === "reject"
+          ? rejectPayable(id)
+          : schedulePayable(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: financeKeys.payableQueue });
+      queryClient.invalidateQueries({ queryKey: financeKeys.expenses });
+      queryClient.invalidateQueries({ queryKey: financeKeys.budgets });
+      queryClient.invalidateQueries({ queryKey: financeKeys.vaultBalances });
     },
   });
 }

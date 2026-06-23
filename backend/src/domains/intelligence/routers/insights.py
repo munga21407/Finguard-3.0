@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.domains.audit.models import AuditAction
+from src.domains.audit.service import AuditService
 from src.domains.identity.dependencies import (
     RequireIntelligenceAct,
     RequireIntelligenceRead,
@@ -160,6 +162,15 @@ async def ai_actions(
         triggered_by=str(current_user.id),
     )
 
+    # ── 6. Audit the agent run (state-changing orchestration) ─────────────
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.AGENT_ACTION_RUN,
+        "agent_action",
+        resource_id=idempotency_key,
+        metadata={"mode": "actions", "intent": request.intent},
+    )
+
     return response
 
 
@@ -167,6 +178,7 @@ async def ai_actions(
 async def invoke_intent(
     request: IntentRequest,
     current_user: RequireIntelligenceAct,
+    db: DBSession,
 ) -> IntentResponse:
     """
     Focused invoice-generation graph: Agent A → Hub Writer → END.
@@ -187,6 +199,13 @@ async def invoke_intent(
     final_state = await graph.ainvoke(initial_state)
 
     context = final_state.get("context", {})
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.AGENT_ACTION_RUN,
+        "agent_action",
+        resource_id=session_id,
+        metadata={"agent": "a_generator", "intent": request.intent},
+    )
     return IntentResponse(
         session_id=session_id,
         intent=request.intent,

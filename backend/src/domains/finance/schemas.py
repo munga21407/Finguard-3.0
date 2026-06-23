@@ -5,7 +5,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from src.domains.finance.models import InvoiceEventType, InvoiceStatus, TransactionType
+from src.domains.finance.models import (
+    ExpenseApprovalStatus,
+    InvoiceEventType,
+    InvoiceStatus,
+    TransactionType,
+)
 from src.domains.finance.types import VaultType
 
 
@@ -61,6 +66,22 @@ class InvoiceSettleRequest(BaseModel):
     reference_note: str | None = None
 
 
+class CreditNoteRequest(BaseModel):
+    """Body for ``POST /invoices/{id}/credit-note`` — reduce the receivable.
+
+    ``amount`` must be positive and at most the invoice's outstanding balance.
+    """
+
+    amount: Decimal = Field(gt=0)
+    reason: str | None = None
+
+
+class InvoiceCancelRequest(BaseModel):
+    """Body for ``POST /invoices/{id}/cancel`` — void an uncollectable invoice."""
+
+    reason: str | None = None
+
+
 class InvoiceResponse(BaseModel):
     id: uuid.UUID
     customer_id: uuid.UUID
@@ -70,6 +91,7 @@ class InvoiceResponse(BaseModel):
     tax: Decimal
     total: Decimal
     amount_paid: Decimal
+    amount_credited: Decimal
     balance_due: Decimal
     currency: str
     due_date: datetime | None
@@ -166,6 +188,59 @@ class ExpenseResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── Accounts payable (approval workflow) ──────────────────────────────────────
+
+class PayableCreate(BaseModel):
+    """A bill submitted into the AP approval queue (lands at PENDING_REVIEW)."""
+
+    category: str = Field(min_length=1, max_length=100)
+    amount: Decimal = Field(gt=0)
+    vault: VaultType
+    description: str | None = None
+    merchant_name: str | None = Field(default=None, max_length=255)
+    expense_ref: str | None = Field(default=None, max_length=50)
+    customer_id: uuid.UUID | None = None
+
+
+class PayableScheduleRequest(BaseModel):
+    """Body for ``POST /payables/{id}/schedule`` — when the approved bill pays."""
+
+    scheduled_for: datetime | None = None
+
+
+class PayableResponse(BaseModel):
+    id: uuid.UUID
+    expense_ref: str | None
+    category: str
+    amount: Decimal
+    vault: VaultType
+    description: str | None = None
+    merchant_name: str | None = None
+    approval_status: ExpenseApprovalStatus
+    submitted_by: uuid.UUID | None
+    reviewed_by: uuid.UUID | None
+    reviewed_at: datetime | None
+    scheduled_for: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PayableQueueKpis(BaseModel):
+    pending_count: int
+    pending_amount: Decimal
+    approved_count: int
+    approved_amount: Decimal
+    scheduled_count: int
+
+
+class PayableQueueResponse(BaseModel):
+    """The AP queue page payload: in-flight payables + summary KPIs."""
+
+    kpis: PayableQueueKpis
+    items: list[PayableResponse]
 
 
 # ── M-Pesa ────────────────────────────────────────────────────────────────────

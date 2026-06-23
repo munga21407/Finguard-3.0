@@ -544,3 +544,19 @@ class AgentTelemetry(BaseModel):
     running: int
     last_status: AgentRunStatus | None
     last_run_at: datetime | None
+
+
+class GenUiErrorReport(BaseModel):
+    """A GenUI widget render crash reported from the frontend error boundary.
+
+    Dispatched by ``GenUiBoundary.componentDidCatch`` when an unexpected LLM
+    structure makes a generative widget throw, so the failure surfaces in
+    operational telemetry instead of dying silently in the browser console.
+    """
+
+    component_id: str = Field(max_length=120)
+    message: str = Field(max_length=2000)
+    # React component stack; truncated client-side, capped again here.
+    component_stack: str | None = Field(default=None, max_length=8000)
+    # Path the widget rendered on, for correlating with a dashboard view.
+    pathname: str | None = Field(default=None, max_length=512)

@@ -16,7 +16,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domains.finance.events import fold_invoice_events
+from src.domains.finance.events import (
+    SNAPSHOT_INTERVAL,
+    InvoiceState,
+    fold_from_snapshot,
+    fold_invoice_events,
+)
 from src.domains.finance.models import (
     Invoice,
     InvoiceEvent,
@@ -119,6 +124,99 @@ def test_fold_is_order_independent() -> None:
     reversed_ = fold_invoice_events([pay, issued])
     assert forward.balance_due == reversed_.balance_due == Decimal("0")
     assert reversed_.payment_status == InvoiceStatus.PAID
+
+
+# ── Credit notes + cancellation ───────────────────────────────────────────────
+
+def test_fold_credit_note_reduces_balance() -> None:
+    state = fold_invoice_events(
+        [
+            _event(1, InvoiceEventType.INVOICE_ISSUED, "1000"),
+            _event(2, InvoiceEventType.PAYMENT_APPLIED, "400"),
+            _event(3, InvoiceEventType.CREDIT_NOTE_APPLIED, "100"),
+        ]
+    )
+    assert state.credited == Decimal("100")
+    # balance_due = total - credited - amount_paid
+    assert state.balance_due == Decimal("500")
+    assert state.payment_status == InvoiceStatus.PARTIALLY_PAID
+
+
+def test_fold_credit_note_can_settle_remaining_balance() -> None:
+    state = fold_invoice_events(
+        [
+            _event(1, InvoiceEventType.INVOICE_ISSUED, "1000"),
+            _event(2, InvoiceEventType.PAYMENT_APPLIED, "400"),
+            _event(3, InvoiceEventType.CREDIT_NOTE_APPLIED, "600"),
+        ]
+    )
+    assert state.balance_due == Decimal("0")
+    # A payment exists and the balance is cleared → PAID, carrying the payment time.
+    assert state.payment_status == InvoiceStatus.PAID
+    assert state.paid_at is not None
+
+
+def test_fold_cancellation_is_terminal() -> None:
+    state = fold_invoice_events(
+        [
+            _event(1, InvoiceEventType.INVOICE_ISSUED, "1000"),
+            _event(2, InvoiceEventType.INVOICE_CANCELLED, "0"),
+        ]
+    )
+    assert state.cancelled is True
+    assert state.payment_status == InvoiceStatus.CANCELLED
+    assert state.paid_at is None
+
+
+# ── Snapshotting ──────────────────────────────────────────────────────────────
+
+def _seq_event(
+    invoice_id: uuid.UUID, seq: int, etype: InvoiceEventType, amount: str, *, day: int
+) -> InvoiceEvent:
+    """Event for one invoice with a deterministic, sequence-ordered timestamp."""
+    return InvoiceEvent(
+        invoice_id=invoice_id,
+        sequence=seq,
+        event_type=etype,
+        amount=Decimal(amount),
+        payload={},
+        occurred_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=day),
+    )
+
+
+def test_snapshot_round_trips() -> None:
+    state = fold_invoice_events(
+        [
+            _event(1, InvoiceEventType.INVOICE_ISSUED, "1000"),
+            _event(2, InvoiceEventType.PAYMENT_APPLIED, "1000"),
+        ]
+    )
+    assert InvoiceState.from_snapshot(state.to_snapshot()) == state
+
+
+def test_fold_from_snapshot_equals_full_replay() -> None:
+    """Resuming from a snapshot + tail must be identical to replaying the whole log.
+
+    Mixes payments and credit notes across a log longer than SNAPSHOT_INTERVAL so
+    the snapshot boundary is genuinely exercised.
+    """
+    inv = uuid.uuid4()
+    events = [_seq_event(inv, 1, InvoiceEventType.INVOICE_ISSUED, "100000", day=0)]
+    for seq in range(2, 2 * SNAPSHOT_INTERVAL + 12):
+        if seq % 3 == 0:
+            events.append(
+                _seq_event(inv, seq, InvoiceEventType.CREDIT_NOTE_APPLIED, "50", day=seq)
+            )
+        else:
+            events.append(
+                _seq_event(inv, seq, InvoiceEventType.PAYMENT_APPLIED, "100", day=seq)
+            )
+
+    full = fold_invoice_events(events)
+    base = fold_invoice_events(events[:SNAPSHOT_INTERVAL])
+    tail = [e for e in events if e.sequence > base.sequence]
+    resumed = fold_from_snapshot(InvoiceState.from_snapshot(base.to_snapshot()), tail)
+    assert resumed == full
 
 
 # ── Service integration tests (DB) ────────────────────────────────────────────

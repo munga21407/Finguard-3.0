@@ -1,3 +1,4 @@
+import hmac
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -40,22 +41,45 @@ class IdentityService:
         if await self._repo.get_by_email(data.email):
             raise ConflictError("Email already registered")
 
-        # Bootstrap: the very first account in an empty system becomes a verified
-        # OWNER so there is an initial administrator.  Every subsequent
-        # self-registration is an UNVERIFIED VIEWER and cannot log in until an
-        # administrator verifies it — closing the "anyone can register and touch
-        # financial data" hole.
+        # Bootstrap: the first account can claim a verified OWNER role, but only
+        # by presenting the configured INITIAL_BOOTSTRAP_KEY — without it the
+        # unrestricted "first to register owns the system" hijack is gone. Every
+        # other self-registration is an UNVERIFIED VIEWER that cannot log in until
+        # an administrator verifies it.
         is_first_user = (await self._repo.count()) == 0
+        claim_owner = self._claims_owner(data.bootstrap_key, is_first_user)
         user = User(
             email=data.email,
             hashed_password=hash_password(data.password),
             full_name=data.full_name,
-            role=UserRole.OWNER if is_first_user else UserRole.VIEWER,
-            is_verified=is_first_user,
+            role=UserRole.OWNER if claim_owner else UserRole.VIEWER,
+            is_verified=claim_owner,
         )
         user = await self._repo.create(user)
         await self._session.commit()
         return user
+
+    @staticmethod
+    def _claims_owner(bootstrap_key: str | None, is_first_user: bool) -> bool:
+        """Decide whether a registration may bootstrap the OWNER role.
+
+        With ``INITIAL_BOOTSTRAP_KEY`` configured (always in production), the
+        first account must present the matching key — a wrong key, or any attempt
+        once the owner exists, is rejected outright. With no key configured
+        (local dev / CI), the first account bootstraps unconditionally so the
+        suite and developer setup stay frictionless.
+        """
+        configured = settings.INITIAL_BOOTSTRAP_KEY
+        if not configured:
+            return is_first_user
+        if not bootstrap_key:
+            return False
+        # Constant-time compare so a wrong key can't be discovered by timing.
+        if not hmac.compare_digest(bootstrap_key, configured):
+            raise ForbiddenError("Invalid bootstrap key")
+        if not is_first_user:
+            raise ForbiddenError("The owner account has already been claimed")
+        return True
 
     async def login(
         self, email: str, password: str, ip: str | None = None

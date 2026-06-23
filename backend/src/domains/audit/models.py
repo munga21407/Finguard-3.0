@@ -38,6 +38,25 @@ class AuditAction(enum.StrEnum):
     AUTH_LOGOUT = "auth.logout"
     ALERT_CREATED = "alert.created"
     ALERT_RESOLVED = "alert.resolved"
+    # Finance — invoices (receivables)
+    INVOICE_CREATED = "invoice.created"
+    INVOICE_UPDATED = "invoice.updated"
+    INVOICE_PAID = "invoice.paid"
+    INVOICE_CANCELLED = "invoice.cancelled"
+    CREDIT_NOTE_APPLIED = "credit_note.applied"
+    # Finance — accounts payable (expenses + approval queue)
+    EXPENSE_CREATED = "expense.created"
+    PAYMENT_RECORDED = "payment.recorded"      # manual cash payment against an invoice
+    BUDGET_CREATED = "budget.created"
+    PAYABLE_SUBMITTED = "payable.submitted"
+    PAYABLE_APPROVED = "payable.approved"
+    PAYABLE_REJECTED = "payable.rejected"
+    PAYABLE_SCHEDULED = "payable.scheduled"
+    # CRM
+    CRM_CUSTOMER_CREATED = "crm.customer.created"
+    CRM_CUSTOMER_UPDATED = "crm.customer.updated"
+    # Intelligence — agent orchestration runs
+    AGENT_ACTION_RUN = "agent.action_run"
 
 
 class AuditLog(Base):
