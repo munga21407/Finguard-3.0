@@ -15,6 +15,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -98,6 +99,12 @@ class KnowledgeBase(Base):
             "vector_embeddings",
             postgresql_using="ivfflat",
             postgresql_ops={"vector_embeddings": "vector_l2_ops"},
+        ),
+        # Idempotent ingest key: ``ON CONFLICT (document_title, section_key)``
+        # in the KRA ingest pipeline relies on this. Declared on the ORM (not
+        # just migration 0001) so the test schema built via ``create_all`` has it.
+        UniqueConstraint(
+            "document_title", "section_key", name="uq_knowledge_base_title_section"
         ),
         {"schema": "finguard"},
     )

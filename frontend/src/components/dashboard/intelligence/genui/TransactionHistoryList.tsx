@@ -3,6 +3,7 @@
 // ─── TransactionHistoryList ───────────────────────────────────────────────────
 // Category C · Rich Layout Container. Clean tabular activity log: item/platform
 // (with logo/icon), date & time, type, amount, and a colour-coded status pill.
+
 import { resolveIcon } from "./_icons";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatMoney, formatDateTime } from "@/lib/utils/format";

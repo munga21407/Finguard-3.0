@@ -3,6 +3,7 @@
 // ─── ConcentricProgressCard ───────────────────────────────────────────────────
 // Category A · Micro-Widget. Up to three concentric SVG progress rings tracking
 // nested metrics, with a clean legend beside the dial.
+
 import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
