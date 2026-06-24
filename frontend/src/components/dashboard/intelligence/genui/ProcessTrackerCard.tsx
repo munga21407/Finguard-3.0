@@ -3,6 +3,7 @@
 // ─── ProcessTrackerCard ───────────────────────────────────────────────────────
 // Category A · Micro-Widget. Prominent task status with a circular progress arc
 // and a checklist of verifications.
+
 import { Check } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 

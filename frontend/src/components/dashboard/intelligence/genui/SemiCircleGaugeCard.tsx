@@ -3,6 +3,7 @@
 // ─── SemiCircleGaugeCard ──────────────────────────────────────────────────────
 // Category A · Metric Callout. Compact card with a bold percentage centred inside
 // an SVG semi-circle gauge over a subtle capacity track.
+
 import { resolveIcon } from "./_icons";
 import { EmptyState } from "@/components/ui/EmptyState";
 

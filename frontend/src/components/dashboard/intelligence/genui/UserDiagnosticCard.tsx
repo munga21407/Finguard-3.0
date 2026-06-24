@@ -3,6 +3,7 @@
 // ─── UserDiagnosticCard ───────────────────────────────────────────────────────
 // Category B · Specialized Visualization. Dense micro-analytical card: avatar
 // profile block, an inline badge array, and mini activity dots for recent actions.
+
 import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────

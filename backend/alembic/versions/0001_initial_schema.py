@@ -89,10 +89,19 @@ def upgrade() -> None:
             WITH (m = 16, ef_construction = 64)
     """)
     # (2) Idempotent KRA-doc ingestion (ON CONFLICT DO NOTHING) needs this key.
+    # The constraint is now also declared on the ORM, so create_all above already
+    # emits it; guard the ADD so a fresh `alembic upgrade head` doesn't collide.
     op.execute("""
-        ALTER TABLE finguard.knowledge_base
-            ADD CONSTRAINT uq_knowledge_base_title_section
-            UNIQUE (document_title, section_key)
+        DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'uq_knowledge_base_title_section'
+            ) THEN
+                ALTER TABLE finguard.knowledge_base
+                    ADD CONSTRAINT uq_knowledge_base_title_section
+                    UNIQUE (document_title, section_key);
+            END IF;
+        END $$;
     """)
     # (3) DB-level guard so balance_due can never drift from total - amount_paid.
     op.create_check_constraint(

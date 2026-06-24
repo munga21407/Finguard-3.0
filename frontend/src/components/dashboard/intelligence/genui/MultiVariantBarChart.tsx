@@ -3,6 +3,7 @@
 // ─── MultiVariantBarChart ─────────────────────────────────────────────────────
 // Category B · Specialized Visualization. Side-by-side grouped (or stacked)
 // vertical bars across a time axis, with clean contrasting series fills.
+
 import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────

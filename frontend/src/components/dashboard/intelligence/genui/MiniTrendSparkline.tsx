@@ -3,6 +3,7 @@
 // ─── MiniTrendSparkline ───────────────────────────────────────────────────────
 // Category B · Specialized Visualization. Primary key value paired with a smooth,
 // filled SVG area wave. No axes or grid lines — maximum simplicity.
+
 import { useId } from "react";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
