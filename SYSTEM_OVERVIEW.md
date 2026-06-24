@@ -447,7 +447,7 @@ finguard.users (
 )
 ```
 
-**Bootstrap behaviour**: The first user registered becomes `role=OWNER, is_verified=true` automatically. All subsequent self-registrations are `role=VIEWER, is_verified=false` and are blocked from login until an admin/owner verifies them.
+**Bootstrap behaviour**: The first user registered becomes `role=OWNER, is_verified=true` automatically. All subsequent self-registrations are `role=VIEWER, is_verified=false` and are blocked from login until an admin/owner verifies them. Alternatively, run `scripts.seed_users` (`make seed-users`) to create verified `OWNER` + `ADMIN` accounts from the `SEED_*` env vars without self-registering — idempotent (existing emails skipped) and refuses weak passwords in production.
 
 ### PostgreSQL — CRM Domain
 
