@@ -30,6 +30,9 @@ backend-typecheck: ## Type-check backend (mypy)
 backend-migrate: ## Apply database migrations
 	cd $(BACKEND) && uv run alembic -c alembic/alembic.ini upgrade head
 
+seed-users: ## Create the initial OWNER + ADMIN accounts from SEED_* env vars (idempotent)
+	cd $(BACKEND) && uv run python -m scripts.seed_users
+
 # ── Frontend ──────────────────────────────────────────────────────────────────
 frontend-install: ## Install frontend dependencies
 	cd $(FRONTEND) && npm ci

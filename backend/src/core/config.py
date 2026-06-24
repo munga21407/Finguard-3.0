@@ -28,6 +28,18 @@ class Settings(BaseSettings):
     # bootstraps as OWNER unconditionally to keep local dev / CI frictionless.
     INITIAL_BOOTSTRAP_KEY: str = ""
 
+    # Initial superuser (OWNER) + ADMIN accounts, created on demand by the
+    # ``scripts.seed_users`` CLI so an operator can log in on a fresh deploy
+    # without self-registering. Optional and NOT read at boot — only when the
+    # seeder runs (which enforces password strength in production). Leave blank
+    # to disable seeding for that role.
+    SEED_OWNER_EMAIL: str = ""
+    SEED_OWNER_PASSWORD: str = ""
+    SEED_OWNER_NAME: str = "Finguard Owner"
+    SEED_ADMIN_EMAIL: str = ""
+    SEED_ADMIN_PASSWORD: str = ""
+    SEED_ADMIN_NAME: str = "Finguard Admin"
+
     DATABASE_URL: str
     DATABASE_READONLY_URL: str = ""   # finguard_readonly role — used by Text-to-SQL
     MONGODB_URL: str

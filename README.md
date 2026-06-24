@@ -118,7 +118,10 @@ docker compose exec backend uv run alembic upgrade head
 docker compose exec backend uv run python scripts/ingest_kra_docs.py
 ```
 
-There is no admin-creation script: **the first account you register becomes `OWNER` (verified) automatically**; all later self-registrations are `VIEWER` (unverified) until an owner/admin verifies them.
+**First login — two ways to get an initial admin:**
+
+1. **Self-register** — the first account you register becomes `OWNER` (verified) automatically (in production it must present the `INITIAL_BOOTSTRAP_KEY`). All later self-registrations are `VIEWER` (unverified) until an owner/admin verifies them.
+2. **Seed accounts** — set `SEED_OWNER_EMAIL`/`SEED_OWNER_PASSWORD` (and optionally `SEED_ADMIN_*`) and run `make seed-users` (or `python -m scripts.seed_users`). This creates verified, ready-to-log-in `OWNER` (superuser) + `ADMIN` accounts. It's idempotent (existing emails are skipped) and refuses weak/placeholder passwords in production; use `--dry-run` to preview.
 
 ### 4. Create the read-only database role (required for Agent D / Text-to-SQL)
 
