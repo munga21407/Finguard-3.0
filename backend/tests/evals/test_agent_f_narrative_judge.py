@@ -27,6 +27,7 @@ from src.domains.intelligence.llm_client import (
     generate_structured_content,
     generate_text_content,
 )
+from src.domains.intelligence.tuning import AuditorTuning
 from tests.evals.datasets import TAX_CASES
 
 pytestmark = [
@@ -68,7 +69,7 @@ async def _judge_numeric_grounding(summary: str, expected_liability: float) -> _
 async def test_agent_f_narrative_is_numerically_grounded() -> None:
     case = next(c for c in TAX_CASES if c.id == "cit_profitable")
     _type, liability, etr = _calculate_tax_liability(
-        case.revenue, case.opex, case.tax_regime, case.period_days
+        case.revenue, case.opex, case.tax_regime, case.period_days, AuditorTuning()
     )
 
     summary = await generate_text_content(_narrative_prompt(case, liability, etr))

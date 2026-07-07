@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import operator
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from langchain_core.messages import BaseMessage
@@ -275,6 +275,12 @@ class WatchdogAnalysis(BaseModel):
     vc_id: str | None
     event_published: bool
     summary: str
+    # Anomaly-model provenance (Sprint 4 — honesty): "persisted" = the customer's
+    # weekly-retrained IsolationForest; "on_the_fly" = a degraded per-call fit for
+    # a brand-new customer with no persisted model yet. ``degraded`` mirrors this
+    # so the UI can flag a lower-confidence result.
+    isolation_model: str = "persisted"
+    degraded: bool = False
 
     @field_validator("state_probabilities")
     @classmethod
@@ -352,8 +358,61 @@ class AgentGOutput(BaseModel):
     strategic_narrative: str
 
 
+class SummaryBullet(BaseModel):
+    """One executive-summary bullet: a bold label + its plain-language text.
+
+    Structured (Sprint 5) so Agent J no longer parses ``•``/``**`` out of a raw
+    string — the bullet count and labels come straight from this model.
+    """
+
+    label: str
+    text: str
+
+
+class ExecutiveSummary(BaseModel):
+    """Agent J's structured executive summary — 3-5 labelled bullets."""
+
+    bullets: list[SummaryBullet] = []
+
+
+# Base expense taxonomy the receipt scanner may assign — kept aligned with the
+# frontend ReceiptScanner form's <select> so the suggested value is always a
+# valid option the user can accept without re-mapping. Operators may *extend*
+# this set at runtime via the ``receipt`` tuning section (S6-6); use
+# ``effective_receipt_categories()`` — not this constant — anywhere the live set
+# matters. This constant remains the safe fallback if tuning is unavailable.
+RECEIPT_CATEGORIES: tuple[str, ...] = (
+    "supplies",
+    "services",
+    "utilities",
+    "travel",
+    "other",
+)
+
+
+def effective_receipt_categories() -> tuple[str, ...]:
+    """The live receipt taxonomy (config override or the base fallback).
+
+    Reads the ``receipt`` tuning section lazily so this central schema module
+    never imports the tuning layer at load time; any failure degrades to the
+    base :data:`RECEIPT_CATEGORIES`.
+    """
+    try:
+        from src.domains.intelligence.tuning import get_receipt_tuning  # noqa: PLC0415
+
+        cats = get_receipt_tuning().categories
+        return cats or RECEIPT_CATEGORIES
+    except Exception:
+        return RECEIPT_CATEGORIES
+
+
 class ReceiptExtraction(BaseModel):
-    """Structured output from Gemini vision OCR of a receipt image."""
+    """Structured output from Gemini vision OCR of a receipt image.
+
+    ``suggested_category`` is produced by the *same* vision call as the OCR
+    fields (Sprint 3: one Gemini call instead of a second classification call);
+    the validator clamps any off-taxonomy value to ``"other"``.
+    """
 
     merchant_name: str | None = None
     date: str | None = None
@@ -361,7 +420,14 @@ class ReceiptExtraction(BaseModel):
     currency: str = "KES"
     kra_pin: str | None = None
     line_items: list[str] = []
+    suggested_category: str = "other"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @field_validator("suggested_category")
+    @classmethod
+    def _clamp_category(cls, v: str) -> str:
+        candidate = (v or "other").strip().lower()
+        return candidate if candidate in effective_receipt_categories() else "other"
 
 
 class TransactionClassification(BaseModel):
@@ -602,3 +668,44 @@ class KnowledgeIngestResponse(BaseModel):
     chunks: int
     inserted: int
     skipped: int
+
+
+# ── Admin: agent tuning + effective-dated tax rates ────────────────────────────
+
+class AgentTuningView(BaseModel):
+    """Effective (env > DB > default) tuning for each agent section — read-only view."""
+
+    reconciler: dict[str, Any]
+    watchdog: dict[str, Any]
+    auditor: dict[str, Any]
+    bankability: dict[str, Any]
+    classifier: dict[str, Any]
+    receipt: dict[str, Any]
+
+
+class AgentTuningSectionUpdate(BaseModel):
+    """Partial override payload for one tuning section (agent_config row)."""
+
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminTuningActionResponse(BaseModel):
+    """Result of an admin tuning / tax-rate mutation."""
+
+    target: str
+    status: str
+
+
+class TaxRateUpsert(BaseModel):
+    """Set/replace an effective-dated tax rate for Agent F."""
+
+    rate: float = Field(..., ge=0.0)
+    effective_from: date
+    note: str | None = Field(default=None, max_length=512)
+
+
+class TaxRateView(BaseModel):
+    rate_key: str
+    rate: float
+    effective_from: date
+    note: str | None = None

@@ -26,7 +26,6 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
 from rapidfuzz import fuzz
-from sklearn.ensemble import IsolationForest  # type: ignore[import-untyped]
 from sqlalchemy import text
 
 from src.core.logging import logger
@@ -34,6 +33,7 @@ from src.core.metrics import (
     AGENT_E_ANOMALY_SCORE,
     AGENT_E_STATE_PROBABILITY,
 )
+from src.domains.intelligence.db_tuning import refresh_agent_tuning_from_db
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.ml.model_store import (
     load_model,
@@ -50,6 +50,7 @@ from src.domains.intelligence.schemas import (
 from src.domains.intelligence.security.vc_issuer import issue_vc
 from src.domains.intelligence.tools.event_publisher import make_event_publisher
 from src.domains.intelligence.tools.sql_executor import execute_readonly_sql
+from src.domains.intelligence.tuning import get_watchdog_tuning
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
 # ---------------------------------------------------------------------------
@@ -59,31 +60,43 @@ STATE_LABELS = ["HEALTHY", "STABLE", "CRITICAL"]
 STATE_HEALTHY, STATE_STABLE, STATE_CRITICAL = 0, 1, 2
 
 # ---------------------------------------------------------------------------
-# HMM parameters
+# HMM parameters (externally configurable — see tuning.WatchdogTuning)
 # Emission: Gaussian (mean, std) per state over normalised spending ratio.
 # Spending ratio = actual_daily_spend / daily_budget_allowance.
 # ---------------------------------------------------------------------------
-EMISSION_PARAMS: list[tuple[float, float]] = [
-    (0.55, 0.15),   # HEALTHY:  typically ≤70% of budget
-    (0.85, 0.12),   # STABLE:   around 85-90% of budget
-    (1.20, 0.22),   # CRITICAL: over budget by 20%+
-]
+_wd = get_watchdog_tuning()
+
+EMISSION_PARAMS: list[tuple[float, float]] = list(_wd.emission_params)
 
 # Row-stochastic transition matrix A[from][to]
-TRANSITION: np.ndarray = np.array([
-    [0.85, 0.13, 0.02],
-    [0.10, 0.78, 0.12],
-    [0.05, 0.20, 0.75],
-], dtype=float)
+TRANSITION: np.ndarray = np.array(_wd.transition, dtype=float)
 
 # Initial state distribution π
-INITIAL_PI: np.ndarray = np.array([0.80, 0.15, 0.05])
+INITIAL_PI: np.ndarray = np.array(_wd.initial_pi, dtype=float)
 
 # Duplicate-detection threshold (rapidfuzz token_sort_ratio, 0-100)
-DUPLICATE_THRESHOLD = 88.0
+DUPLICATE_THRESHOLD = _wd.duplicate_threshold
 
 # IsolationForest minimum samples before scoring
-ISOLATION_MIN_SAMPLES = 5
+ISOLATION_MIN_SAMPLES = _wd.isolation_min_samples
+
+
+def _apply_watchdog_tuning() -> None:
+    """Rebind the module-level HMM/detector constants from current tuning.
+
+    Called at node entry (after the DB overlay refresh) so a runtime override in
+    ``finguard.agent_config`` takes effect without a restart.  The reassignment
+    is synchronous (no awaits), so under asyncio it is atomic w.r.t. concurrent
+    watchdog runs — and the values are process-global, not per-customer, so all
+    concurrent runs see the same tuning anyway.
+    """
+    global EMISSION_PARAMS, TRANSITION, INITIAL_PI, DUPLICATE_THRESHOLD, ISOLATION_MIN_SAMPLES
+    wd = get_watchdog_tuning()
+    EMISSION_PARAMS = list(wd.emission_params)
+    TRANSITION = np.array(wd.transition, dtype=float)
+    INITIAL_PI = np.array(wd.initial_pi, dtype=float)
+    DUPLICATE_THRESHOLD = wd.duplicate_threshold
+    ISOLATION_MIN_SAMPLES = wd.isolation_min_samples
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +210,10 @@ def _isolation_score(amounts: list[float]) -> float:
     Returns a value in [0, 1] where 1 = most anomalous.
     Requires at least ISOLATION_MIN_SAMPLES observations.
     """
+    from sklearn.ensemble import (  # type: ignore[import-untyped]  # noqa: PLC0415
+        IsolationForest,
+    )
+
     if len(amounts) < ISOLATION_MIN_SAMPLES:
         return 0.0
     x = np.array(amounts, dtype=float).reshape(-1, 1)
@@ -355,6 +372,8 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
 
         # Agent E creates and tears down its own session (thread-isolated pool)
         async with AsyncSessionLocal() as session:
+            # Pick up any runtime tuning override, then rebind the HMM constants.
+            await refresh_agent_tuning_from_db()
             ratios = await _fetch_spending_ratios(account_id, session, period_days)
             amounts = await _fetch_recent_amounts()
             recent_invoices = await _fetch_recent_invoices()
@@ -365,6 +384,7 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
                 if customer_id is not None
                 else None
             )
+        _apply_watchdog_tuning()
 
         # ── HMM ──────────────────────────────────────────────────────────────
         state_probs: np.ndarray = _forward_algorithm(ratios)
@@ -385,6 +405,8 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
         score_target = float(
             candidate_invoice.get("amount", amounts[-1] if amounts else 0.0)
         )
+        isolation_model = "persisted" if persisted_model is not None else "on_the_fly"
+        degraded = persisted_model is None
         if persisted_model is not None:
             # Load the persisted weights and run inference directly — `.predict()`
             # for the anomaly label, decision_function for the [0,1] severity.
@@ -524,6 +546,8 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
             vc_id=vc_id,
             event_published=event_published,
             summary=summary,
+            isolation_model=isolation_model,
+            degraded=degraded,
         )
 
         updated_context = dict(state["context"])
@@ -546,6 +570,8 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
                     zip(STATE_LABELS, state_probs.tolist(), strict=False)
                 ),
                 "summary": summary,
+                "isolation_model": isolation_model,
+                "degraded": degraded,
                 **({"invoice_a": candidate} if candidate else {}),
             },
             findings=[KeyFinding(metric=f.metric, value=f.value) for f in llm_findings],

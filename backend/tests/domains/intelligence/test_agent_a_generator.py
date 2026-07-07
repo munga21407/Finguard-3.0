@@ -73,3 +73,28 @@ async def test_llm_failure_degrades_without_crashing() -> None:
     # No crash: an error message is returned and no invoice is written.
     assert "failed" in result["messages"][0].content.lower()
     assert "extracted_invoice" not in result["context"]
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_ocr_falls_through_to_gemini() -> None:
+    """S4-4: a low-confidence OCR dict must NOT short-circuit — re-extract via Gemini."""
+    node = make_a_generator_node()
+    shaky = _invoice(confidence=0.2, invoice_number="OCR-SHAKY").model_dump()
+    reextracted = _invoice(confidence=0.95, invoice_number="INV-CLEAN")
+    with patch(_LLM, new_callable=AsyncMock, return_value=reextracted) as mock_llm:
+        result = await node(
+            _state(ocr_extracted_fields=shaky, document_text="Bill Acme KES 45000")
+        )
+    mock_llm.assert_called_once()   # fell through to the LLM despite an OCR dict
+    assert result["context"]["extracted_invoice"]["invoice_number"] == "INV-CLEAN"
+
+
+@pytest.mark.asyncio
+async def test_high_confidence_ocr_still_fast_paths() -> None:
+    """Confidence at/above the floor keeps the zero-LLM fast path."""
+    node = make_a_generator_node()
+    ocr = _invoice(confidence=0.85, invoice_number="INV-FAST").model_dump()
+    with patch(_LLM, new_callable=AsyncMock) as mock_llm:
+        result = await node(_state(ocr_extracted_fields=ocr))
+    mock_llm.assert_not_called()
+    assert result["context"]["extracted_invoice"]["invoice_number"] == "INV-FAST"

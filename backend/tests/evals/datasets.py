@@ -161,3 +161,34 @@ ROUTING_CASES: list[RouteCase] = [
         "j_summarizer", "concise executive summary → Agent J (summarizer)",
     ),
 ]
+
+
+@dataclass(frozen=True)
+class ClassificationCase:
+    """A golden transaction-classification scenario: a ledger narrative and the
+    single taxonomy category it clearly belongs to (see ``TRANSACTION_TAXONOMY``).
+    Each narrative is deliberately unambiguous so a misclassification is a real
+    accuracy regression, measured by the nightly llm_judge suite. Treat this set
+    as an **immutable baseline** — extend it, don't relabel it, so tuning is always
+    measured against a stable reference.
+    """
+
+    id: str
+    narrative: str
+    amount: float
+    transaction_type: str
+    expected_category: str
+
+
+CLASSIFICATION_CASES: list[ClassificationCase] = [
+    ClassificationCase("payroll", "Monthly salary payment to staff for June", 450_000, "debit", "payroll"),
+    ClassificationCase("utilities", "KPLC electricity bill for the office", 18_500, "debit", "utilities"),
+    ClassificationCase("rent", "Monthly office rent paid to landlord", 120_000, "debit", "rent_and_premises"),
+    ClassificationCase("vendor", "Payment to supplier Acme Ltd for raw materials", 85_000, "debit", "vendor_payment"),
+    ClassificationCase("revenue", "Customer payment received for invoice INV-1042", 230_000, "credit", "revenue_income"),
+    ClassificationCase("tax", "VAT remittance to Kenya Revenue Authority", 64_000, "debit", "tax_and_levies"),
+    ClassificationCase("bank_charges", "Monthly bank ledger and transaction fees", 1_200, "debit", "bank_charges"),
+    ClassificationCase("travel", "Hotel accommodation for a business trip to Mombasa", 32_000, "debit", "travel_and_accommodation"),
+    ClassificationCase("insurance", "Annual business insurance premium", 90_000, "debit", "insurance"),
+    ClassificationCase("loan", "Monthly loan instalment repayment to KCB", 75_000, "debit", "loan_repayment"),
+]

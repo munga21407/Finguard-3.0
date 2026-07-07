@@ -1069,6 +1069,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/intelligence/admin/agent-tuning": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Tuning View
+         * @description Return the currently effective tuning (env > DB overlay > code default).
+         */
+        get: operations["get_agent_tuning_view_api_v1_intelligence_admin_agent_tuning_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/admin/agent-tuning/{section}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Agent Tuning
+         * @description Upsert a runtime override for one tuning section (applies without restart).
+         */
+        put: operations["update_agent_tuning_api_v1_intelligence_admin_agent_tuning__section__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/admin/tax-rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Tax Rate Schedule
+         * @description List the effective-dated tax-rate schedule Agent F resolves against.
+         */
+        get: operations["list_tax_rate_schedule_api_v1_intelligence_admin_tax_rates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/admin/tax-rates/{rate_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upsert Tax Rate
+         * @description Set/replace the tax rate for ``rate_key`` effective from ``effective_from``.
+         */
+        put: operations["upsert_tax_rate_api_v1_intelligence_admin_tax_rates__rate_key__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/alerts": {
         parameters: {
             query?: never;
@@ -1328,6 +1408,16 @@ export interface components {
             user_id?: string | null;
         };
         /**
+         * AdminTuningActionResponse
+         * @description Result of an admin tuning / tax-rate mutation.
+         */
+        AdminTuningActionResponse: {
+            /** Target */
+            target: string;
+            /** Status */
+            status: string;
+        };
+        /**
          * AgentRunStatus
          * @enum {string}
          */
@@ -1350,6 +1440,46 @@ export interface components {
             last_status: components["schemas"]["AgentRunStatus"] | null;
             /** Last Run At */
             last_run_at: string | null;
+        };
+        /**
+         * AgentTuningSectionUpdate
+         * @description Partial override payload for one tuning section (agent_config row).
+         */
+        AgentTuningSectionUpdate: {
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * AgentTuningView
+         * @description Effective (env > DB > default) tuning for each agent section — read-only view.
+         */
+        AgentTuningView: {
+            /** Reconciler */
+            reconciler: {
+                [key: string]: unknown;
+            };
+            /** Watchdog */
+            watchdog: {
+                [key: string]: unknown;
+            };
+            /** Auditor */
+            auditor: {
+                [key: string]: unknown;
+            };
+            /** Bankability */
+            bankability: {
+                [key: string]: unknown;
+            };
+            /** Classifier */
+            classifier: {
+                [key: string]: unknown;
+            };
+            /** Receipt */
+            receipt: {
+                [key: string]: unknown;
+            };
         };
         /** AlertCreate */
         AlertCreate: {
@@ -2402,6 +2532,10 @@ export interface components {
         /**
          * ReceiptExtraction
          * @description Structured output from Gemini vision OCR of a receipt image.
+         *
+         *     ``suggested_category`` is produced by the *same* vision call as the OCR
+         *     fields (Sprint 3: one Gemini call instead of a second classification call);
+         *     the validator clamps any off-taxonomy value to ``"other"``.
          */
         ReceiptExtraction: {
             /** Merchant Name */
@@ -2422,6 +2556,11 @@ export interface components {
              * @default []
              */
             line_items: string[];
+            /**
+             * Suggested Category
+             * @default other
+             */
+            suggested_category: string;
             /**
              * Confidence
              * @default 0
@@ -2595,6 +2734,35 @@ export interface components {
             }[];
             /** Detail */
             detail?: string | null;
+        };
+        /**
+         * TaxRateUpsert
+         * @description Set/replace an effective-dated tax rate for Agent F.
+         */
+        TaxRateUpsert: {
+            /** Rate */
+            rate: number;
+            /**
+             * Effective From
+             * Format: date
+             */
+            effective_from: string;
+            /** Note */
+            note?: string | null;
+        };
+        /** TaxRateView */
+        TaxRateView: {
+            /** Rate Key */
+            rate_key: string;
+            /** Rate */
+            rate: number;
+            /**
+             * Effective From
+             * Format: date
+             */
+            effective_from: string;
+            /** Note */
+            note?: string | null;
         };
         /** TokenRequest */
         TokenRequest: {
@@ -4475,6 +4643,116 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KnowledgeIngestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_tuning_view_api_v1_intelligence_admin_agent_tuning_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentTuningView"];
+                };
+            };
+        };
+    };
+    update_agent_tuning_api_v1_intelligence_admin_agent_tuning__section__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                section: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentTuningSectionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTuningActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tax_rate_schedule_api_v1_intelligence_admin_tax_rates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxRateView"][];
+                };
+            };
+        };
+    };
+    upsert_tax_rate_api_v1_intelligence_admin_tax_rates__rate_key__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rate_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaxRateUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTuningActionResponse"];
                 };
             };
             /** @description Validation Error */

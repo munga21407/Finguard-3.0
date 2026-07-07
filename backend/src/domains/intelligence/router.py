@@ -21,6 +21,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from src.domains.intelligence.routers.admin import router as admin_router
+from src.domains.intelligence.routers.admin_tuning import router as admin_tuning_router
 from src.domains.intelligence.routers.conversations import router as conversations_router
 from src.domains.intelligence.routers.insights import router as insights_router
 from src.domains.intelligence.routers.receipts import router as receipts_router
@@ -32,3 +33,4 @@ router.include_router(receipts_router)
 router.include_router(conversations_router)
 router.include_router(telemetry_router)
 router.include_router(admin_router)
+router.include_router(admin_tuning_router)

@@ -75,6 +75,15 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_EMBEDDING_MODEL: str = "text-embedding-004"  # tax-RAG retrieval embeddings
+    # Higher-fidelity vision model used to re-scan low-confidence receipts
+    # (S6-6). When it equals GEMINI_MODEL the second pass is skipped (no gain).
+    GEMINI_VISION_RETRY_MODEL: str = "gemini-2.5-pro"
+
+    # Agent H (Financial Advisor) — when true, actionable-tier advice is flagged
+    # `requires_review` so a human signs off before concrete recommendations are
+    # acted on (advice-liability guardrail, S6-5). Off by default; a request may
+    # also opt in per-call via context["require_advice_review"].
+    AGENT_H_REVIEW_GATE: bool = False
     # Per-agent LLM cost attribution is now model-keyed and externally
     # configurable via the LLM_PRICING_JSON env var — see
     # src/domains/intelligence/llm/pricing.py. The old hardcoded single-rate

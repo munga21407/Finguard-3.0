@@ -180,6 +180,19 @@ GEMINI_TIMEOUT_COUNTER = Counter(
     "tripped the circuit breaker",
 )
 
+# ── Supervisor routing cost ───────────────────────────────────────────────────
+
+# How each supervisor routing decision was made. method ∈
+# {gemini, heuristic, cache, requested, single_agent_finish}. Every non-"gemini"
+# outcome is a saved LLM routing call — track the ratio to size the Sprint-3 win:
+#   sum(rate(agent_supervisor_routes_total{method!="gemini"}[5m]))
+#     / sum(rate(agent_supervisor_routes_total[5m]))
+SUPERVISOR_ROUTES = Counter(
+    "agent_supervisor_routes_total",
+    "Supervisor routing decisions by how the next hop was chosen",
+    labelnames=["method"],
+)
+
 # ── Helper: LLM call timer ─────────────────────────────────────────────────────
 
 

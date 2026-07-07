@@ -25,19 +25,30 @@ from src.domains.intelligence.schemas import (
     OrchestratorState,
     TransactionClassification,
 )
+from src.domains.intelligence.services.classification_feedback_service import (
+    build_query_text,
+    format_fewshot_block,
+    get_fewshot_examples,
+)
+from src.domains.intelligence.tuning import get_classifier_tuning
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
-_BATCH_SIZE = 50
+# Batch size is configurable (ReconcilerTuning-style — see ClassifierTuning);
+# read at node entry so a runtime override applies without a restart.
+_BATCH_SIZE = get_classifier_tuning().batch_size
 
 
 # ── Gemini classification helper ──────────────────────────────────────────────
 
 async def _classify_via_gemini(
     entries: list[dict[str, Any]],
+    fewshot_block: str = "",
 ) -> list[TransactionClassification]:
     """
-    Zero-shot classify a batch of ledger entries with Gemini structured output.
+    Classify a batch of ledger entries with Gemini structured output.
 
+    ``fewshot_block`` (Sprint 5) optionally injects the nearest past user
+    corrections as few-shot examples; empty string ⇒ the original zero-shot prompt.
     Each entry dict must contain: entry_id (str), narrative (str | None),
     amount (float), transaction_type (str).
     """
@@ -46,7 +57,8 @@ async def _classify_via_gemini(
 
     batch_json = json.dumps(entries, indent=2)
     prompt = (
-        f"{CLASSIFIER_SYSTEM}\n\n"
+        f"{CLASSIFIER_SYSTEM}\n"
+        f"{fewshot_block}\n"
         "## Input Transactions (JSON)\n"
         f"{batch_json}\n\n"
         "Classify every transaction in the list above. "
@@ -80,20 +92,22 @@ async def _classify_via_gemini(
 
 # ── DB fetch helper ───────────────────────────────────────────────────────────
 
-async def _fetch_unclassified_entries(session: Any) -> list[dict[str, Any]]:
+async def _fetch_unclassified_entries(
+    session: Any, limit: int = _BATCH_SIZE
+) -> list[dict[str, Any]]:
     """
-    Fetch up to _BATCH_SIZE ledger entries where category IS NULL.
+    Fetch up to ``limit`` ledger entries where category IS NULL.
 
     Uses a plain SELECT without row-locking — the agent is read-only.
     The batch Celery task uses FOR UPDATE SKIP LOCKED for safe concurrent writes.
     """
-    sql = text(f"""
+    sql = text("""
         SELECT id::text, description, amount::float, transaction_type::text
         FROM ledger_entries
         WHERE category IS NULL
         ORDER BY created_at ASC
-        LIMIT {_BATCH_SIZE}
-    """)
+        LIMIT :lim
+    """).bindparams(lim=int(limit))
     result = await session.execute(sql)
     rows = result.fetchall()
     return [
@@ -112,9 +126,16 @@ async def _fetch_unclassified_entries(session: Any) -> list[dict[str, Any]]:
 def make_b_classifier_node(llm: Any = None) -> Any:  # llm kept for signature compatibility
     async def b_classifier_node(state: OrchestratorState) -> dict[str, Any]:
         mode: str = state.get("mode", "insights")
+        batch_size = get_classifier_tuning().batch_size   # runtime-configurable
 
         async with AsyncSessionLocal() as session:
-            entries = await _fetch_unclassified_entries(session)
+            entries = await _fetch_unclassified_entries(session, batch_size)
+            # Retrieve the nearest past user corrections as few-shot examples
+            # (degrades to [] on any miss — same session, one round trip).
+            fewshot = (
+                await get_fewshot_examples(session, build_query_text(entries))
+                if entries else []
+            )
 
         if not entries:
             return {
@@ -128,7 +149,7 @@ def make_b_classifier_node(llm: Any = None) -> Any:  # llm kept for signature co
             }
 
         try:
-            classifications = await _classify_via_gemini(entries)
+            classifications = await _classify_via_gemini(entries, format_fewshot_block(fewshot))
         except Exception as exc:
             error_msg = f"[b_classifier] Gemini classification failed: {exc}"
             logger.error("b_classifier Gemini call failed", error=str(exc))

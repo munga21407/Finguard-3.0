@@ -42,8 +42,13 @@ class BaseLLMClient(ABC):
         mime_type: str,
         response_schema: type[T],
         temperature: float | None = None,
+        model: str | None = None,
     ) -> T:
-        """Return a schema-validated structured response over an image + prompt."""
+        """Return a schema-validated structured response over an image + prompt.
+
+        ``model`` overrides the provider's default vision model (used to re-scan
+        a low-confidence receipt with a higher-fidelity model — S6-6).
+        """
 
     @abstractmethod
     async def embed(

@@ -138,12 +138,13 @@ async def _call_vision[T: BaseModel](
     mime_type: str,
     response_schema: type[T],
     temperature: float | None,
+    model: str | None = None,
 ) -> T:
     """Single multimodal (image + prompt → schema) attempt with a hard timeout."""
     _t0 = time.monotonic()
     response = await asyncio.wait_for(
         client.aio.models.generate_content(
-            model=settings.GEMINI_MODEL,
+            model=model or settings.GEMINI_MODEL,
             contents=[  # type: ignore[arg-type]
                 types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
                 types.Part.from_text(text=prompt),
@@ -212,11 +213,12 @@ class GeminiLLMClient(BaseLLMClient):
         mime_type: str,
         response_schema: type[T],
         temperature: float | None = None,
+        model: str | None = None,
     ) -> T:
         return await _guard(
             "vision call",
             lambda: _call_vision(
-                self.raw(), prompt, image_bytes, mime_type, response_schema, temperature
+                self.raw(), prompt, image_bytes, mime_type, response_schema, temperature, model
             ),
         )
 
