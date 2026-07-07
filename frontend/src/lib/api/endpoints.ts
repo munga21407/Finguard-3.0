@@ -44,6 +44,14 @@ export const ENDPOINTS = {
     CUSTOMER: (id: string) => `/api/v1/crm/customers/${id}`,
   },
 
+  // Inventory
+  INVENTORY: {
+    PRODUCTS: "/api/v1/inventory/products",
+    PRODUCT: (id: string) => `/api/v1/inventory/products/${id}`,
+    STOCK: (id: string) => `/api/v1/inventory/products/${id}/stock`,
+    MOVEMENTS: (id: string) => `/api/v1/inventory/products/${id}/movements`,
+  },
+
   // Health (unauthenticated; not under /api/v1)
   HEALTH: {
     READY: "/health/ready",

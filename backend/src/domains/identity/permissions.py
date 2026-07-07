@@ -31,6 +31,8 @@ class Permission(enum.StrEnum):
     FINANCE_RECONCILE = "finance:reconcile"
     CRM_READ = "crm:read"
     CRM_WRITE = "crm:write"
+    INVENTORY_READ = "inventory:read"
+    INVENTORY_WRITE = "inventory:write"
     INTELLIGENCE_READ = "intelligence:read"      # read-only insights / cached reads
     INTELLIGENCE_ACT = "intelligence:act"        # state-changing agent actions
     USER_MANAGE = "user:manage"                  # verify users, change roles
@@ -41,11 +43,21 @@ class Permission(enum.StrEnum):
 
 
 _READ_ONLY: frozenset[Permission] = frozenset(
-    {Permission.FINANCE_READ, Permission.CRM_READ, Permission.INTELLIGENCE_READ}
+    {
+        Permission.FINANCE_READ,
+        Permission.CRM_READ,
+        Permission.INVENTORY_READ,
+        Permission.INTELLIGENCE_READ,
+    }
 )
 
 _OPERATOR: frozenset[Permission] = _READ_ONLY | frozenset(
-    {Permission.FINANCE_WRITE, Permission.CRM_WRITE, Permission.INTELLIGENCE_ACT}
+    {
+        Permission.FINANCE_WRITE,
+        Permission.CRM_WRITE,
+        Permission.INVENTORY_WRITE,
+        Permission.INTELLIGENCE_ACT,
+    }
 )
 
 # Manager tier adds reconciliation authority — separation of duties from the

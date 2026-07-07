@@ -55,6 +55,12 @@ class AuditAction(enum.StrEnum):
     # CRM
     CRM_CUSTOMER_CREATED = "crm.customer.created"
     CRM_CUSTOMER_UPDATED = "crm.customer.updated"
+    # Inventory
+    PRODUCT_CREATED = "product.created"
+    PRODUCT_UPDATED = "product.updated"
+    STOCK_RECEIVED = "stock.received"
+    STOCK_ISSUED = "stock.issued"
+    STOCK_ADJUSTED = "stock.adjusted"
     # Intelligence — agent orchestration runs
     AGENT_ACTION_RUN = "agent.action_run"
 
