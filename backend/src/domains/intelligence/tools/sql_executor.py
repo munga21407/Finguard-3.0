@@ -119,12 +119,56 @@ mpesa_transactions(
     is_reconciled   BOOLEAN,
     created_at      TIMESTAMPTZ
 )""",
+    "products": """\
+products(
+    id                UUID PRIMARY KEY,
+    sku               TEXT,
+    name              TEXT,
+    category          TEXT,
+    unit              TEXT,          -- each|kg|litre|metre|box|pack
+    cost_price        NUMERIC,
+    selling_price     NUMERIC,
+    reorder_level     NUMERIC,
+    reorder_quantity  NUMERIC,
+    is_active         BOOLEAN,
+    created_at        TIMESTAMPTZ
+)""",
+    "stock_levels": """\
+stock_levels(
+    id                UUID PRIMARY KEY,
+    product_id        UUID,          -- FK products.id
+    location_id       UUID,
+    quantity_on_hand  NUMERIC,
+    quantity_reserved NUMERIC,
+    average_cost      NUMERIC,
+    updated_at        TIMESTAMPTZ
+)""",
+    "stock_movements": """\
+stock_movements(
+    id              UUID PRIMARY KEY,
+    product_id      UUID,            -- FK products.id
+    sequence        INTEGER,
+    movement_type   TEXT,            -- receipt|issue|sale|return_in|adjustment|transfer
+    movement_reason TEXT,
+    quantity        NUMERIC,         -- always positive
+    unit_cost       NUMERIC,
+    balance_after   NUMERIC,         -- on-hand snapshot after this movement
+    reference_type  TEXT,
+    reference_id    UUID,
+    occurred_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ
+)""",
 }
 
 # Agent D (d_forecaster / IntelliAgent) is the only consumer of Text-to-SQL.
 # It must NEVER see users, knowledge_base, or outbox_events.
 _AGENT_ALLOWED_TABLES: dict[str, frozenset[str]] = {
     "D": frozenset({"ledger_entries", "invoices", "budgets", "expenses"}),
+    # Agent K (Stock Steward) does ad-hoc inventory analytics (cross-product
+    # rollups, slow-movers). It must NEVER see users / finance money tables — only
+    # the three inventory tables. The structural allowlist enforces this even
+    # against a prompt-injected SELECT (see _assert_allowed_tables).
+    "K": frozenset({"products", "stock_levels", "stock_movements"}),
     # Other agents do not use dynamic SQL; add entries here as needed.
 }
 

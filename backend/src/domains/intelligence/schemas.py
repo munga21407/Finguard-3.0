@@ -28,6 +28,7 @@ AGENT_NAMES = Literal[
     "h_advisor",
     "i_integrator",
     "j_summarizer",
+    "k_stockkeeper",
     "FINISH",
 ]
 
@@ -96,6 +97,46 @@ class AgentHOutput(BaseModel):
             "Optional Generative UI widgets to render alongside the narrative. "
             "Each widget's component_id MUST be one of the components defined in "
             "the GenUI catalog. Omit entirely when no visual aid adds value."
+        ),
+    )
+
+
+class ProposedStockAction(BaseModel):
+    """A structured, human-confirmable stock correction proposed by Agent K.
+
+    All figures (``quantity``, ``resulting_on_hand``) are computed by the
+    deterministic reorder/valuation tools — never invented by the LLM (first
+    principle #4). ``status`` is ``"proposed"`` unless an operator pre-authorised
+    an apply *and* the actor holds ``INTELLIGENCE_ACT`` + inventory-write authority.
+    """
+
+    product_id: str
+    sku: str
+    movement_type: str          # receipt | issue | adjustment | …
+    quantity: float
+    reason: str | None = None
+    rationale: str = ""         # plain-language "why" (LLM narration is separate)
+    resulting_on_hand: float | None = None
+    status: Literal["proposed", "applied", "rejected"] = "proposed"
+    detail: str | None = None   # rejection reason / applied movement id
+
+
+class AgentKOutput(BaseModel):
+    """Structured output for Agent K (Stock Steward).
+
+    The steward returns a conversational ``narrative_response`` grounded in the
+    deterministic stock snapshot (on-hand, valuation, low-stock, reorder points).
+    It narrates and prioritises; it does **not** emit figures — the node attaches
+    the deterministic ``proposed_actions`` itself. Mirrors ``AgentHOutput``.
+    """
+
+    narrative_response: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "The steward's natural-language read on stock health for the SME, in "
+            "Markdown. Always shown to the user; never leave it empty. Do NOT "
+            "invent SKUs, quantities, or values — narrate only the figures given."
         ),
     )
 
