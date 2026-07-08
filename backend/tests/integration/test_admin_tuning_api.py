@@ -75,5 +75,7 @@ async def test_agent_tuning_view(client: AsyncClient, auth_as, tuning_tables: No
     res = await client.get(f"{BASE}/agent-tuning")
     assert res.status_code == 200
     body = res.json()
-    assert set(body) == {"reconciler", "watchdog", "auditor", "bankability"}
+    assert set(body) == {
+        "reconciler", "watchdog", "auditor", "bankability", "classifier", "receipt",
+    }
     assert body["reconciler"]["txn_batch"] == 100   # default when no override applied
