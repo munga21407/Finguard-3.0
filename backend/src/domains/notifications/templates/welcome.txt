@@ -1,0 +1,10 @@
+Welcome to Finguard{% if full_name %}, {{ full_name }}{% endif %}
+
+{% if is_verified %}
+Your account is active. You can sign in and start managing your finances,
+invoices, and inventory right away.
+{% else %}
+Thanks for registering. Your account has been created and is pending approval
+by an administrator — you'll receive a confirmation email as soon as it's
+activated.
+{% endif %}
