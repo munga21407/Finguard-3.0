@@ -16,7 +16,7 @@ under the key `"genui:<session_id>:<component_id>"` with a 1-hour TTL.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from src.core.logging import logger
 from src.core.metrics import HUB_WRITE_ERRORS
@@ -174,7 +174,9 @@ def make_hub_writer_node() -> Any:
             if artifact_id is not None:
                 insight_ids.append(artifact_id)
             if art.agent_id not in handed_off:
-                status = "degraded" if bool(art.payload.get("degraded")) else "ok"
+                status: Literal["ok", "degraded", "empty", "error"] = (
+                    "degraded" if bool(art.payload.get("degraded")) else "ok"
+                )
                 new_handoffs.append(make_handoff(art.agent_id, status=status))
                 handed_off.add(art.agent_id)
 
