@@ -15,6 +15,7 @@ class AlertType(enum.StrEnum):
     ANOMALY = "anomaly"
     VENDOR_ACTIVITY = "vendor_activity"
     BUDGET_OVERSPEND = "budget_overspend"
+    LOW_STOCK = "low_stock"
 
 
 class AlertSeverity(enum.StrEnum):
