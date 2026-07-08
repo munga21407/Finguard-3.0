@@ -125,13 +125,15 @@ filterwarnings = [
     # passlib imports the deprecated `crypt` stdlib module at the module level;
     # the library is unmaintained and has no fix for Python 3.12+.
     "ignore::DeprecationWarning:passlib",
-    # asyncpg emits "coroutine 'Connection._cancel' was never awaited" during
-    # event-loop teardown — pytest-asyncio runs each test in its own loop, so a
-    # connection GC'd after its loop closes can't await its cancel. pytest surfaces
-    # it as an unraisable-exception warning. Benign test-teardown noise (not a
-    # product issue) and flaky (GC-timing dependent); don't let `error` escalate
-    # it into spurious cross-domain failures.
-    "ignore:Exception ignored in.*Connection._cancel:pytest.PytestUnraisableExceptionWarning",
+    # pytest-asyncio runs each test in its own event loop, so async resources
+    # (asyncpg connections, sockets, selector transports) that are GC'd after
+    # their loop has closed emit teardown warnings — "coroutine 'Connection._cancel'
+    # was never awaited", "Exception ignored in <socket.socket ...:5432>",
+    # "_SelectorTransport.__del__", etc. pytest surfaces these as unraisable-
+    # exception warnings, which `error` was escalating into spurious, flaky
+    # (GC-timing dependent) cross-domain failures. They are benign test-teardown
+    # noise, never product issues, so ignore the whole class.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
 ]
 
 [tool.coverage.run]
