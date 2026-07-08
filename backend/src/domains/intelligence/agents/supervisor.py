@@ -47,7 +47,7 @@ from src.domains.intelligence.schemas import OrchestratorState
 VALID_NEXT = frozenset({
     "a_generator", "b_classifier", "c_reconciler", "d_forecaster",
     "e_watchdog", "f_auditor", "g_reporter", "h_advisor",
-    "i_integrator", "j_summarizer", "FINISH",
+    "i_integrator", "j_summarizer", "k_stockkeeper", "FINISH",
 })
 
 # ── Deterministic keyword router (Sprint 3 — cut per-hop LLM routing cost) ─────
@@ -76,6 +76,9 @@ _KEYWORD_ROUTES: tuple[tuple[str, frozenset[str]], ...] = (
                                 "external data", "credit bureau"})),
     ("j_summarizer", frozenset({"executive summary", "summarize", "summarise",
                                 "summary of", "overview"})),
+    ("k_stockkeeper", frozenset({"stock", "inventory", "sku", "reorder",
+                                 "stock level", "out of stock", "restock",
+                                 "low stock", "stockout", "on hand", "on-hand"})),
 )
 
 # Bounded cache of the initial routing decision, keyed by normalised intent text,

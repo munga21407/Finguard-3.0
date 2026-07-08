@@ -35,6 +35,7 @@ from src.domains.intelligence.agents.h_advisor import make_h_advisor_node
 from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
 from src.domains.intelligence.agents.i_integrator import make_i_integrator_node
 from src.domains.intelligence.agents.j_summarizer import make_j_summarizer_node
+from src.domains.intelligence.agents.k_stockkeeper import make_k_stockkeeper_node
 from src.domains.intelligence.agents.planner import (
     after_hub_writer,
     make_planner_node,
@@ -76,6 +77,7 @@ AGENT_NODE_MAP: dict[str, str] = {
     "h_advisor":    "h_advisor",
     "i_integrator": "i_integrator",
     "j_summarizer": "j_summarizer",
+    "k_stockkeeper": "k_stockkeeper",
     "FINISH":       END,
 }
 
@@ -156,6 +158,7 @@ def build_graph() -> Any:
     workflow.add_node("h_advisor",     _tracked("h_advisor",    make_h_advisor_node()))
     workflow.add_node("i_integrator",  _tracked("i_integrator", make_i_integrator_node()))
     workflow.add_node("j_summarizer",  _tracked("j_summarizer", make_j_summarizer_node()))
+    workflow.add_node("k_stockkeeper", _tracked("k_stockkeeper", make_k_stockkeeper_node()))
     workflow.add_node("hub_writer",    _tracked("hub_writer",   make_hub_writer_node()))
 
     # Supervisor → conditional fan-out based on state["next"]. When the A2A

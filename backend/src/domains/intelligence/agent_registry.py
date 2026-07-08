@@ -202,6 +202,16 @@ AGENT_REGISTRY: tuple[AgentDescriptor, ...] = (
         ttl=timedelta(hours=1), priority=1, summary_order=6,
         payload_builder=_list_payload_classified,
     ),
+    AgentDescriptor(
+        agent_id="K", context_key="inventory_analysis", intent="INVENTORY",
+        node_name="k_stockkeeper",
+        description="Analyse stock levels, reorder/stockout risk, valuation; propose corrections",
+        ttl=timedelta(minutes=30), priority=0, summary_order=9,
+        # A2A: the Stock Steward *optionally* folds Agent D's cash-flow regime into
+        # reorder urgency (a restock is a cash outflow). Soft dependency — single-
+        # agent stock queries run unchanged, and build_plan never pulls D in for K.
+        consumes=(Dependency("forecast", required=False),),
+    ),
 )
 
 # Fast lookups.
