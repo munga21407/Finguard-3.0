@@ -74,7 +74,7 @@ async def update_agent_tuning(
         await upsert_agent_config(db, section, body.payload, updated_by=current_user.id)
     except (ValueError, TypeError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     logger.info(
@@ -115,7 +115,7 @@ async def upsert_tax_rate(
         await set_tax_rate(db, rate_key, body.rate, body.effective_from, note=body.note)
     except (ValueError, TypeError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     logger.info(
