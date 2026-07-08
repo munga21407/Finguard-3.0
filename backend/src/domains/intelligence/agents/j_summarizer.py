@@ -158,9 +158,6 @@ no markdown inside text.
                 localised = False
 
         summary_text = _render_bullets(bullets)
-        updated_ctx = dict(ctx)
-        updated_ctx["executive_summary"] = summary_text                     # back-compat string
-        updated_ctx["executive_summary_bullets"] = [b.model_dump() for b in bullets]
 
         summary_msg = f"[j_summarizer] {len(bullets)} executive bullet(s) generated"
         if localised:
@@ -169,7 +166,10 @@ no markdown inside text.
 
         return {
             "messages": [AIMessage(content=summary_text, name="j_summarizer")],
-            "context": updated_ctx,
+            "context": {
+                "executive_summary": summary_text,                     # back-compat string
+                "executive_summary_bullets": [b.model_dump() for b in bullets],
+            },
         }
 
     return j_summarizer_node

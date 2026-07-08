@@ -377,11 +377,12 @@ def make_d_forecaster_node(llm: Any = None) -> Any:  # llm kept for signature co
         # ── 5. CoVe Text-to-SQL (opt-in: presence of the query enables it) ────
         # cove_verify (default True) toggles the audit step: True → 2 LLM calls,
         # False → 1 call trusting the read-only SQL guard.
+        sql_result_dump: dict[str, Any] | None = None
         if text_to_sql_query:
             verify = bool(ctx.get("cove_verify", True))
             try:
                 sql_result = await _cove_text_to_sql(text_to_sql_query, verify=verify)
-                ctx["sql_result"] = sql_result.model_dump()
+                sql_result_dump = sql_result.model_dump()
             except Exception as exc:
                 logger.error("d_forecaster: CoVe workflow failed", error=str(exc))
 
@@ -394,7 +395,6 @@ def make_d_forecaster_node(llm: Any = None) -> Any:  # llm kept for signature co
             model_used=model_name,
             generated_at=datetime.now(UTC).isoformat(),
         )
-        ctx["forecast"] = forecast.model_dump()
 
         projected_final = data_points[-1].projected_balance if data_points else current_balance
         summary = (
@@ -435,9 +435,12 @@ def make_d_forecaster_node(llm: Any = None) -> Any:  # llm kept for signature co
             ),
         )
 
+        ctx_update: dict[str, Any] = {"forecast": forecast.model_dump()}
+        if sql_result_dump is not None:
+            ctx_update["sql_result"] = sql_result_dump
         return {
             "messages": [AIMessage(content=summary, name="d_forecaster")],
-            "context": ctx,
+            "context": ctx_update,
             "gen_ui_payloads": [composite.to_gen_ui_payload()],
         }
 

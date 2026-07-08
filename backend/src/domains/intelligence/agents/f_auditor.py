@@ -341,8 +341,7 @@ Return a JSON object with exactly these fields:
             audit_summary=analysis.audit_summary,
         )
 
-        updated_ctx = dict(ctx)
-        updated_ctx["audit_result"] = output.model_dump()
+        audit_dump = output.model_dump()
 
         summary_msg = (
             f"[f_auditor] {tax_type} audit complete — "
@@ -375,7 +374,7 @@ Return a JSON object with exactly these fields:
 
         return {
             "messages": [AIMessage(content=summary_msg, name="f_auditor")],
-            "context": updated_ctx,
+            "context": {"audit_result": audit_dump},
             "gen_ui_payloads": [composite.to_gen_ui_payload()],
         }
 

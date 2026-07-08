@@ -32,10 +32,15 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, ValidationError
 
+from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import SUPERVISOR_ROUTES
 from src.domains.intelligence.llm_client import generate_structured_content
-from src.domains.intelligence.prompts.supervisor import SUPERVISOR_HUMAN, SUPERVISOR_SYSTEM
+from src.domains.intelligence.prompts.supervisor import (
+    SUPERVISOR_HUMAN,
+    SUPERVISOR_SYSTEM,
+    SUPERVISOR_TARGETS_ADDENDUM,
+)
 from src.domains.intelligence.schemas import OrchestratorState
 
 VALID_NEXT = frozenset({
@@ -203,6 +208,11 @@ def _windowed_messages(messages: list[Any], *, keep_last: int = _KEEP_LAST_MESSA
 class _SupervisorDecision(BaseModel):
     next: str
     reason: str
+    # A2A P4: for a multi-domain request the model may name ≥2 leaf agents here;
+    # the planner expands their dependencies into a parallel DAG. Empty for a
+    # single-agent request (the common case), and ignored unless the planner flag
+    # is on — so single-domain routing is byte-for-byte unchanged.
+    targets: list[str] = []
 
 
 def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature compat
@@ -293,16 +303,23 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
                 return _route("FINISH", "Single-agent flow complete.", "single_agent_finish")
 
         # ── Build prompt ──────────────────────────────────────────────────────
-        system = SUPERVISOR_SYSTEM.format(mode=state.get("mode", "insights"))
+        system = SUPERVISOR_SYSTEM.format(
+            mode=state.get("mode", "insights"),
+            agent_table=supervisor_agent_table(),
+        )
+        if settings.A2A_PLANNER_ENABLED:
+            system += SUPERVISOR_TARGETS_ADDENDUM
         human = SUPERVISOR_HUMAN.format(messages=_windowed_messages(state["messages"]))
         full_prompt = f"{system}\n\n{human}"
 
         # ── LLM call with exhaustive fallback ─────────────────────────────────
         next_node = "FINISH"
         reason = "Routing completed."
+        targets_raw: list[str] = []
 
         try:
             decision = await generate_structured_content(full_prompt, _SupervisorDecision)
+            targets_raw = list(decision.targets)
 
             # Validate the routed node against the known-safe allowlist
             if decision.next not in VALID_NEXT:
@@ -333,6 +350,25 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
                 session_id=state.get("session_id"),
             )
             reason = f"Routing error ({type(exc).__name__}) — terminating."
+
+        # ── Multi-domain fan-out (A2A P4, flag-gated) ─────────────────────────
+        # ≥2 distinct valid leaf targets → hand off to the planner, which expands
+        # their dependency DAG and runs stages in parallel. Never triggers on the
+        # deterministic single-agent paths above (they don't produce targets).
+        if settings.A2A_PLANNER_ENABLED and next_node != "FINISH":
+            seen: set[str] = set()
+            valid_targets: list[str] = []
+            for t in targets_raw:
+                if t in VALID_NEXT and t != "FINISH" and t not in seen:
+                    seen.add(t)
+                    valid_targets.append(t)
+            if len(valid_targets) >= 2:
+                context["_planner_targets"] = valid_targets
+                return _route(
+                    "planner",
+                    f"Multi-domain request → planning {valid_targets}.",
+                    "planner",
+                )
 
         # Cache a clean initial routing decision so an identical intent skips the
         # LLM next time (never cache FINISH / error fallbacks).

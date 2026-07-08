@@ -20,7 +20,7 @@ from typing import Any
 
 from src.core.logging import logger
 from src.core.metrics import HUB_WRITE_ERRORS
-from src.domains.intelligence.agent_registry import resolve_artifacts
+from src.domains.intelligence.agent_registry import make_handoff, resolve_artifacts
 from src.domains.intelligence.schemas import (
     GenUIArtifact,
     GenUIPayload,
@@ -158,6 +158,13 @@ def make_hub_writer_node() -> Any:
                 )
             return {"context": updated_context}
 
+        # A2A P1 — emit a typed provenance handoff the first time each agent's
+        # output appears (dedup via _handed_off so re-runs of hub_writer across
+        # planner stages don't re-emit). ``degraded`` is inferred from the output
+        # payload (e.g. Agent E's watchdog_analysis.degraded).
+        handed_off: set[str] = set(state["context"].get("_handed_off") or [])
+        new_handoffs: list[dict[str, Any]] = []
+
         insight_ids: list[str] = []
         for art in artifacts:
             artifact_id = await _persist_insight(
@@ -166,10 +173,19 @@ def make_hub_writer_node() -> Any:
             )
             if artifact_id is not None:
                 insight_ids.append(artifact_id)
+            if art.agent_id not in handed_off:
+                status = "degraded" if bool(art.payload.get("degraded")) else "ok"
+                new_handoffs.append(make_handoff(art.agent_id, status=status))
+                handed_off.add(art.agent_id)
 
         if insight_ids:
             updated_context["hub_artifact_id"] = insight_ids[0]   # highest priority
             updated_context["hub_artifact_ids"] = insight_ids
-        return {"context": updated_context}
+        updated_context["_handed_off"] = sorted(handed_off)
+
+        result: dict[str, Any] = {"context": updated_context}
+        if new_handoffs:
+            result["handoffs"] = new_handoffs
+        return result
 
     return hub_writer_node

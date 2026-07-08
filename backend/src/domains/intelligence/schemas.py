@@ -140,6 +140,43 @@ class CompositeGenUIPayload(BaseModel):
         )
 
 
+class AgentHandoff(BaseModel):
+    """Typed provenance envelope an agent's output publishes (A2A P1).
+
+    Additive to the raw ``context[context_key]`` write — the envelope records
+    *which* agent produced *what*, with a ``status`` so a downstream consumer (or
+    the planner / Agent J) can tell an ``ok`` result from a ``degraded`` one
+    without re-deriving it, and ``depends_on`` for lineage. ``payload`` is left
+    empty by default (the data lives in context under ``context_key``); it exists
+    for callers that want to attach a compact provenance snapshot. See
+    docs/A2A_PROTOCOL.md §4.1.
+    """
+
+    agent_id: str
+    context_key: str
+    status: Literal["ok", "degraded", "empty", "error"] = "ok"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    produced_at: str = ""
+    depends_on: list[str] = Field(default_factory=list)
+
+
+def merge_context(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    """Reducer for ``OrchestratorState.context`` — shallow per-key merge, right wins.
+
+    Replaces the default last-write-**replace** channel behaviour so that when
+    several agents run in one parallel stage (A2A P4), each can land *its own*
+    key without clobbering a sibling's write. Given the invariant that every
+    agent writes only the keys it owns (disjoint across agents — see
+    ``agent_registry.write_keys`` and its contract test), this merge is
+    conflict-free and reproduces the old full-dict-carry accumulation while being
+    parallel-safe. See docs/A2A_PROTOCOL.md §4.3.
+
+    Note: a shallow merge cannot *delete* a key — nothing in the graph relies on
+    removing a context key mid-session (agent outputs are write-once).
+    """
+    return {**left, **right}
+
+
 class OrchestratorState(TypedDict):
     """Shared state threaded through every node in the LangGraph.
 
@@ -150,13 +187,20 @@ class OrchestratorState(TypedDict):
     alongside the conversational messages; the operator.add reducer
     appends new payloads without overwriting earlier ones, so the full
     render history is preserved for the session.
+
+    ``context`` uses the :func:`merge_context` reducer (per-key merge) rather
+    than plain replacement, so an agent returns only the keys it owns and the
+    reducer reassembles the accumulated dict — the enabler for parallel fan-out.
     """
 
     messages: Annotated[list[BaseMessage], add_messages]
     gen_ui_payloads: Annotated[list[GenUIPayload], operator.add]
     error_messages: Annotated[list[str], operator.add]
+    # A2A P1 — append-only log of AgentHandoff envelopes (as dicts). operator.add
+    # concatenation is parallel-safe: hub_writer emits each agent's handoff once.
+    handoffs: Annotated[list[dict[str, Any]], operator.add]
     next: str                        # which node the supervisor routes to next
-    context: dict[str, Any]          # arbitrary data accumulated across nodes
+    context: Annotated[dict[str, Any], merge_context]  # accumulated across nodes
     session_id: str
     user_id: str | None
     mode: str                        # "insights" | "actions"
@@ -233,6 +277,8 @@ class OrchestrationResponse(BaseModel):
     answer: str
     agents_invoked: list[str]
     context: dict[str, Any]
+    # A2A P1 — per-agent provenance envelopes accumulated during the run.
+    handoffs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

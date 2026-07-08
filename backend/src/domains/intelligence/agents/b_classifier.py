@@ -145,7 +145,6 @@ def make_b_classifier_node(llm: Any = None) -> Any:  # llm kept for signature co
                         name="b_classifier",
                     )
                 ],
-                "context": state["context"],
             }
 
         try:
@@ -155,11 +154,9 @@ def make_b_classifier_node(llm: Any = None) -> Any:  # llm kept for signature co
             logger.error("b_classifier Gemini call failed", error=str(exc))
             return {
                 "messages": [AIMessage(content=error_msg, name="b_classifier")],
-                "context": state["context"],
             }
 
-        updated_context = dict(state["context"])
-        updated_context["classified_transactions"] = [c.model_dump() for c in classifications]
+        classified = [c.model_dump() for c in classifications]
 
         # In actions mode the agent is read-safe; the Celery task owns all DB
         # writes and event publishing so this node stays side-effect-free.
@@ -187,7 +184,7 @@ def make_b_classifier_node(llm: Any = None) -> Any:  # llm kept for signature co
 
         return {
             "messages": [AIMessage(content=summary, name="b_classifier")],
-            "context": updated_context,
+            "context": {"classified_transactions": classified},
         }
 
     return b_classifier_node

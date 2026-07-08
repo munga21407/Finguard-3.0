@@ -275,19 +275,20 @@ Return JSON with fields: narrative_response (string), ui_widgets (array — may 
         if disclaimer:
             narrative = narrative + disclaimer
 
-        updated_ctx = dict(ctx)
-        updated_ctx["advice"] = {
-            "narrative_response": narrative,
-            # Back-compat: Agent J's fallback path reads overall_outlook.
-            "overall_outlook": narrative,
-            "advice_tier": advice_tier,
-            "user_role": user_role,
-            "data_completeness": data_completeness,
-            "requires_review": requires_review,
-            "review_status": review_status,
+        ctx_update: dict[str, Any] = {
+            "advice": {
+                "narrative_response": narrative,
+                # Back-compat: Agent J's fallback path reads overall_outlook.
+                "overall_outlook": narrative,
+                "advice_tier": advice_tier,
+                "user_role": user_role,
+                "data_completeness": data_completeness,
+                "requires_review": requires_review,
+                "review_status": review_status,
+            }
         }
         if crm_profile:
-            updated_ctx["crm_profile"] = crm_profile
+            ctx_update["crm_profile"] = crm_profile
 
         summary_msg = (
             f"[h_advisor] {advice_tier.lower()} advisory "
@@ -301,7 +302,7 @@ Return JSON with fields: narrative_response (string), ui_widgets (array — may 
         # appends rather than overwrites).
         return {
             "messages": [AIMessage(content=summary_msg, name="h_advisor")],
-            "context": updated_ctx,
+            "context": ctx_update,
             "gen_ui_payloads": valid_widgets,
         }
 

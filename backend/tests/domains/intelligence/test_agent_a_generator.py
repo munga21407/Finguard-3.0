@@ -71,8 +71,10 @@ async def test_llm_failure_degrades_without_crashing() -> None:
     with patch(_LLM, new_callable=AsyncMock, side_effect=RuntimeError("gemini down")):
         result = await node(_state(document_text="Bill Acme KES 45000"))
     # No crash: an error message is returned and no invoice is written.
+    # P3 minimal-diff contract: a degraded path emits no context delta at all
+    # (the merge_context reducer leaves the accumulated context untouched).
     assert "failed" in result["messages"][0].content.lower()
-    assert "extracted_invoice" not in result["context"]
+    assert "extracted_invoice" not in result.get("context", {})
 
 
 @pytest.mark.asyncio

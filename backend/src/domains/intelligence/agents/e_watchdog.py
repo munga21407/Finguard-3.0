@@ -550,9 +550,7 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
             degraded=degraded,
         )
 
-        updated_context = dict(state["context"])
-        updated_context["watchdog_analysis"] = analysis.model_dump()
-        updated_context["budget_watchdog_result"] = analysis.model_dump()
+        analysis_dump = analysis.model_dump()
 
         # ── CompositeGenUIPayload ─────────────────────────────────────────
         candidate: dict[str, Any] = state["context"].get("candidate_invoice", {})
@@ -585,7 +583,10 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
 
         return {
             "messages": [AIMessage(content=summary, name="e_watchdog")],
-            "context": updated_context,
+            "context": {
+                "watchdog_analysis": analysis_dump,
+                "budget_watchdog_result": analysis_dump,
+            },
             "gen_ui_payloads": [composite.to_gen_ui_payload()],
         }
 

@@ -652,11 +652,7 @@ def make_c_reconciler_node(llm: Any = None) -> Any:  # llm kept for signature co
                             name="c_reconciler",
                         )
                     ],
-                    "context": state["context"],
                 }
-
-        updated_ctx = dict(state["context"])
-        updated_ctx["reconciliation_report"] = report.model_dump()
 
         summary = (
             f"[c_reconciler] Reconciliation complete — "
@@ -667,7 +663,7 @@ def make_c_reconciler_node(llm: Any = None) -> Any:  # llm kept for signature co
 
         return {
             "messages": [AIMessage(content=summary, name="c_reconciler")],
-            "context": updated_ctx,
+            "context": {"reconciliation_report": report.model_dump()},
         }
 
     return c_reconciler_node

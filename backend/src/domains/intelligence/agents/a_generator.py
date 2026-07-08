@@ -41,7 +41,6 @@ def make_a_generator_node(llm: Any = None) -> Any:  # llm kept for signature com
             # Confidence gate: only short-circuit the LLM when the OCR read is
             # trustworthy; a low-confidence dict falls through to full extraction.
             if invoice is not None and invoice.confidence >= _OCR_FASTPATH_MIN_CONFIDENCE:
-                state["context"]["extracted_invoice"] = invoice.model_dump()
                 summary = (
                     f"Extracted invoice {invoice.invoice_number or '(unknown)'} "
                     f"from {invoice.vendor or '(unknown vendor)'} — "
@@ -50,7 +49,7 @@ def make_a_generator_node(llm: Any = None) -> Any:  # llm kept for signature com
                 )
                 return {
                     "messages": [AIMessage(content=summary, name="a_generator")],
-                    "context": state["context"],
+                    "context": {"extracted_invoice": invoice.model_dump()},
                 }
             if invoice is not None:
                 logger.info(
@@ -79,10 +78,7 @@ def make_a_generator_node(llm: Any = None) -> Any:  # llm kept for signature com
             error_msg = f"[a_generator] Gemini extraction failed: {exc}"
             return {
                 "messages": [AIMessage(content=error_msg, name="a_generator")],
-                "context": state["context"],
             }
-
-        state["context"]["extracted_invoice"] = invoice.model_dump()
 
         summary = (
             f"Extracted invoice {invoice.invoice_number or '(unknown)'} "
@@ -93,7 +89,7 @@ def make_a_generator_node(llm: Any = None) -> Any:  # llm kept for signature com
 
         return {
             "messages": [AIMessage(content=summary, name="a_generator")],
-            "context": state["context"],
+            "context": {"extracted_invoice": invoice.model_dump()},
         }
 
     return a_generator_node

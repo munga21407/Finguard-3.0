@@ -348,7 +348,6 @@ def make_i_integrator_node(llm: Any = None) -> Any:  # llm kept for signature co
                         name="i_integrator",
                     )
                 ],
-                "context": ctx,
             }
 
         customer_id: str = ctx.get("customer_id", "")
@@ -411,9 +410,6 @@ def make_i_integrator_node(llm: Any = None) -> Any:  # llm kept for signature co
             ),
         }
 
-        updated_ctx = dict(ctx)
-        updated_ctx["external_data"] = external_data
-
         # Honest, per-source summary (never reports fabricated numbers).
         def _fmt(label: str, src: dict[str, Any], body: str) -> str:
             st = src["status"]
@@ -442,7 +438,7 @@ def make_i_integrator_node(llm: Any = None) -> Any:  # llm kept for signature co
 
         return {
             "messages": [AIMessage(content=summary, name="i_integrator")],
-            "context": updated_ctx,
+            "context": {"external_data": external_data},
         }
 
     return i_integrator_node

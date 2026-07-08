@@ -469,19 +469,20 @@ Write a strategic_narrative (3-5 sentences) that:
             strategic_narrative=narrative,
         )
 
-        updated_ctx = dict(ctx)
-        updated_ctx["credit_strategy_result"] = output.model_dump()
-        # Attach raw forecast for downstream consumers (hub, UI polling)
-        updated_ctx["credit_forecast"] = {
-            "quarterly_revenue_kes": q_revenue,
-            "quarterly_opex_kes": q_opex,
-            "historical_months": months[-12:] if months else [],
+        ctx_update: dict[str, Any] = {
+            "credit_strategy_result": output.model_dump(),
+            # Attach raw forecast for downstream consumers (hub, UI polling)
+            "credit_forecast": {
+                "quarterly_revenue_kes": q_revenue,
+                "quarterly_opex_kes": q_opex,
+                "historical_months": months[-12:] if months else [],
+            },
         }
         # Base64-encoded exports for hub_writer to persist in MongoDB
         if pdf_bytes:
-            updated_ctx["credit_report_pdf_b64"] = base64.b64encode(pdf_bytes).decode("ascii")
+            ctx_update["credit_report_pdf_b64"] = base64.b64encode(pdf_bytes).decode("ascii")
         if xlsx_bytes:
-            updated_ctx["credit_forecast_xlsx_b64"] = base64.b64encode(xlsx_bytes).decode("ascii")
+            ctx_update["credit_forecast_xlsx_b64"] = base64.b64encode(xlsx_bytes).decode("ascii")
 
         summary_msg = (
             f"[g_reporter] Credit strategy complete — "
@@ -523,7 +524,7 @@ Write a strategic_narrative (3-5 sentences) that:
 
         return {
             "messages": [AIMessage(content=summary_msg, name="g_reporter")],
-            "context": updated_ctx,
+            "context": ctx_update,
             "gen_ui_payloads": [composite.to_gen_ui_payload()],
         }
 
