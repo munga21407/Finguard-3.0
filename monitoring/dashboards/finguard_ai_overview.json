@@ -32,7 +32,7 @@
   "annotations": {
     "list": []
   },
-  "description": "FinGuard AI Overview \u2014 HTTP request rate, Agent LLM latency, Celery tasks, and per-agent LLM token/cost/outcome + tool latency observability.",
+  "description": "FinGuard AI Overview — HTTP request rate, Agent LLM latency, Celery tasks, and per-agent LLM token/cost/outcome + tool latency observability.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -158,7 +158,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Percentile latency of LLM (Gemini) API calls made by each AI agent. P99 > 10 s indicates quota throttling or prompt token budget pressure. Queries both the canonical D3 metric (agent_llm_processing_seconds) and the legacy finguard_* series \u2014 whichever has data will appear.",
+      "description": "Percentile latency of LLM (Gemini) API calls made by each AI agent. P99 > 10 s indicates quota throttling or prompt token budget pressure. Queries both the canonical D3 metric (agent_llm_processing_seconds) and the legacy finguard_* series — whichever has data will appear.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -296,7 +296,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Celery worker task activity sourced from Flower metrics (job: flower-celery). Shows task ingress rate and per-state task counts. If Flower is not running (workers profile inactive) this panel shows No Data \u2014 expected.",
+      "description": "Celery worker task activity sourced from Flower metrics (job: flower-celery). Shows task ingress rate and per-state task counts. If Flower is not running (workers profile inactive) this panel shows No Data — expected.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -452,7 +452,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Approximate Gemini spend per agent, extrapolated to USD/hour from token rate \u00d7 configured list price (GEMINI_*_USD_PER_MTOK). TOTAL is all agents combined. Source: agent_llm_cost_usd_total.",
+      "description": "Approximate Gemini spend per agent, extrapolated to USD/hour from token rate × configured list price (GEMINI_*_USD_PER_MTOK). TOTAL is all agents combined. Source: agent_llm_cost_usd_total.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -523,7 +523,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Percentile latency of high-risk agent tools \u2014 readonly_sql (Text-to-SQL), http_request (Daraja/CBK), tax_rag (pgvector). A rising P95 flags a slow tool before it surfaces as user-visible latency. Source: agent_tool_duration_seconds.",
+      "description": "Percentile latency of high-risk agent tools — readonly_sql (Text-to-SQL), http_request (Daraja/CBK), tax_rag (pgvector). A rising P95 flags a slow tool before it surfaces as user-visible latency. Source: agent_tool_duration_seconds.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -746,6 +746,142 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "How each supervisor routing decision was made (agent_supervisor_routes_total). Any method other than 'gemini' is a saved LLM routing call (Sprint 3).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Supervisor Routing Method (rate)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (method) (rate(agent_supervisor_routes_total[5m]))",
+          "legendFormat": "{{method}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Share of supervisor routing decisions made WITHOUT a Gemini call (heuristic / cache / requested / single-agent finish). The Sprint-3 routing-cost win — higher is cheaper.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.25
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "id": 10,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.2.0",
+      "title": "Routing Calls Skipping Gemini (%)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(agent_supervisor_routes_total{method!=\"gemini\"}[5m])) / clamp_min(sum(rate(agent_supervisor_routes_total[5m])), 1e-9)",
+          "legendFormat": "skipped",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "30s",
@@ -778,8 +914,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "FinGuard AI \u2014 Agent Overview",
+  "title": "FinGuard AI — Agent Overview",
   "uid": "finguard-ai-overview-d3",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

@@ -18,10 +18,52 @@ FOR UPDATE lock to prevent race conditions from concurrent webhook events.
 Writes context["reconciliation_report"] before returning to the Supervisor.
 The core async function `run_reconciliation()` is also called directly by the
 `run_batch_reconciliation` Celery task in batch.py.
+
+Performance (Sprint 3):
+  * Pass 1 buckets invoices by floored balance so each transaction only scans
+    near-amount candidates — O(txn + invoice) instead of the old O(txn × invoice)
+    nested loop.
+  * The Gemini candidate cap is configurable (``ReconcilerTuning.pass2_candidate_cap``).
+  * Migration ``0016`` adds the fetch-supporting indexes:
+    ``(mpesa_transactions is_reconciled, created_at)``,
+    ``(invoices status, balance_due, due_date)``,
+    ``(bank_statement_lines is_reconciled, review_status, date)``.
+
+SQL candidate-join pushdown (design note — deferred, needs a live DB to validate):
+  Settlement (``FinanceService.apply_reconciled_payment``) is the authoritative
+  safety gate — it locks each invoice ``FOR UPDATE`` and clamps the applied amount
+  to the outstanding balance (returning None if already settled), so a
+  double-match can never over-credit.  The up-front ``FOR UPDATE SKIP LOCKED`` on
+  the invoice batch is therefore an *optimisation* (avoid concurrent runs doing
+  redundant work), not a correctness requirement.  That makes a Pass-1 candidate
+  join safe to add:
+
+      WITH txns AS (
+        SELECT id, amount, created_at, bill_ref FROM mpesa_transactions
+        WHERE is_reconciled = FALSE ORDER BY created_at LIMIT :lim
+        FOR UPDATE SKIP LOCKED)
+      SELECT t.id, i.id, i.invoice_number, i.balance_due, i.due_date
+      FROM txns t JOIN invoices i
+        ON i.status IN ('SENT','OVERDUE') AND i.balance_due > 0
+       AND abs(t.amount - i.balance_due) <= :tol
+       AND (i.due_date IS NULL
+            OR abs(EXTRACT(EPOCH FROM (t.created_at - i.due_date))/86400) <= :win)
+      FOR UPDATE OF i SKIP LOCKED;
+
+  Python then applies the ref-substring filter + first-match dedup on the (small)
+  candidate set.  Pass 2 (rapidfuzz) still needs the residual invoice set, so it
+  loads invoices lazily only when unmatched txns with a bill_ref remain — the case
+  where the pushdown pays off is high open-invoice volume (near the 500 cap) where
+  most matches are exact.  A full fuzzy pushdown would additionally need pg_trgm +
+  a GIN trigram index on invoice_number.  Ship behind a config flag and validate
+  match-equivalence against ``test_reconciler_pass1_bucketing`` + a concurrency
+  test before making it the default.
 """
 from __future__ import annotations
 
 import json
+import math
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -33,6 +75,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domains.finance.service import FinanceService
 from src.domains.finance.types import VaultType
+from src.domains.intelligence.db_tuning import refresh_agent_tuning_from_db
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.c_reconciler import RECONCILER_PASS2_SYSTEM
 from src.domains.intelligence.schemas import (
@@ -42,27 +85,57 @@ from src.domains.intelligence.schemas import (
     ReconciliationReport,
     ReconciliationScoringResult,
 )
+from src.domains.intelligence.tuning import get_reconciler_tuning
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
 logger = structlog.get_logger(__name__)
 
-_TXN_BATCH = 100        # M-Pesa transactions per reconciliation run
-_INV_LIMIT = 500        # Max open invoices to load
-_FUZZY_THRESHOLD = 65   # rapidfuzz token_sort_ratio minimum for Pass 2 candidacy
-_SEMANTIC_THRESHOLD = 0.60  # Gemini match_score minimum to confirm a match
+# Batch sizes and match thresholds (externally configurable — see
+# tuning.ReconcilerTuning).
+_rc = get_reconciler_tuning()
+_TXN_BATCH = _rc.txn_batch              # M-Pesa transactions per reconciliation run
+_INV_LIMIT = _rc.inv_limit              # Max open invoices to load
+_FUZZY_THRESHOLD = _rc.fuzzy_threshold  # rapidfuzz token_sort_ratio min for Pass 2 candidacy
+_SEMANTIC_THRESHOLD = _rc.semantic_threshold  # Gemini match_score min to confirm a match
+_FUZZY_MATCH_BOUNDARY = _rc.fuzzy_match_boundary  # >= this -> "fuzzy", below -> "semantic"
+_AMOUNT_TOLERANCE = _rc.amount_tolerance_kes  # Pass 1 exact-amount tolerance (KES)
+_DATE_WINDOW_DAYS = _rc.date_window_days  # Pass 1 date-proximity window (days)
+_PASS2_CANDIDATE_CAP = _rc.pass2_candidate_cap  # max fuzzy candidates sent to Gemini
+
+
+def _apply_reconciler_tuning() -> None:
+    """Rebind module-level batch/threshold constants from current tuning.
+
+    Called at the top of each reconciliation run (after the DB overlay refresh)
+    so a runtime override in ``finguard.agent_config`` applies without a restart.
+    Synchronous (no awaits) → atomic under asyncio w.r.t. concurrent runs.
+    """
+    global _TXN_BATCH, _INV_LIMIT, _FUZZY_THRESHOLD, _SEMANTIC_THRESHOLD
+    global _FUZZY_MATCH_BOUNDARY, _AMOUNT_TOLERANCE, _DATE_WINDOW_DAYS, _PASS2_CANDIDATE_CAP
+    rc = get_reconciler_tuning()
+    _TXN_BATCH = rc.txn_batch
+    _INV_LIMIT = rc.inv_limit
+    _FUZZY_THRESHOLD = rc.fuzzy_threshold
+    _SEMANTIC_THRESHOLD = rc.semantic_threshold
+    _FUZZY_MATCH_BOUNDARY = rc.fuzzy_match_boundary
+    _AMOUNT_TOLERANCE = rc.amount_tolerance_kes
+    _DATE_WINDOW_DAYS = rc.date_window_days
+    _PASS2_CANDIDATE_CAP = rc.pass2_candidate_cap
 
 
 # ---------------------------------------------------------------------------
 # Matching helpers
 # ---------------------------------------------------------------------------
 
-def _amount_match(paid: float, due: float, tolerance: float = 1.0) -> bool:
-    return abs(paid - due) <= tolerance
+def _amount_match(paid: float, due: float, tolerance: float | None = None) -> bool:
+    tol = _AMOUNT_TOLERANCE if tolerance is None else tolerance
+    return abs(paid - due) <= tol
 
 
-def _date_match(txn_date: Any, due_date: Any, window_days: int = 2) -> bool:
+def _date_match(txn_date: Any, due_date: Any, window_days: int | None = None) -> bool:
     if due_date is None:
         return True
+    window = _DATE_WINDOW_DAYS if window_days is None else window_days
     try:
         if hasattr(txn_date, "date"):
             t = txn_date.date()
@@ -72,7 +145,7 @@ def _date_match(txn_date: Any, due_date: Any, window_days: int = 2) -> bool:
             d = due_date.date()
         else:
             d = datetime.fromisoformat(str(due_date)).date()
-        return abs((t - d).days) <= window_days
+        return abs((t - d).days) <= window
     except Exception:
         return True  # unparseable dates — let other criteria decide
 
@@ -92,6 +165,23 @@ def _ref_match(bill_ref: str | None, invoice_number: str) -> bool:
 # Pass 1 — Deterministic exact matching
 # ---------------------------------------------------------------------------
 
+def _bucket_invoices_by_amount(
+    invoices: list[dict[str, Any]],
+) -> dict[int, list[tuple[int, dict[str, Any]]]]:
+    """Index invoices into integer KES buckets keyed by ``floor(balance_due)``.
+
+    Lets Pass 1 look up only the near-amount invoices for a transaction instead
+    of scanning all of them — turning the exact pass from O(txn × invoice) into
+    roughly O(txn + invoice).  Each entry keeps the invoice's original index so
+    candidates can be re-sorted into scan order (preserving first-match
+    determinism identical to the old nested loop).
+    """
+    buckets: dict[int, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+    for idx, inv in enumerate(invoices):
+        buckets[int(math.floor(float(inv["balance_due"])))].append((idx, inv))
+    return buckets
+
+
 def _pass1_exact(
     transactions: list[dict[str, Any]],
     invoices: list[dict[str, Any]],
@@ -100,11 +190,25 @@ def _pass1_exact(
     matched_inv_ids: set[str] = set()
     matches: list[ReconciliationMatch] = []
 
+    buckets = _bucket_invoices_by_amount(invoices)
+    tol = _AMOUNT_TOLERANCE
+
     for txn in transactions:
-        for inv in invoices:
+        amount = float(txn["amount"])
+        # Only invoices whose balance rounds near the paid amount can match on
+        # amount; the ±1 margin guards floor() boundaries (the precise check is
+        # still _amount_match below).
+        lo = int(math.floor(amount - tol)) - 1
+        hi = int(math.floor(amount + tol)) + 1
+        candidates: list[tuple[int, dict[str, Any]]] = []
+        for key in range(lo, hi + 1):
+            candidates.extend(buckets.get(key, ()))
+        candidates.sort(key=lambda pair: pair[0])  # original scan order
+
+        for _idx, inv in candidates:
             if inv["id"] in matched_inv_ids:
                 continue
-            if not _amount_match(txn["amount"], inv["balance_due"]):
+            if not _amount_match(amount, inv["balance_due"]):
                 continue
             if not _date_match(txn["created_at"], inv["due_date"]):
                 continue
@@ -113,7 +217,7 @@ def _pass1_exact(
 
             status = (
                 "paid"
-                if txn["amount"] >= inv["balance_due"] - 0.01
+                if amount >= inv["balance_due"] - 0.01
                 else "partially_paid"
             )
             matches.append(
@@ -122,7 +226,7 @@ def _pass1_exact(
                     invoice_id=inv["id"],
                     match_type="exact",
                     match_score=1.0,
-                    amount=txn["amount"],
+                    amount=amount,
                     new_invoice_status=status,
                 )
             )
@@ -176,7 +280,7 @@ async def _gemini_score_candidates(
     prompt = (
         f"{RECONCILER_PASS2_SYSTEM}\n\n"
         "## Candidate Matches (JSON)\n"
-        f"{json.dumps(candidates[:50], indent=2)}\n\n"
+        f"{json.dumps(candidates[:_PASS2_CANDIDATE_CAP], indent=2)}\n\n"
         "Score each candidate. Return only those with match_score >= 0.60. "
         "Deduplicate so each transaction_id and invoice_id appears at most once."
     )
@@ -227,8 +331,8 @@ async def _pass2_semantic(
         status = (
             "paid" if txn["amount"] >= inv["balance_due"] - 0.01 else "partially_paid"
         )
-        # rapidfuzz-only matches score ≥ 0.9; Gemini-confirmed lower scores are "semantic"
-        match_type = "fuzzy" if cand.match_score >= 0.90 else "semantic"
+        # rapidfuzz-only matches score ≥ boundary; Gemini-confirmed lower scores are "semantic"
+        match_type = "fuzzy" if cand.match_score >= _FUZZY_MATCH_BOUNDARY else "semantic"
         matches.append(
             ReconciliationMatch(
                 transaction_id=cand.transaction_id,
@@ -305,6 +409,11 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
     `session.commit()` after this function returns — `session.begin()` owns it.
     """
     run_at = datetime.now(UTC).isoformat()
+
+    # Pick up runtime tuning overrides before the batch (own session — safe
+    # alongside the caller's session.begin() below).
+    await refresh_agent_tuning_from_db()
+    _apply_reconciler_tuning()
 
     async with session.begin():
         # ── Fetch data with row-level locks ──────────────────────────────────
@@ -422,6 +531,11 @@ async def run_bank_reconciliation(session: AsyncSession) -> ReconciliationReport
     """
     run_at = datetime.now(UTC).isoformat()
 
+    # Pick up runtime tuning overrides before the batch (own session — safe
+    # alongside the caller's session.begin() below).
+    await refresh_agent_tuning_from_db()
+    _apply_reconciler_tuning()
+
     async with session.begin():
         # Maker-checker: only APPROVED lines are eligible — a reviewer (≠ importer)
         # must release a line before it can settle invoices.
@@ -538,11 +652,7 @@ def make_c_reconciler_node(llm: Any = None) -> Any:  # llm kept for signature co
                             name="c_reconciler",
                         )
                     ],
-                    "context": state["context"],
                 }
-
-        updated_ctx = dict(state["context"])
-        updated_ctx["reconciliation_report"] = report.model_dump()
 
         summary = (
             f"[c_reconciler] Reconciliation complete — "
@@ -553,7 +663,7 @@ def make_c_reconciler_node(llm: Any = None) -> Any:  # llm kept for signature co
 
         return {
             "messages": [AIMessage(content=summary, name="c_reconciler")],
-            "context": updated_ctx,
+            "context": {"reconciliation_report": report.model_dump()},
         }
 
     return c_reconciler_node

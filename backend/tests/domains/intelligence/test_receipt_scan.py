@@ -51,6 +51,7 @@ async def test_scan_happy_path_returns_extraction_and_category(
     auth_as(UserRole.MANAGER)
 
     async def _fake_extract(image_bytes: bytes, mime_type: str | None = None) -> ReceiptExtraction:
+        # Category now comes from the single vision call, not a second LLM call.
         return ReceiptExtraction(
             merchant_name="Nairobi Hardware Ltd",
             date="2026-06-13",
@@ -58,15 +59,11 @@ async def test_scan_happy_path_returns_extraction_and_category(
             currency="KES",
             kra_pin="P051234567X",
             line_items=["cement", "nails"],
+            suggested_category="supplies",
             confidence=0.95,
         )
 
-    # Mock the categoriser's LLM call to deterministically return "supplies".
-    async def _fake_text(*args: object, **kwargs: object) -> str:
-        return "supplies"
-
     monkeypatch.setattr(scanner, "extract_receipt", _fake_extract)
-    monkeypatch.setattr(scanner, "generate_text_content", _fake_text)
 
     res = await client.post(
         "/api/v1/intelligence/receipts/scan",
@@ -93,11 +90,7 @@ async def test_scan_degrades_to_empty_form_on_ocr_failure(
     async def _boom(image_bytes: bytes, mime_type: str | None = None) -> ReceiptExtraction:
         raise RuntimeError("gemini timeout")
 
-    async def _fake_text(*args: object, **kwargs: object) -> str:
-        return "other"
-
     monkeypatch.setattr(scanner, "extract_receipt", _boom)
-    monkeypatch.setattr(scanner, "generate_text_content", _fake_text)
 
     res = await client.post(
         "/api/v1/intelligence/receipts/scan",

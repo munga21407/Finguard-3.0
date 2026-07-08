@@ -9,7 +9,9 @@ Pipeline:
   4. Build an evidence-grounded prompt (incl. the GenUI component catalog).
   5. Gemini structured output (temperature 0.0) → AgentHOutput.
   6. RBAC clip: viewer/accountant → high-level summary; manager/admin/owner → actionable.
-  7. Write the narrative to context["advice"]; append any emitted ui_widgets to
+  7. Guardrail (S6-5): actionable advice gets a standing liability disclaimer; when
+     the human-review gate is on it is flagged `requires_review` / pending sign-off.
+  8. Write the narrative to context["advice"]; append any emitted ui_widgets to
      the orchestrator's gen_ui_payloads so the chat renders them inline.
 """
 from __future__ import annotations
@@ -20,6 +22,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 from sqlalchemy import text
 
+from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.h_advisor import (
@@ -32,6 +35,32 @@ from src.infrastructure.database.postgres import AsyncSessionLocal
 # ── RBAC ──────────────────────────────────────────────────────────────────────
 
 _ACTIONABLE_ROLES = frozenset({"manager", "admin", "owner"})
+
+# ── Advice-liability guardrail (Sprint 6, S6-5) ─────────────────────────────────
+# Actionable-tier advice names concrete instruments / percentages / KES targets,
+# so it always carries a standing disclaimer that it is decision-support, not
+# regulated financial advice. Appended deterministically (never lost even if the
+# model omits it). Summary-tier advice is directional and does not need it.
+_ACTIONABLE_DISCLAIMER = (
+    "\n\n---\n_Advisory note: this is AI-generated decision-support based on your "
+    "own figures, not regulated financial, tax, or investment advice. Verify "
+    "material decisions with a licensed professional before acting._"
+)
+
+# Notice prepended when the human-review gate is on: the recommendation is held
+# for sign-off rather than presented as ready to act on.
+_REVIEW_PENDING_NOTICE = (
+    "🔒 **Pending review:** this actionable recommendation is queued for human "
+    "sign-off before it should be acted on.\n\n"
+)
+
+
+def _review_gate_enabled(ctx: dict[str, Any]) -> bool:
+    """Human-review gate: per-request override wins over the global setting."""
+    override = ctx.get("require_advice_review")
+    if isinstance(override, bool):
+        return override
+    return bool(settings.AGENT_H_REVIEW_GATE)
 
 
 # ── Database helpers ──────────────────────────────────────────────────────────
@@ -94,6 +123,14 @@ def make_h_advisor_node(llm: Any = None) -> Any:  # llm kept for signature compa
         credit: dict[str, Any] = ctx.get("credit_strategy_result") or {}
         credit_fc: dict[str, Any] = ctx.get("credit_forecast") or {}
         audit: dict[str, Any] = ctx.get("audit_result") or {}
+
+        # Honesty gate (Sprint 5): how much upstream evidence actually exists.
+        # With little/none, the advisor must say so rather than emit confident
+        # generic guidance built on thin air.
+        populated = sum(bool(u) for u in (watchdog, forecast_ctx, credit, audit))
+        data_completeness = (
+            "full" if populated >= 3 else "partial" if populated >= 1 else "none"
+        )
 
         # ── 3. CRM customer profile ───────────────────────────────────────
         customer_id: str | None = ctx.get("customer_id")
@@ -161,13 +198,22 @@ def make_h_advisor_node(llm: Any = None) -> Any:  # llm kept for signature compa
             )
             advice_tier = "SUMMARY"
 
+        completeness_note = ""
+        if data_completeness != "full":
+            completeness_note = (
+                f"\n\nDATA COMPLETENESS: {data_completeness}. Only {populated} of the "
+                "four analyses (budget, cash-flow, credit, tax) produced output. "
+                "Open with an explicit note that guidance is based on limited data, "
+                "and recommend running the missing analyses before acting."
+            )
+
         prompt = f"""You are a senior financial advisor at a Kenyan commercial bank advising an SME.
 
 ## Financial Intelligence (pre-computed — do NOT alter any numbers)
 {evidence}
 
 ## Instructions
-{scope}
+{scope}{completeness_note}
 
 Compose your advice as `narrative_response`: 2-4 short paragraphs of Markdown that
 weave the most important observations and next steps into clear prose grounded in
@@ -207,16 +253,42 @@ Return JSON with fields: narrative_response (string), ui_widgets (array — may 
                     component_id=w.component_id,
                 )
 
-        updated_ctx = dict(ctx)
-        updated_ctx["advice"] = {
-            "narrative_response": advisor_out.narrative_response,
-            # Back-compat: Agent J's fallback path reads overall_outlook.
-            "overall_outlook": advisor_out.narrative_response,
-            "advice_tier": advice_tier,
-            "user_role": user_role,
+        # When there was no upstream evidence at all, prepend a hard disclaimer so
+        # the limitation is never lost even if the model ignored the instruction.
+        narrative = advisor_out.narrative_response
+        if data_completeness == "none":
+            narrative = (
+                "⚠️ Limited data: no budget, cash-flow, credit, or tax analysis was "
+                "available, so this is general guidance only — run those analyses "
+                "for specific recommendations.\n\n" + narrative
+            )
+
+        # ── S6-5 guardrails: disclaimer + optional human-review gate ──────────
+        # Actionable advice names concrete instruments/targets → attach the
+        # standing advice-liability disclaimer deterministically, and (when the
+        # gate is enabled) flag it for human sign-off before it's acted on.
+        disclaimer = _ACTIONABLE_DISCLAIMER if is_actionable else ""
+        requires_review = is_actionable and _review_gate_enabled(ctx)
+        review_status = "pending_review" if requires_review else "not_required"
+        if requires_review:
+            narrative = _REVIEW_PENDING_NOTICE + narrative
+        if disclaimer:
+            narrative = narrative + disclaimer
+
+        ctx_update: dict[str, Any] = {
+            "advice": {
+                "narrative_response": narrative,
+                # Back-compat: Agent J's fallback path reads overall_outlook.
+                "overall_outlook": narrative,
+                "advice_tier": advice_tier,
+                "user_role": user_role,
+                "data_completeness": data_completeness,
+                "requires_review": requires_review,
+                "review_status": review_status,
+            }
         }
         if crm_profile:
-            updated_ctx["crm_profile"] = crm_profile
+            ctx_update["crm_profile"] = crm_profile
 
         summary_msg = (
             f"[h_advisor] {advice_tier.lower()} advisory "
@@ -230,7 +302,7 @@ Return JSON with fields: narrative_response (string), ui_widgets (array — may 
         # appends rather than overwrites).
         return {
             "messages": [AIMessage(content=summary_msg, name="h_advisor")],
-            "context": updated_ctx,
+            "context": ctx_update,
             "gen_ui_payloads": valid_widgets,
         }
 

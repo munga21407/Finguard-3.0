@@ -75,6 +75,26 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_EMBEDDING_MODEL: str = "text-embedding-004"  # tax-RAG retrieval embeddings
+    # Higher-fidelity vision model used to re-scan low-confidence receipts
+    # (S6-6). When it equals GEMINI_MODEL the second pass is skipped (no gain).
+    GEMINI_VISION_RETRY_MODEL: str = "gemini-2.5-pro"
+
+    # Agent H (Financial Advisor) — when true, actionable-tier advice is flagged
+    # `requires_review` so a human signs off before concrete recommendations are
+    # acted on (advice-liability guardrail, S6-5). Off by default; a request may
+    # also opt in per-call via context["require_advice_review"].
+    AGENT_H_REVIEW_GATE: bool = False
+
+    # A2A P4 — multi-domain planner. When true, a supervisor decision naming ≥2
+    # target agents routes to the `planner` node, which builds a dependency DAG
+    # (agent_registry.build_plan) and fans agents out stage-by-stage in parallel
+    # via LangGraph `Send`. Off by default: single-agent flows are unaffected and
+    # the compiled graph is identical to the pre-P4 topology. See
+    # docs/A2A_PROTOCOL.md §4.4.
+    A2A_PLANNER_ENABLED: bool = False
+    # Safety ceiling on how many times a single orchestration may re-plan (a
+    # consumer appending context["_replan_targets"]) before the planner finishes.
+    A2A_MAX_REPLANS: int = 2
     # Per-agent LLM cost attribution is now model-keyed and externally
     # configurable via the LLM_PRICING_JSON env var — see
     # src/domains/intelligence/llm/pricing.py. The old hardcoded single-rate

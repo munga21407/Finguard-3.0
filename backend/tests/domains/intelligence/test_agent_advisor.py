@@ -67,7 +67,10 @@ async def test_node_narrative_to_advice_and_widgets_filtered() -> None:
         out = await make_h_advisor_node()(_state("manager"))
 
     advice = out["context"]["advice"]
-    assert advice["narrative_response"].startswith("Maintain runway")
+    # No upstream analyses in this state → Sprint-5 limited-data disclaimer is
+    # prepended; the LLM narrative still flows through.
+    assert "Maintain runway" in advice["narrative_response"]
+    assert advice["data_completeness"] == "none"
     assert advice["overall_outlook"] == advice["narrative_response"]  # Agent J compat
     assert advice["advice_tier"] == "ACTIONABLE"  # manager → actionable
 
@@ -87,3 +90,63 @@ async def test_node_llm_failure_degrades_with_narrative_and_no_widgets() -> None
     assert out["context"]["advice"]["narrative_response"]  # non-empty fallback
     assert out["context"]["advice"]["advice_tier"] == "SUMMARY"  # viewer → summary
     assert out["gen_ui_payloads"] == []
+
+
+# ── S6-5: advice-liability guardrails ──────────────────────────────────────────
+
+def _fake_out() -> AgentHOutput:
+    return AgentHOutput(narrative_response="Move 15% into 91-day T-bills.", ui_widgets=[])
+
+
+@pytest.mark.asyncio
+async def test_actionable_advice_carries_disclaimer() -> None:
+    with patch.object(
+        h_advisor, "generate_structured_content", new=AsyncMock(return_value=_fake_out())
+    ):
+        out = await make_h_advisor_node()(_state("owner"))
+    advice = out["context"]["advice"]
+    assert advice["advice_tier"] == "ACTIONABLE"
+    assert "not regulated financial" in advice["narrative_response"].lower()
+    # Gate is off by default → advice is not held for review.
+    assert advice["requires_review"] is False
+    assert advice["review_status"] == "not_required"
+
+
+@pytest.mark.asyncio
+async def test_summary_tier_has_no_disclaimer_and_no_review() -> None:
+    with patch.object(
+        h_advisor, "generate_structured_content", new=AsyncMock(return_value=_fake_out())
+    ):
+        out = await make_h_advisor_node()(_state("viewer"))
+    advice = out["context"]["advice"]
+    assert advice["advice_tier"] == "SUMMARY"
+    assert "not regulated financial" not in advice["narrative_response"].lower()
+    assert advice["requires_review"] is False
+
+
+@pytest.mark.asyncio
+async def test_review_gate_flags_actionable_advice_pending() -> None:
+    state = _state("manager")
+    state["context"]["require_advice_review"] = True  # per-request opt-in
+    with patch.object(
+        h_advisor, "generate_structured_content", new=AsyncMock(return_value=_fake_out())
+    ):
+        out = await make_h_advisor_node()(state)
+    advice = out["context"]["advice"]
+    assert advice["requires_review"] is True
+    assert advice["review_status"] == "pending_review"
+    assert advice["narrative_response"].startswith("🔒")
+    # Disclaimer still present at the tail even with the review notice at the head.
+    assert "not regulated financial" in advice["narrative_response"].lower()
+
+
+@pytest.mark.asyncio
+async def test_review_gate_does_not_affect_summary_tier() -> None:
+    state = _state("viewer")
+    state["context"]["require_advice_review"] = True
+    with patch.object(
+        h_advisor, "generate_structured_content", new=AsyncMock(return_value=_fake_out())
+    ):
+        out = await make_h_advisor_node()(state)
+    # Summary tier is directional, never held for review.
+    assert out["context"]["advice"]["requires_review"] is False

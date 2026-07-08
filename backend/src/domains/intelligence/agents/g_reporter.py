@@ -32,6 +32,7 @@ from langchain_core.messages import AIMessage
 from sqlalchemy import text
 
 from src.core.logging import logger
+from src.domains.intelligence.db_tuning import refresh_agent_tuning_from_db
 from src.domains.intelligence.llm_client import generate_text_content
 from src.domains.intelligence.schemas import (
     AgentGOutput,
@@ -39,6 +40,7 @@ from src.domains.intelligence.schemas import (
     KeyFinding,
     OrchestratorState,
 )
+from src.domains.intelligence.tuning import get_bankability_tuning
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
 # ── Forecasting ───────────────────────────────────────────────────────────────
@@ -102,60 +104,61 @@ def _compute_bankability_score(
 
     Risk tiers: LOW ≥ 75 | MEDIUM 45-74 | HIGH < 45
     """
+    bt = get_bankability_tuning()
+
     def safe_arr(lst: list[float]) -> np.ndarray:
         return np.array(lst, dtype=float) if lst else np.zeros(1)
 
     rev = safe_arr(hist_revenue)
     opx = safe_arr(hist_opex)
 
-    # ── Component 1: Revenue trend (0-30) ────────────────────────────────
+    # ── Component 1: Revenue trend (0-trend_max) ─────────────────────────
     if len(rev) >= 3:
         pct_change = (rev[-1] - rev[-3]) / max(rev[-3], 1.0)
-        trend_score = int(min(30, max(0, pct_change * 60)))
+        trend_score = int(min(bt.trend_max, max(0, pct_change * 60)))
     else:
         trend_score = 10
 
-    # ── Component 2: Expense ratio (0-30) ────────────────────────────────
+    # ── Component 2: Expense ratio (0-ratio_max) ─────────────────────────
     mean_rev = float(np.mean(rev)) or 1.0
     mean_opx = float(np.mean(opx))
     ratio = mean_opx / mean_rev
-    if ratio < 0.50:
-        ratio_score = 30
-    elif ratio < 0.65:
-        ratio_score = 24
-    elif ratio < 0.80:
-        ratio_score = 16
-    elif ratio < 0.95:
-        ratio_score = 8
-    elif ratio < 1.00:
-        ratio_score = 3
-    else:
-        ratio_score = 0
+    # First band whose exclusive upper bound the ratio is below awards its points.
+    ratio_score = 0
+    for upper_bound, points in bt.ratio_bands:
+        if ratio < upper_bound:
+            ratio_score = points
+            break
 
-    # ── Component 3: Cash-flow consistency (0-20) ─────────────────────────
+    # ── Component 3: Cash-flow consistency (0-consistency_max) ────────────
     net = rev - opx
     if len(net) > 1:
         mean_net = float(np.mean(net))
         std_net = float(np.std(net))
         cov = std_net / max(abs(mean_net), 1.0)
-        consistency_score = max(0, int(20 - cov * 12))
+        consistency_score = max(0, int(bt.consistency_max - cov * 12))
     else:
         consistency_score = 8
 
-    # ── Component 4: Forecast solvency (0-20) ────────────────────────────
+    # ── Component 4: Forecast solvency (0-solvency_max) ──────────────────
     if fc_revenue and fc_opex:
         quarters = min(len(fc_revenue), len(fc_opex))
         solvent = sum(
             1 for r, o in zip(fc_revenue[:quarters], fc_opex[:quarters], strict=False) if r >= o
         )
-        runway_score = int((solvent / max(quarters, 1)) * 20)
+        runway_score = int((solvent / max(quarters, 1)) * bt.solvency_max)
     else:
         runway_score = 5
 
+    max_total = bt.trend_max + bt.ratio_max + bt.consistency_max + bt.solvency_max
     total = trend_score + ratio_score + consistency_score + runway_score
-    total = min(100, max(0, total))
+    total = min(max_total, max(0, total))
 
-    tier = "LOW" if total >= 75 else "MEDIUM" if total >= 45 else "HIGH"
+    tier = (
+        "LOW" if total >= bt.tier_low_min
+        else "MEDIUM" if total >= bt.tier_medium_min
+        else "HIGH"
+    )
     sub_scores: dict[str, int] = {
         "trend_score": trend_score,
         "ratio_score": ratio_score,
@@ -384,6 +387,9 @@ def make_g_reporter_node(llm: Any = None) -> Any:  # llm kept for signature comp
         ctx: dict[str, Any] = state["context"]
         mode: str = state.get("mode", "insights")
 
+        # Pick up any runtime bankability-tuning override (read per-call below).
+        await refresh_agent_tuning_from_db()
+
         # ── 1. Load or fetch monthly cash-flow data ───────────────────────
         raw_ledger: dict[str, Any] = ctx.get("raw_ledger_data") or {}
         if not raw_ledger.get("monthly_inflows"):
@@ -463,19 +469,20 @@ Write a strategic_narrative (3-5 sentences) that:
             strategic_narrative=narrative,
         )
 
-        updated_ctx = dict(ctx)
-        updated_ctx["credit_strategy_result"] = output.model_dump()
-        # Attach raw forecast for downstream consumers (hub, UI polling)
-        updated_ctx["credit_forecast"] = {
-            "quarterly_revenue_kes": q_revenue,
-            "quarterly_opex_kes": q_opex,
-            "historical_months": months[-12:] if months else [],
+        ctx_update: dict[str, Any] = {
+            "credit_strategy_result": output.model_dump(),
+            # Attach raw forecast for downstream consumers (hub, UI polling)
+            "credit_forecast": {
+                "quarterly_revenue_kes": q_revenue,
+                "quarterly_opex_kes": q_opex,
+                "historical_months": months[-12:] if months else [],
+            },
         }
         # Base64-encoded exports for hub_writer to persist in MongoDB
         if pdf_bytes:
-            updated_ctx["credit_report_pdf_b64"] = base64.b64encode(pdf_bytes).decode("ascii")
+            ctx_update["credit_report_pdf_b64"] = base64.b64encode(pdf_bytes).decode("ascii")
         if xlsx_bytes:
-            updated_ctx["credit_forecast_xlsx_b64"] = base64.b64encode(xlsx_bytes).decode("ascii")
+            ctx_update["credit_forecast_xlsx_b64"] = base64.b64encode(xlsx_bytes).decode("ascii")
 
         summary_msg = (
             f"[g_reporter] Credit strategy complete — "
@@ -517,7 +524,7 @@ Write a strategic_narrative (3-5 sentences) that:
 
         return {
             "messages": [AIMessage(content=summary_msg, name="g_reporter")],
-            "context": updated_ctx,
+            "context": ctx_update,
             "gen_ui_payloads": [composite.to_gen_ui_payload()],
         }
 

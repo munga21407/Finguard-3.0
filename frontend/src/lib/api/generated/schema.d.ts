@@ -1509,6 +1509,16 @@ export interface components {
             user_id?: string | null;
         };
         /**
+         * AdminTuningActionResponse
+         * @description Result of an admin tuning / tax-rate mutation.
+         */
+        AdminTuningActionResponse: {
+            /** Target */
+            target: string;
+            /** Status */
+            status: string;
+        };
+        /**
          * AgentRunStatus
          * @enum {string}
          */
@@ -1531,6 +1541,46 @@ export interface components {
             last_status: components["schemas"]["AgentRunStatus"] | null;
             /** Last Run At */
             last_run_at: string | null;
+        };
+        /**
+         * AgentTuningSectionUpdate
+         * @description Partial override payload for one tuning section (agent_config row).
+         */
+        AgentTuningSectionUpdate: {
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * AgentTuningView
+         * @description Effective (env > DB > default) tuning for each agent section — read-only view.
+         */
+        AgentTuningView: {
+            /** Reconciler */
+            reconciler: {
+                [key: string]: unknown;
+            };
+            /** Watchdog */
+            watchdog: {
+                [key: string]: unknown;
+            };
+            /** Auditor */
+            auditor: {
+                [key: string]: unknown;
+            };
+            /** Bankability */
+            bankability: {
+                [key: string]: unknown;
+            };
+            /** Classifier */
+            classifier: {
+                [key: string]: unknown;
+            };
+            /** Receipt */
+            receipt: {
+                [key: string]: unknown;
+            };
         };
         /** AlertCreate */
         AlertCreate: {
@@ -2742,6 +2792,10 @@ export interface components {
         /**
          * ReceiptExtraction
          * @description Structured output from Gemini vision OCR of a receipt image.
+         *
+         *     ``suggested_category`` is produced by the *same* vision call as the OCR
+         *     fields (Sprint 3: one Gemini call instead of a second classification call);
+         *     the validator clamps any off-taxonomy value to ``"other"``.
          */
         ReceiptExtraction: {
             /** Merchant Name */
@@ -2762,6 +2816,11 @@ export interface components {
              * @default []
              */
             line_items: string[];
+            /**
+             * Suggested Category
+             * @default other
+             */
+            suggested_category: string;
             /**
              * Confidence
              * @default 0

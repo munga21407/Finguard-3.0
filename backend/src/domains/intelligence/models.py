@@ -7,12 +7,15 @@ from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
     Index,
     Integer,
     LargeBinary,
+    Numeric,
+    PrimaryKeyConstraint,
     String,
     Text,
     UniqueConstraint,
@@ -79,6 +82,94 @@ class AgentEModel(Base):
     n_samples: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     trained_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AgentConfig(Base):
+    """Runtime overrides for agent tuning, one row per tuning section.
+
+    The env + code-default layer (``intelligence/tuning.py``) is the floor;
+    this table is the **runtime-tunable overlay** an operator changes without a
+    redeploy or restart. ``section`` is one of reconciler / watchdog / auditor /
+    bankability; ``payload`` is a partial JSON override for that section's
+    dataclass. Section-level precedence is env > this table > code default
+    (see ``intelligence/db_tuning.py``).
+
+    Lives in the ``finguard`` schema alongside the other agent tables.
+    """
+
+    __tablename__ = "agent_config"
+    __table_args__ = ({"schema": "finguard"},)
+
+    section: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class TaxRateSchedule(Base):
+    """Effective-dated Kenya tax rates for Agent F.
+
+    So a historical audit uses period-correct rates, each ``rate_key`` (e.g.
+    ``vat_rate``, ``cit_rate``, ``aml_reporting_threshold_kes``) can have several
+    rows with different ``effective_from`` dates. Agent F picks, per key, the row
+    with the greatest ``effective_from <= as_of``; when no row exists it falls
+    back to the ``AuditorTuning`` value (env > agent_config > default).
+
+    Lives in the ``finguard`` schema.
+    """
+
+    __tablename__ = "tax_rate_schedule"
+    __table_args__ = (
+        PrimaryKeyConstraint("rate_key", "effective_from", name="pk_tax_rate_schedule"),
+        {"schema": "finguard"},
+    )
+
+    rate_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    effective_from: Mapped[Any] = mapped_column(Date, nullable=False)
+    rate: Mapped[Any] = mapped_column(Numeric(20, 6), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ClassificationFeedback(Base):
+    """A user correction to an Agent B transaction classification (Sprint 5).
+
+    When a user overrides the suggested category, the narrative + the corrected
+    label are stored here with a 768-dim embedding of the narrative, so future
+    classifications can retrieve the nearest past corrections as few-shot
+    examples (vector similarity) — breaking Agent B's zero-shot accuracy ceiling.
+
+    Lives in the ``finguard`` schema alongside the pgvector knowledge base.
+    """
+
+    __tablename__ = "classification_feedback"
+    __table_args__ = (
+        Index(
+            "ix_classification_feedback_embedding",
+            "embedding",
+            postgresql_using="ivfflat",
+            postgresql_ops={"embedding": "vector_l2_ops"},
+        ),
+        {"schema": "finguard"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entry_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    narrative: Mapped[str] = mapped_column(Text, nullable=False)
+    predicted_category: Mapped[str | None] = mapped_column(String(64))
+    corrected_category: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding: Mapped[Any | None] = mapped_column(Vector(768), nullable=True)
+    corrected_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

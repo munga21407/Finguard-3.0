@@ -78,12 +78,10 @@ def _estimate_runway(balance: float, daily_flows: list[float]) -> str:
 # Private CoVe structured-output schemas
 # ---------------------------------------------------------------------------
 
-class _CoVeDraft(BaseModel):
+class _CoVeDraftExplain(BaseModel):
+    # Drafter + Explainer folded into one structured call (Sprint 3: 3 LLM calls → 2).
     sql_query: str
     intent_summary: str
-
-
-class _CoVeExplanation(BaseModel):
     plain_english: str
 
 
@@ -244,64 +242,72 @@ async def _detect_regime(
 # Chain-of-Verification Text-to-SQL
 # ---------------------------------------------------------------------------
 
-async def _cove_text_to_sql(user_query: str) -> CoVeSQLQuery:
+async def _cove_text_to_sql(user_query: str, *, verify: bool = True) -> CoVeSQLQuery:
     """
-    Three-step CoVe pipeline:
-      1. Drafter  — LLM writes a PostgreSQL SELECT for the user's question.
-      2. Explainer — LLM translates that SQL back to plain English.
-      3. Auditor  — LLM verifies the explanation matches the original intent.
+    Chain-of-Verification Text-to-SQL, cost-tuned (Sprint 3).
 
-    If the Auditor approves (intent_preserved=True, confidence ≥ 0.70), the
-    query is executed via the read-only sql_executor; results are attached.
+      Step 1 (1 call) — combined Drafter+Explainer: writes the PostgreSQL SELECT
+      *and* its plain-English translation in one structured response.
+      Step 2 (1 call, only when ``verify``) — Auditor: verifies the translation
+      matches the original intent; execution requires intent_preserved and
+      confidence ≥ 0.70.
+
+    So the default verified path is **2 LLM calls (was 3)**; passing
+    ``verify=False`` (ctx["cove_verify"]=false) drops the audit to **1 call** and
+    relies on the read-only SQL guard (regex + sqlglot AST + LIMIT clamp) as the
+    safety net. In all cases the query runs under the ``finguard_readonly`` role.
     """
-    # ── Step 1: Draft ─────────────────────────────────────────────────────────
+    # ── Step 1: Draft + Explain (single call) ─────────────────────────────────
     draft_prompt = (
-        f"{FORECASTER_COVE_DRAFTER_SYSTEM}\n\n"
+        f"{FORECASTER_COVE_DRAFTER_SYSTEM}\n\n{FORECASTER_COVE_EXPLAINER_SYSTEM}\n\n"
         f"User question: {user_query}\n\n"
-        "Write the PostgreSQL SELECT query."
+        "Write the PostgreSQL SELECT query, a one-line intent_summary, and a "
+        "one-paragraph plain_english description of what it retrieves."
     )
-    draft = await generate_structured_content(draft_prompt, _CoVeDraft, temperature=0.0)
+    draft = await generate_structured_content(draft_prompt, _CoVeDraftExplain, temperature=0.0)
 
-    # ── Step 2: Explain ───────────────────────────────────────────────────────
-    explain_prompt = (
-        f"{FORECASTER_COVE_EXPLAINER_SYSTEM}\n\n"
-        f"Query:\n{draft.sql_query}\n\n"
-        "Describe what this query retrieves in one paragraph."
-    )
-    explanation = await generate_structured_content(
-        explain_prompt, _CoVeExplanation, temperature=0.0
-    )
+    # ── Step 2: Audit (optional) ──────────────────────────────────────────────
+    approved = True
+    audit_notes = "CoVe verification skipped (cove_verify=false)."
+    if verify:
+        audit_prompt = (
+            f"{FORECASTER_COVE_AUDITOR_SYSTEM}\n\n"
+            f"User Question: {user_query}\n\n"
+            f"SQL Query:\n{draft.sql_query}\n\n"
+            f"Plain-English Translation:\n{draft.plain_english}\n\n"
+            "Verify correctness, safety, and completeness. "
+            "Set intent_preserved = true only if the SQL correctly answers the question."
+        )
+        audit = await generate_structured_content(audit_prompt, _CoVeAudit, temperature=0.0)
+        approved = audit.intent_preserved and audit.confidence >= 0.70
+        audit_notes = "; ".join(audit.issues) if audit.issues else "No issues found."
 
-    # ── Step 3: Audit ─────────────────────────────────────────────────────────
-    audit_prompt = (
-        f"{FORECASTER_COVE_AUDITOR_SYSTEM}\n\n"
-        f"User Question: {user_query}\n\n"
-        f"SQL Query:\n{draft.sql_query}\n\n"
-        f"Plain-English Translation:\n{explanation.plain_english}\n\n"
-        "Verify correctness, safety, and completeness. "
-        "Set intent_preserved = true only if the SQL correctly answers the question."
-    )
-    audit = await generate_structured_content(audit_prompt, _CoVeAudit, temperature=0.0)
+    # Deterministic gate (independent of the LLM audit): only ever run a single
+    # read-only SELECT/CTE. A drafted statement that isn't one is rejected no
+    # matter what the auditor said — the LLM verdict is never the only gate.
+    if not draft.sql_query.strip().lower().startswith(("select", "with")):
+        approved = False
+        audit_notes = f"Rejected: not a read-only SELECT statement. {audit_notes}"
 
     # ── Execute if approved ────────────────────────────────────────────────────
     results: list[dict[str, Any]] | None = None
-    if audit.intent_preserved and audit.confidence >= 0.70:
+    if approved:
         try:
             results = await execute_readonly_sql(draft.sql_query)
             logger.info(
                 "d_forecaster: CoVe SQL executed",
                 rows=len(results),
                 query_summary=draft.intent_summary,
+                verified=verify,
             )
         except Exception as exc:
             logger.warning("d_forecaster: CoVe SQL execution failed", error=str(exc))
 
-    audit_notes = "; ".join(audit.issues) if audit.issues else "No issues found."
     return CoVeSQLQuery(
         original_query=user_query,
         sql=draft.sql_query,
-        explanation=explanation.plain_english,
-        audit_passed=audit.intent_preserved and audit.confidence >= 0.70,
+        explanation=draft.plain_english,
+        audit_passed=approved,
         audit_notes=audit_notes,
         results=results,
     )
@@ -368,11 +374,15 @@ def make_d_forecaster_node(llm: Any = None) -> Any:  # llm kept for signature co
                 ),
             )
 
-        # ── 5. CoVe Text-to-SQL (optional) ───────────────────────────────────
+        # ── 5. CoVe Text-to-SQL (opt-in: presence of the query enables it) ────
+        # cove_verify (default True) toggles the audit step: True → 2 LLM calls,
+        # False → 1 call trusting the read-only SQL guard.
+        sql_result_dump: dict[str, Any] | None = None
         if text_to_sql_query:
+            verify = bool(ctx.get("cove_verify", True))
             try:
-                sql_result = await _cove_text_to_sql(text_to_sql_query)
-                ctx["sql_result"] = sql_result.model_dump()
+                sql_result = await _cove_text_to_sql(text_to_sql_query, verify=verify)
+                sql_result_dump = sql_result.model_dump()
             except Exception as exc:
                 logger.error("d_forecaster: CoVe workflow failed", error=str(exc))
 
@@ -385,7 +395,6 @@ def make_d_forecaster_node(llm: Any = None) -> Any:  # llm kept for signature co
             model_used=model_name,
             generated_at=datetime.now(UTC).isoformat(),
         )
-        ctx["forecast"] = forecast.model_dump()
 
         projected_final = data_points[-1].projected_balance if data_points else current_balance
         summary = (
@@ -426,9 +435,12 @@ def make_d_forecaster_node(llm: Any = None) -> Any:  # llm kept for signature co
             ),
         )
 
+        ctx_update: dict[str, Any] = {"forecast": forecast.model_dump()}
+        if sql_result_dump is not None:
+            ctx_update["sql_result"] = sql_result_dump
         return {
             "messages": [AIMessage(content=summary, name="d_forecaster")],
-            "context": ctx,
+            "context": ctx_update,
             "gen_ui_payloads": [composite.to_gen_ui_payload()],
         }
 

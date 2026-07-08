@@ -15,8 +15,10 @@ mistakes simulated data for real:
 Sources:
   1. FX rates — free, keyless public provider (``FX_API_URL``); USD-based
      cross-rates → ``*_KES``. Mock only in dev; ``unavailable`` in prod.
-  2. M-Pesa   — Safaricom Daraja **sandbox** (free self-service keys). Mock in dev
-     / ``unavailable`` in prod when ``MPESA_*`` creds are absent.
+  2. M-Pesa   — real transaction feed from the ``mpesa_transactions`` ledger
+     (ingested via the C2B/STK callback); ``live`` when the ledger has rows.
+     Falls back to the Daraja **sandbox** AccountBalance probe (mock in dev /
+     ``unavailable`` in prod) only when the ledger is empty.
   3. Metropol — credit score. Commercial API: deferred. Manual entry via
      ``context["manual_credit_score"]``; otherwise ``unavailable`` (never faked).
   4. KRA      — VAT/compliance. iTax onboarding: deferred. Manual entry via
@@ -31,10 +33,12 @@ from typing import Any
 
 import structlog
 from langchain_core.messages import AIMessage
+from sqlalchemy import text
 
 from src.core.config import settings
 from src.domains.intelligence.schemas import OrchestratorState
 from src.domains.intelligence.tools.http_caller import make_http_caller
+from src.infrastructure.database.postgres import AsyncSessionLocal
 
 logger = structlog.get_logger(__name__)
 
@@ -84,8 +88,70 @@ async def _get_mpesa_token(caller: Any) -> str | None:
     return None
 
 
+# Max recent callback transactions surfaced to downstream agents per session.
+_MPESA_FEED_LIMIT = 20
+
+
+async def _fetch_mpesa_ledger() -> dict[str, Any] | None:
+    """Pull the real M-Pesa transaction feed ingested via the C2B/STK callback.
+
+    These rows are written by ``POST /api/v1/finance/mpesa/callback`` from live
+    Daraja callbacks, so they are the authoritative transaction history —
+    preferred over the sandbox AccountBalance probe (S6-3). Returns a ``live``
+    payload when the ledger has rows, else ``None`` so the caller falls back to
+    the balance probe. A DB error also returns ``None`` (never fabricates data).
+    """
+    sql = text(
+        """
+        SELECT trans_id, amount, phone, bill_ref, created_at
+        FROM mpesa_transactions
+        ORDER BY created_at DESC
+        LIMIT :lim
+        """
+    )
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(sql, {"lim": _MPESA_FEED_LIMIT})
+            rows = result.fetchall()
+    except Exception as exc:
+        logger.warning("i_integrator: M-Pesa ledger query failed", error=str(exc))
+        return None
+
+    if not rows:
+        return None
+
+    txns = [
+        {
+            "trans_id": r[0],
+            "amount_kes": float(r[1]),
+            "phone": r[2],
+            "bill_ref": r[3],
+            "timestamp": r[4].isoformat() if r[4] is not None else None,
+        }
+        for r in rows
+    ]
+    total = round(sum(t["amount_kes"] for t in txns), 2)
+    return {
+        "status": LIVE,
+        "source": "mpesa",
+        "feed": "callback",
+        "recent_transactions": txns,
+        "recent_credit_kes": total,
+        "transaction_count": len(txns),
+    }
+
+
 async def _fetch_mpesa_data(caller: Any) -> dict[str, Any]:
-    """Probe the M-Pesa sandbox balance; degrade honestly when unconfigured."""
+    """Return the real callback transaction feed, else probe the sandbox balance.
+
+    Precedence: the ingested C2B/STK callback ledger (real data) wins; only when
+    it is empty/unavailable do we fall back to the sandbox AccountBalance probe
+    (dev mock / prod ``unavailable``).
+    """
+    ledger = await _fetch_mpesa_ledger()
+    if ledger is not None:
+        return ledger
+
     token = await _get_mpesa_token(caller)
     if not token:
         logger.warning("i_integrator: M-Pesa credentials not configured")
@@ -282,7 +348,6 @@ def make_i_integrator_node(llm: Any = None) -> Any:  # llm kept for signature co
                         name="i_integrator",
                     )
                 ],
-                "context": ctx,
             }
 
         customer_id: str = ctx.get("customer_id", "")
@@ -345,9 +410,6 @@ def make_i_integrator_node(llm: Any = None) -> Any:  # llm kept for signature co
             ),
         }
 
-        updated_ctx = dict(ctx)
-        updated_ctx["external_data"] = external_data
-
         # Honest, per-source summary (never reports fabricated numbers).
         def _fmt(label: str, src: dict[str, Any], body: str) -> str:
             st = src["status"]
@@ -360,14 +422,23 @@ def make_i_integrator_node(llm: Any = None) -> Any:  # llm kept for signature co
                 _fmt("Credit", credit_data,
                      f"{credit_data.get('score', '?')} ({credit_data.get('grade', '?')})"),
                 _fmt("KRA", kra_data, str(kra_data.get("compliance_status", "?"))),
-                _fmt("M-Pesa", mpesa_data, f"KES {mpesa_data.get('balance_kes', 0):,.2f}"),
+                _fmt(
+                    "M-Pesa",
+                    mpesa_data,
+                    (
+                        f"{mpesa_data.get('transaction_count', 0)} txns, "
+                        f"KES {mpesa_data.get('recent_credit_kes', 0):,.2f}"
+                        if mpesa_data.get("feed") == "callback"
+                        else f"KES {mpesa_data.get('balance_kes', 0):,.2f}"
+                    ),
+                ),
             ])
         )
         logger.info(summary, sources_status=sources_status, simulated=simulated)
 
         return {
             "messages": [AIMessage(content=summary, name="i_integrator")],
-            "context": updated_ctx,
+            "context": {"external_data": external_data},
         }
 
     return i_integrator_node

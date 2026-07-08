@@ -20,14 +20,17 @@ from __future__ import annotations
 
 import io
 import uuid
+from typing import TYPE_CHECKING
 
 import joblib  # type: ignore[import-untyped]
 import numpy as np
-from sklearn.ensemble import IsolationForest  # type: ignore[import-untyped]
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domains.intelligence.models import AgentEModel
+
+if TYPE_CHECKING:  # sklearn is heavy; import it lazily at call time (see below)
+    from sklearn.ensemble import IsolationForest  # type: ignore[import-untyped]
 
 MODEL_TYPE = "isolation_forest"
 
@@ -40,6 +43,10 @@ _RANDOM_STATE = 42
 
 def train_isolation_forest(amounts: list[float]) -> IsolationForest | None:
     """Fit an IsolationForest on historical amounts, or ``None`` if too few."""
+    from sklearn.ensemble import (  # type: ignore[import-untyped]  # noqa: PLC0415
+        IsolationForest,
+    )
+
     if len(amounts) < ISOLATION_MIN_SAMPLES:
         return None
     x = np.array(amounts, dtype=float).reshape(-1, 1)

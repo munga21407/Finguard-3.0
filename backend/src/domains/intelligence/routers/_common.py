@@ -196,6 +196,7 @@ async def _run_orchestrator(
         "messages": [HumanMessage(content=initial_message)],
         "gen_ui_payloads": [],
         "error_messages": [],
+        "handoffs": [],
         "next": "supervisor",
         "context": context,
         "session_id": session_id,
@@ -257,4 +258,5 @@ async def _run_orchestrator(
         answer=answer,
         agents_invoked=agents_invoked,
         context=final_state.get("context", {}),
+        handoffs=final_state.get("handoffs", []),
     )
