@@ -20,7 +20,9 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0018_inventory"
-down_revision = "0014_agent_e_models"
+# Re-chained onto the 0017 tip (was 0014) to collapse the divergent Alembic head
+# that the inventory work branched off — restores a single linear migration head.
+down_revision = "0017_classification_feedback"
 branch_labels = None
 depends_on = None
 
