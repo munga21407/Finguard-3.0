@@ -17,7 +17,7 @@ created here. Not ``CONCURRENTLY`` because Alembic wraps a migration in a
 transaction; run during a maintenance window if the tables are already large.
 
 Revision ID: 0016_reconciliation_indexes
-Revises: 0015_agent_config_and_tax_schedule
+Revises: 0015_agent_config_tax
 Create Date: 2026-07-06 00:00:00.000000
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "0016_reconciliation_indexes"
-down_revision = "0015_agent_config_and_tax_schedule"
+down_revision = "0015_agent_config_tax"
 branch_labels = None
 depends_on = None
 

@@ -412,9 +412,36 @@ def make_g_reporter_node(llm: Any = None) -> Any:  # llm kept for signature comp
             hist_revenue, hist_opex, fc_revenue, fc_opex
         )
 
+        # ── 3b. Cross-agent inputs (A2A consumer-read) ────────────────────
+        # When the planner ran upstream producers first, fold their salient
+        # signals into the credit view. Absent (single-agent flow) → G stays
+        # self-contained and behaves exactly as before. The deterministic
+        # bankability score remains ledger-derived; these signals contextualise
+        # the narrative and are surfaced as findings — they do not override the
+        # numbers ("deterministic maths first, LLM second").
+        consumed_upstream: list[str] = []
+        cross_signals: dict[str, Any] = {}
+        upstream_forecast: dict[str, Any] = ctx.get("forecast") or {}
+        if upstream_forecast:
+            regime = upstream_forecast.get("regime") or {}
+            cross_signals["near_term_cashflow"] = {
+                "regime": regime.get("regime"),
+                "current_balance_kes": upstream_forecast.get("current_balance"),
+                "advisory_warnings": (regime.get("advisory_warnings") or [])[:3],
+            }
+            consumed_upstream.append("forecast")
+        upstream_audit: dict[str, Any] = ctx.get("audit_result") or {}
+        if upstream_audit:
+            cross_signals["tax_position"] = {
+                "tax_type": upstream_audit.get("tax_type"),
+                "effective_tax_rate": upstream_audit.get("effective_tax_rate"),
+                "compliance_flags": (upstream_audit.get("compliance_flags") or [])[:5],
+            }
+            consumed_upstream.append("audit_result")
+
         # ── 4. Gemini narrative generation ────────────────────────────────
         # All numbers are pre-computed; Gemini writes the executive text only.
-        narrative_data = json.dumps({
+        narrative_payload: dict[str, Any] = {
             "historical_months": months[-12:] if months else [],
             "historical_monthly_revenue_kes": hist_revenue[-12:],
             "historical_monthly_opex_kes": hist_opex[-12:],
@@ -422,8 +449,17 @@ def make_g_reporter_node(llm: Any = None) -> Any:  # llm kept for signature comp
             "forecast_quarterly_opex_kes": q_opex,
             "bankability_score": bankability_score,
             "risk_tier": risk_tier,
-        }, indent=2)
+        }
+        if cross_signals:
+            narrative_payload["upstream_agent_signals"] = cross_signals
+        narrative_data = json.dumps(narrative_payload, indent=2)
 
+        cross_instruction = (
+            "  5. Reflect the upstream_agent_signals — the near-term cash-flow "
+            "regime and/or tax-compliance position — noting how they bear on "
+            "creditworthiness.\n"
+            if cross_signals else ""
+        )
         narrative_prompt = f"""You are a senior credit analyst at a Kenyan commercial bank.
 
 The following financial data has been computed deterministically from the
@@ -438,7 +474,7 @@ Write a strategic_narrative (3-5 sentences) that:
   2. References the quarterly revenue / opex forecast trend (Q1-Q4).
   3. Gives 2 specific, actionable recommendations to improve creditworthiness.
   4. Uses KES (Kenyan Shillings) throughout; no markdown, no headers.
-"""
+{cross_instruction}"""
 
         try:
             narrative: str = (await generate_text_content(narrative_prompt)).strip()
@@ -476,6 +512,8 @@ Write a strategic_narrative (3-5 sentences) that:
                 "quarterly_revenue_kes": q_revenue,
                 "quarterly_opex_kes": q_opex,
                 "historical_months": months[-12:] if months else [],
+                # Provenance: which upstream agent outputs informed this credit view.
+                "consumed_upstream": consumed_upstream,
             },
         }
         # Base64-encoded exports for hub_writer to persist in MongoDB
@@ -489,6 +527,7 @@ Write a strategic_narrative (3-5 sentences) that:
             f"score {bankability_score}/100 | tier {risk_tier} | "
             f"pdf={'yes' if pdf_bytes else 'no'} "
             f"xlsx={'yes' if xlsx_bytes else 'no'}"
+            + (f" | consumed {consumed_upstream}" if consumed_upstream else "")
         )
         logger.info(summary_msg, mode=mode)
 
@@ -502,6 +541,15 @@ Write a strategic_narrative (3-5 sentences) that:
             ),
             KeyFinding(metric="Q1 OpEx", value=f"KES {q_opex[0]:,.0f}" if q_opex else "N/A"),
         ]
+        # Surface consumed upstream signals so the composition is visible in the UI.
+        if "near_term_cashflow" in cross_signals:
+            findings.append(KeyFinding(
+                metric="Cash Regime",
+                value=str(cross_signals["near_term_cashflow"].get("regime") or "N/A"),
+            ))
+        if "tax_position" in cross_signals:
+            n_flags = len(cross_signals["tax_position"].get("compliance_flags") or [])
+            findings.append(KeyFinding(metric="Tax Flags", value=f"{n_flags} flag(s)"))
         composite = CompositeGenUIPayload(
             component_id="BankabilityScoreRadar",
             props={

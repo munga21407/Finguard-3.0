@@ -214,6 +214,12 @@ jobs:
   security-scan:
     name: Security — SAST, deps & secrets
     runs-on: ubuntu-latest
+    # gitleaks-action queries the PR's commits via the API; without an explicit
+    # grant the default token is too narrow and fails with "Resource not
+    # accessible by integration". Read-only scopes are sufficient (no PR comments).
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:

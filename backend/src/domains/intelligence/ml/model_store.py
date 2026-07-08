@@ -43,9 +43,7 @@ _RANDOM_STATE = 42
 
 def train_isolation_forest(amounts: list[float]) -> IsolationForest | None:
     """Fit an IsolationForest on historical amounts, or ``None`` if too few."""
-    from sklearn.ensemble import (  # type: ignore[import-untyped]  # noqa: PLC0415
-        IsolationForest,
-    )
+    from sklearn.ensemble import IsolationForest  # noqa: PLC0415
 
     if len(amounts) < ISOLATION_MIN_SAMPLES:
         return None

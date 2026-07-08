@@ -35,6 +35,7 @@ from pydantic import BaseModel, ValidationError
 from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import SUPERVISOR_ROUTES
+from src.domains.intelligence.agent_registry import supervisor_agent_table
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.supervisor import (
     SUPERVISOR_HUMAN,

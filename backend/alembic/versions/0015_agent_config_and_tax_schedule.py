@@ -14,7 +14,7 @@ Sprint 1 (deferred layer). Two tables in the ``finguard`` schema:
 Both creates are guarded (the 0001 baseline's ORM ``create_all`` may already
 have reflected them on a fresh DB), matching the 0014 pattern.
 
-Revision ID: 0015_agent_config_and_tax_schedule
+Revision ID: 0015_agent_config_tax
 Revises: 0014_agent_e_models
 Create Date: 2026-07-06 00:00:00.000000
 """
@@ -25,7 +25,7 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "0015_agent_config_and_tax_schedule"
+revision = "0015_agent_config_tax"
 down_revision = "0014_agent_e_models"
 branch_labels = None
 depends_on = None

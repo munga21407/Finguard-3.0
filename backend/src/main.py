@@ -26,8 +26,8 @@ from src.domains.finance.router import router as finance_router
 from src.domains.identity.router import limiter
 from src.domains.identity.router import router as identity_router
 from src.domains.intelligence.router import router as intelligence_router
-from src.domains.inventory.router import router as inventory_router
 from src.domains.intelligence.security.vc_issuer import ensure_trust_log_ttl_index
+from src.domains.inventory.router import router as inventory_router
 from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
 from src.infrastructure.database.postgres import close_db, init_db, verify_schema_migrated

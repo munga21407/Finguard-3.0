@@ -6,9 +6,19 @@ so multi-domain queries become a planned, typed, parallelizable flow instead of 
 LLM re-deciding one hop at a time. Companion to
 [`AGENTS_REPORT.md`](./AGENTS_REPORT.md).*
 
-> **Status:** design proposal. Nothing here is shipped yet. It is written to land
-> incrementally on top of the existing supervisor graph without a rewrite — every
-> phase is backward-compatible with the current single-agent flows.
+> **Status:** P1–P5 implemented on `chore/remove-dummy-data-phase-0`: the typed
+> `AgentHandoff` envelope + `handoffs` channel (hub_writer emits per output);
+> the `consumes` DAG registry + `build_plan`; the merge-safe minimal-diff
+> context; the `Send`-based planner (behind `settings.A2A_PLANNER_ENABLED`,
+> default **off**, so the compiled graph is unchanged until switched on); and the
+> registry-generated supervisor agent table + planner node map. The
+> consumer-*read* refactor has landed for the canonical consumer: **Agent G reads
+> `context["forecast"]` (D) and `context["audit_result"]` (F) when the planner
+> ran them first**, folding their signals into the credit narrative + findings
+> and recording provenance (`credit_forecast.consumed_upstream`) — defensively,
+> so single-agent flows are unchanged and the bankability score stays
+> ledger-derived. Other agents declare no `consumes`, so G is the whole surface
+> today. Every phase is backward-compatible with the existing single-agent flows.
 
 ---
 
