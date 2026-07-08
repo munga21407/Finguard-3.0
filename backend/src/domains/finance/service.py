@@ -78,12 +78,18 @@ from src.domains.finance.schemas import (
     ReportType,
     SankeyLink,
     SankeyNode,
+    StockPurchaseCreate,
     VaultBalance,
     VaultBalancesResponse,
     VaultTransferCreate,
 )
 from src.domains.finance.types import VaultType
 from src.domains.identity.models import User
+
+# finance → inventory is a permitted one-way dependency (see the domain-boundary
+# test): finance composes inventory writes; inventory never imports finance.
+from src.domains.inventory.models import StockMovement
+from src.domains.inventory.service import InventoryService
 
 logger = structlog.get_logger(__name__)
 
@@ -380,6 +386,36 @@ class FinanceService:
         await self._apply_expense_side_effects(expense, source="receipt.scan")
         await self._session.commit()
         return expense
+
+    async def create_stock_purchase(
+        self, data: StockPurchaseCreate, *, actor_id: uuid.UUID | None = None
+    ) -> tuple[Expense, StockMovement]:
+        """Book an expense and receive the purchased stock in **one** commit, so a
+        crash can never leave stock received without its expense (or vice versa).
+
+        Cross-domain call goes finance → inventory (never the reverse): inventory
+        stores the ``reference=(expense, id)`` link; finance holds no product FK.
+        """
+        expense = Expense(**data.expense.model_dump())
+        expense = await self._expense_repo.create(expense)
+        await self._apply_expense_side_effects(expense, source="inventory.purchase")
+        inventory = InventoryService(self._session)
+        movement = await inventory.record_purchase_receipt(
+            data.product_id,
+            data.quantity,
+            data.unit_cost,
+            reference_id=expense.id,
+            actor_id=actor_id,
+        )
+        await self._session.commit()
+        # A restock can clear a standing low-stock alert (best-effort, post-commit).
+        await inventory.reconcile_low_stock_alert(data.product_id)
+        return expense, movement
+
+    async def cogs_for_invoice(self, invoice_id: uuid.UUID) -> Decimal:
+        """Gross-margin input: cost of goods sold for a sale, read from inventory's
+        weighted-average cost (finance → inventory read seam)."""
+        return await InventoryService(self._session).cogs_for_invoice(invoice_id)
 
     async def _apply_expense_side_effects(self, expense: Expense, *, source: str) -> None:
         """Budget burn-down + outbox event for a freshly-flushed expense.

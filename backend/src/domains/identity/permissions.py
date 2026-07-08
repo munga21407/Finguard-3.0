@@ -31,6 +31,12 @@ class Permission(enum.StrEnum):
     FINANCE_RECONCILE = "finance:reconcile"
     CRM_READ = "crm:read"
     CRM_WRITE = "crm:write"
+    INVENTORY_READ = "inventory:read"
+    INVENTORY_WRITE = "inventory:write"
+    # Stock-take adjustments can create stock from nothing (write-ups) or write it
+    # off, so — like FINANCE_RECONCILE — they are a separate, higher-trust grant
+    # held by managers+ rather than every operator (separation of duties).
+    INVENTORY_ADJUST = "inventory:adjust"
     INTELLIGENCE_READ = "intelligence:read"      # read-only insights / cached reads
     INTELLIGENCE_ACT = "intelligence:act"        # state-changing agent actions
     USER_MANAGE = "user:manage"                  # verify users, change roles
@@ -41,18 +47,28 @@ class Permission(enum.StrEnum):
 
 
 _READ_ONLY: frozenset[Permission] = frozenset(
-    {Permission.FINANCE_READ, Permission.CRM_READ, Permission.INTELLIGENCE_READ}
+    {
+        Permission.FINANCE_READ,
+        Permission.CRM_READ,
+        Permission.INVENTORY_READ,
+        Permission.INTELLIGENCE_READ,
+    }
 )
 
 _OPERATOR: frozenset[Permission] = _READ_ONLY | frozenset(
-    {Permission.FINANCE_WRITE, Permission.CRM_WRITE, Permission.INTELLIGENCE_ACT}
+    {
+        Permission.FINANCE_WRITE,
+        Permission.CRM_WRITE,
+        Permission.INVENTORY_WRITE,
+        Permission.INTELLIGENCE_ACT,
+    }
 )
 
 # Manager tier adds reconciliation authority — separation of duties from the
 # Accountant, who can record invoices/payments but cannot import settlements —
 # plus read access to the audit trail (oversight of who-did-what).
 _MANAGER: frozenset[Permission] = _OPERATOR | frozenset(
-    {Permission.FINANCE_RECONCILE, Permission.AUDIT_READ}
+    {Permission.FINANCE_RECONCILE, Permission.AUDIT_READ, Permission.INVENTORY_ADJUST}
 )
 
 _ADMIN: frozenset[Permission] = _MANAGER | frozenset({Permission.USER_MANAGE})
