@@ -75,6 +75,23 @@ async def test_accountant_denied_user_management(
     assert res.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_accountant_denied_agent_proposal_approval(
+    client: AsyncClient, auth_as: Callable[..., User]
+) -> None:
+    """Approving an agent-proposed stock adjustment needs inventory:adjust (manager+).
+
+    The denial short-circuits at the permission dependency (403) before the handler,
+    so no proposal need exist — an Accountant simply lacks the authority to release
+    an agent action.
+    """
+    auth_as(UserRole.ACCOUNTANT)
+    res = await client.post(
+        f"/api/v1/intelligence/proposals/{uuid.uuid4()}/approve"
+    )
+    assert res.status_code == 403
+
+
 # ── Grants ──────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
