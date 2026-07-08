@@ -6,14 +6,9 @@ so multi-domain queries become a planned, typed, parallelizable flow instead of 
 LLM re-deciding one hop at a time. Companion to
 [`AGENTS_REPORT.md`](./AGENTS_REPORT.md).*
 
-> **Status:** P2–P4 implemented on `chore/remove-dummy-data-phase-0` (the DAG
-> registry, the merge-safe minimal-diff context, and the `Send`-based planner —
-> the last behind `settings.A2A_PLANNER_ENABLED`, default **off**, so the
-> compiled graph is unchanged until switched on). P1 (typed `AgentHandoff`
-> envelope) and P5 (registry-generated agent table) remain design-only, as does
-> the consumer-*read* refactor (agents still recompute rather than reading
-> upstream outputs — see §4.4). Every phase is backward-compatible with the
-> existing single-agent flows.
+> **Status:** design proposal. Nothing here is shipped yet. It is written to land
+> incrementally on top of the existing supervisor graph without a rewrite — every
+> phase is backward-compatible with the current single-agent flows.
 
 ---
 

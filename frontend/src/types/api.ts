@@ -119,6 +119,25 @@ export type ApiReportSeriesPoint   = S["ReportSeriesPoint"];
 export type ApiFinancialReport     = S["FinancialReport"];
 export type ApiReportCatalogItem   = S["ReportCatalogItem"];
 export type ApiReportCatalog       = S["ReportCatalogResponse"];
+// Finance ↔ inventory seams.
+export type ApiStockPurchaseCreate   = S["StockPurchaseCreate"];
+export type ApiStockPurchaseResponse = S["StockPurchaseResponse"];
+export type ApiInvoiceCogs           = S["InvoiceCogsResponse"];
+
+// ── Inventory (Stock Management) ────────────────────────────────────────────────
+export type ApiProduct              = S["ProductResponse"];
+export type ApiProductCreate        = S["ProductCreate"];
+export type ApiProductUpdate        = S["ProductUpdate"];
+export type ApiStockLevel           = S["StockLevelResponse"];
+export type ApiStockLevelView       = S["StockLevelView"];
+export type ApiStockMovement        = S["StockMovementResponse"];
+export type ApiMovementCreate       = S["InventoryMovementCreate"];
+export type ApiStockAdjustmentCreate = S["StockAdjustmentCreate"];
+export type ApiValuationReport      = S["ValuationReport"];
+export type ApiLowStockItem         = S["LowStockItem"];
+export type ApiMovementType         = S["MovementType"];
+export type ApiMovementReason       = S["MovementReason"];
+export type ApiUnitOfMeasure        = S["UnitOfMeasure"];
 
 // ── Intelligence ──────────────────────────────────────────────────────────────
 export type ApiInsightRequest        = S["InsightRequest"];

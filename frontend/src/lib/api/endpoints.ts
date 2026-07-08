@@ -44,6 +44,18 @@ export const ENDPOINTS = {
     CUSTOMER: (id: string) => `/api/v1/crm/customers/${id}`,
   },
 
+  // Inventory
+  INVENTORY: {
+    PRODUCTS: "/api/v1/inventory/products",
+    PRODUCT: (id: string) => `/api/v1/inventory/products/${id}`,
+    STOCK: (id: string) => `/api/v1/inventory/products/${id}/stock`,
+    MOVEMENTS: (id: string) => `/api/v1/inventory/products/${id}/movements`,
+    ADJUST: (id: string) => `/api/v1/inventory/products/${id}/adjust`,
+    LEVELS: "/api/v1/inventory/levels",
+    VALUATION: "/api/v1/inventory/reports/valuation",
+    LOW_STOCK: "/api/v1/inventory/reports/low-stock",
+  },
+
   // Health (unauthenticated; not under /api/v1)
   HEALTH: {
     READY: "/health/ready",

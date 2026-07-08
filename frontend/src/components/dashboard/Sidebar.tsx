@@ -10,6 +10,7 @@ const navItems = [
   { href: "/dashboard/receivables", label: "Receivables", icon: "payments"             },
   { href: "/dashboard/payables", label: "Payables",       icon: "receipt_long"         },
   { href: "/dashboard/reconciliation", label: "Reconciliation", icon: "git_branch"     },
+  { href: "/dashboard/inventory", label: "Inventory", icon: "inventory_2" },
   { href: "/dashboard/intelligence", label: "Intelligence", icon: "insights"           },
   { href: "/dashboard/operations", label: "Operations",   icon: "settings_applications"},
 ] as const;
@@ -125,6 +126,11 @@ function navIcon(label: string) {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
         <line x1="6" y1="20" x2="6" y2="14"/>
+      </svg>
+    ),
+    "Inventory": (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 7h18"/><path d="M5 7v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7"/><path d="M9 11h6"/>
       </svg>
     ),
     "Operations": (
