@@ -155,6 +155,9 @@ export type ApiInsightFeedItem       = S["InsightFeedItem"];
 export type ApiActionFeedItem        = S["ActionFeedItem"];
 export type ApiNotificationItem      = S["NotificationItem"];
 export type ApiAgentTelemetry        = S["AgentTelemetry"];
+// Human-in-the-loop approval queue for value-changing agent actions.
+export type ApiAgentActionProposal   = S["AgentActionProposalResponse"];
+export type ApiProposalStatus        = ApiAgentActionProposal["status"];
 // Admin: KRA knowledge-base document ingestion result.
 export type ApiKnowledgeIngestResponse = S["KnowledgeIngestResponse"];
 

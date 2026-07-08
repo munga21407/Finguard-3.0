@@ -9,6 +9,7 @@ const navItems = [
   { href: "/dashboard",          label: "Command Center", icon: "grid_view"            },
   { href: "/dashboard/receivables", label: "Receivables", icon: "payments"             },
   { href: "/dashboard/payables", label: "Payables",       icon: "receipt_long"         },
+  { href: "/dashboard/approvals", label: "Approvals",     icon: "fact_check"           },
   { href: "/dashboard/reconciliation", label: "Reconciliation", icon: "git_branch"     },
   { href: "/dashboard/inventory", label: "Inventory", icon: "inventory_2" },
   { href: "/dashboard/intelligence", label: "Intelligence", icon: "insights"           },

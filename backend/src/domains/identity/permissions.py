@@ -29,6 +29,10 @@ class Permission(enum.StrEnum):
     # invoices paid — a higher-trust action than ordinary finance writes, so it is a
     # separate grant held by reviewers (manager+), not every operator.
     FINANCE_RECONCILE = "finance:reconcile"
+    # Signing off an accounts-payable bill (maker-checker approval) is spend
+    # authorization — a distinct authority from reconciling settlements, so it is its
+    # own grant rather than an overload of FINANCE_RECONCILE. Held by managers+.
+    FINANCE_APPROVE = "finance:approve"
     CRM_READ = "crm:read"
     CRM_WRITE = "crm:write"
     INVENTORY_READ = "inventory:read"
@@ -64,11 +68,17 @@ _OPERATOR: frozenset[Permission] = _READ_ONLY | frozenset(
     }
 )
 
-# Manager tier adds reconciliation authority — separation of duties from the
-# Accountant, who can record invoices/payments but cannot import settlements —
-# plus read access to the audit trail (oversight of who-did-what).
+# Manager tier adds reconciliation + AP approval authority — separation of duties
+# from the Accountant, who can record invoices/payments but can neither import
+# settlements nor sign off payables — plus read access to the audit trail
+# (oversight of who-did-what).
 _MANAGER: frozenset[Permission] = _OPERATOR | frozenset(
-    {Permission.FINANCE_RECONCILE, Permission.AUDIT_READ, Permission.INVENTORY_ADJUST}
+    {
+        Permission.FINANCE_RECONCILE,
+        Permission.FINANCE_APPROVE,
+        Permission.AUDIT_READ,
+        Permission.INVENTORY_ADJUST,
+    }
 )
 
 _ADMIN: frozenset[Permission] = _MANAGER | frozenset({Permission.USER_MANAGE})

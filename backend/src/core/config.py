@@ -193,6 +193,22 @@ class Settings(BaseSettings):
                 "value (required to claim the first OWNER account)"
             )
 
+        # Live M-Pesa ingestion hardening: the Daraja STK callback marks invoices
+        # paid, and Safaricom does not sign callbacks, so a production deployment
+        # that has enabled M-Pesa MUST pin the callback source to Safaricom's IP
+        # ranges. Without the allowlist the payment webhook is effectively
+        # unauthenticated — anyone could POST a "paid" callback.
+        mpesa_enabled = bool(
+            self.MPESA_CONSUMER_KEY
+            and self.MPESA_CONSUMER_SECRET
+            and self.MPESA_SHORTCODE
+        )
+        if mpesa_enabled and not self.MPESA_CALLBACK_ALLOWED_IPS:
+            problems.append(
+                "MPESA_CALLBACK_ALLOWED_IPS must be set when M-Pesa is configured "
+                "(the STK callback marks invoices paid and is otherwise unauthenticated)"
+            )
+
         if problems:
             raise ValueError(
                 "Invalid production configuration: " + "; ".join(problems)

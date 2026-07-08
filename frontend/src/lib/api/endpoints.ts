@@ -76,6 +76,10 @@ export const ENDPOINTS = {
     CONVERSATION_STATUS: (sessionId: string) =>
       `/api/v1/intelligence/conversation/${sessionId}/status`,
     GENUI_ERROR: "/api/v1/intelligence/genui/error",
+    // Human-in-the-loop approval queue for value-changing agent actions.
+    PROPOSALS: "/api/v1/intelligence/proposals",
+    PROPOSAL_APPROVE: (id: string) => `/api/v1/intelligence/proposals/${id}/approve`,
+    PROPOSAL_REJECT: (id: string) => `/api/v1/intelligence/proposals/${id}/reject`,
     // Admin: upload a KRA regulatory doc into the Tax RAG knowledge base.
     KB_INGEST: "/api/v1/intelligence/admin/knowledge-base/ingest",
   },

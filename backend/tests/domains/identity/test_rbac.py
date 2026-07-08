@@ -76,6 +76,20 @@ async def test_accountant_denied_user_management(
 
 
 @pytest.mark.asyncio
+async def test_accountant_denied_payable_approval(
+    client: AsyncClient, auth_as: Callable[..., User]
+) -> None:
+    """Signing off an AP payable needs finance:approve (manager+), not finance:write.
+
+    The denial short-circuits at the permission dependency (403) before the handler,
+    so no payable need exist — an Accountant can submit but cannot approve.
+    """
+    auth_as(UserRole.ACCOUNTANT)
+    res = await client.post(f"/api/v1/finance/payables/{uuid.uuid4()}/approve")
+    assert res.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_accountant_denied_agent_proposal_approval(
     client: AsyncClient, auth_as: Callable[..., User]
 ) -> None:
