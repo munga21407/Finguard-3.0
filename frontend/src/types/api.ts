@@ -158,6 +158,16 @@ export type ApiAgentTelemetry        = S["AgentTelemetry"];
 // Human-in-the-loop approval queue for value-changing agent actions.
 export type ApiAgentActionProposal   = S["AgentActionProposalResponse"];
 export type ApiProposalStatus        = ApiAgentActionProposal["status"];
+// Email notification preferences.
+export type ApiEmailPreferences      = S["PreferencesResponse"];
+export type ApiCategoryPreference    = S["CategoryPreference"];
+export type ApiPreferenceUpdate      = S["PreferenceUpdate"];
+// Email delivery admin.
+export type ApiEmailKpis             = S["EmailKpis"];
+export type ApiEmailOutboxPage       = S["EmailOutboxPage"];
+export type ApiEmailOutboxItem       = S["EmailOutboxItem"];
+export type ApiEmailDeadLetterPage   = S["EmailDeadLetterPage"];
+export type ApiEmailDeadLetterItem   = S["EmailDeadLetterItem"];
 // Admin: KRA knowledge-base document ingestion result.
 export type ApiKnowledgeIngestResponse = S["KnowledgeIngestResponse"];
 

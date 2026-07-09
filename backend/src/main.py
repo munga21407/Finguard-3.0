@@ -28,6 +28,7 @@ from src.domains.identity.router import router as identity_router
 from src.domains.intelligence.router import router as intelligence_router
 from src.domains.intelligence.security.vc_issuer import ensure_trust_log_ttl_index
 from src.domains.inventory.router import router as inventory_router
+from src.domains.notifications.router import router as notifications_router
 from src.infrastructure.cache.redis import close_redis, init_redis
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
 from src.infrastructure.database.postgres import close_db, init_db, verify_schema_migrated
@@ -145,6 +146,9 @@ app.include_router(intelligence_router, prefix="/api/v1/intelligence", tags=["in
 app.include_router(inventory_router, prefix="/api/v1/inventory", tags=["inventory"])
 app.include_router(alerts_router, prefix="/api/v1/alerts", tags=["alerts"])
 app.include_router(audit_router, prefix="/api/v1/audit", tags=["audit"])
+app.include_router(
+    notifications_router, prefix="/api/v1/notifications", tags=["notifications"]
+)
 
 
 @app.get("/health")

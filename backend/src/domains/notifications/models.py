@@ -14,7 +14,15 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, Integer, String, Text, func
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,6 +33,52 @@ class EmailStatus(enum.StrEnum):
     PENDING = "pending"   # awaiting a flush pass
     SENT = "sent"         # accepted by the SMTP server (or dry-run logged)
     FAILED = "failed"     # transient failure; retried until dead-lettered
+
+
+class EmailCategory(enum.StrEnum):
+    """Category of a transactional email — governs opt-out eligibility.
+
+    ACCOUNT / RECEIPT / INVOICE are transactional and cannot be suppressed (a
+    recipient must always get their receipt or account mail). APPROVAL and
+    REMINDER are suppressible via a per-recipient opt-out (see ``EmailOptOut`` and
+    ``SUPPRESSIBLE_CATEGORIES``).
+    """
+
+    ACCOUNT = "account"     # welcome, account approved
+    RECEIPT = "receipt"     # payment received
+    INVOICE = "invoice"     # invoice issued
+    APPROVAL = "approval"   # something needs your review
+    REMINDER = "reminder"   # payment due / overdue
+
+
+# Only these may be opted out of; the rest are mandatory transactional mail.
+SUPPRESSIBLE_CATEGORIES: frozenset[EmailCategory] = frozenset(
+    {EmailCategory.APPROVAL, EmailCategory.REMINDER}
+)
+
+
+class EmailOptOut(Base):
+    """A recipient's opt-out of one suppressible email category.
+
+    Keyed by (lowercased) email so it applies to both internal users and external
+    customers uniformly. Presence of a row means opted out; absence means
+    subscribed (default-in). Set via the authenticated preferences API or a signed
+    unsubscribe link.
+    """
+
+    __tablename__ = "email_opt_outs"
+    __table_args__ = (
+        UniqueConstraint("email", "category", name="uq_email_opt_outs_email_category"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    category: Mapped[EmailCategory] = mapped_column(
+        Enum(EmailCategory, native_enum=False, length=20), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class EmailOutbox(Base):

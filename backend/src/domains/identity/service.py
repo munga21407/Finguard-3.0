@@ -15,14 +15,20 @@ from src.core.exceptions import (
 )
 from src.core.security import (
     create_access_token,
+    create_email_verification_token,
+    create_password_reset_token,
     create_refresh_token,
+    decode_email_verification_token,
+    decode_password_reset_token,
     decode_token,
     hash_password,
+    token_issued_after_password_change,
     verify_password,
 )
 from src.domains.identity.models import User, UserRole
 from src.domains.identity.repository import UserRepository
 from src.domains.identity.schemas import TokenResponse, UserCreate, UserUpdate
+from src.domains.notifications.models import EmailCategory
 from src.domains.notifications.service import NotificationService
 from src.infrastructure.cache.redis import get_auth_redis
 
@@ -55,21 +61,47 @@ class IdentityService:
             full_name=data.full_name,
             role=UserRole.OWNER if claim_owner else UserRole.VIEWER,
             is_verified=claim_owner,
+            # The bootstrap owner is trusted (held the bootstrap key), so their
+            # email is auto-verified; everyone else must confirm via the link.
+            email_verified_at=datetime.now(UTC) if claim_owner else None,
         )
         user = await self._repo.create(user)
-        # Enqueue the welcome email in the same transaction as the account row, so
-        # the two are atomic (the flush worker delivers it). Content adapts to
-        # whether the account is already active or pending admin approval.
-        await NotificationService(self._session).enqueue_email(
-            to_email=user.email,
-            to_name=user.full_name,
-            subject="Welcome to Finguard",
-            template="welcome",
-            context={"full_name": user.full_name, "is_verified": user.is_verified},
-            idempotency_key=f"welcome:{user.id}",
-        )
+        # Enqueue in the same transaction as the account row (atomic; the flush
+        # worker delivers). The bootstrap owner gets a welcome; every other
+        # registrant gets a verification email with the confirm link.
+        notifier = NotificationService(self._session)
+        if claim_owner:
+            await notifier.enqueue_email(
+                to_email=user.email,
+                to_name=user.full_name,
+                subject="Welcome to Finguard",
+                template="welcome",
+                context={"full_name": user.full_name, "is_verified": True},
+                idempotency_key=f"welcome:{user.id}",
+            )
+        else:
+            await self._enqueue_verification_email(notifier, user)
         await self._session.commit()
         return user
+
+    async def _enqueue_verification_email(
+        self, notifier: NotificationService, user: User
+    ) -> None:
+        token = create_email_verification_token(str(user.id))
+        verify_url = f"{settings.APP_BASE_URL}/verify-email?token={token}"
+        await notifier.enqueue_email(
+            to_email=user.email,
+            to_name=user.full_name,
+            subject="Verify your Finguard email",
+            template="verify_email",
+            context={
+                "full_name": user.full_name,
+                "verify_url": verify_url,
+                "expires_hours": settings.EMAIL_VERIFICATION_EXPIRE_HOURS,
+            },
+            # Fresh key per send so a resend re-delivers; the endpoint rate-limits.
+            idempotency_key=f"verify:{uuid.uuid4()}",
+        )
 
     @staticmethod
     def _claims_owner(bootstrap_key: str | None, is_first_user: bool) -> bool:
@@ -127,6 +159,12 @@ class IdentityService:
             raise UnauthorizedError("Invalid credentials")
         if not user.is_active:
             raise UnauthorizedError("Account disabled")
+        # Two independent gates. Check email ownership first — it's self-actionable
+        # (the user can fix it from their inbox); admin approval is not.
+        if user.email_verified_at is None:
+            raise ForbiddenError(
+                "Please verify your email — check your inbox for the confirmation link."
+            )
         if not user.is_verified:
             raise ForbiddenError("Account is pending verification by an administrator")
 
@@ -167,6 +205,87 @@ class IdentityService:
         await self._session.commit()
         return user
 
+    async def verify_email(self, token: str) -> None:
+        """Confirm email ownership from a valid verification token.
+
+        Idempotent: verifying an already-verified account is a no-op (a
+        double-click doesn't error). Admin approval remains a separate gate.
+        """
+        user_id = decode_email_verification_token(token)
+        user = await self._repo.get_by_id(uuid.UUID(user_id))
+        if not user or not user.is_active:
+            raise UnauthorizedError("Invalid or expired verification link")
+        if user.email_verified_at is None:
+            user.email_verified_at = datetime.now(UTC)
+            await self._repo.save(user)
+            await self._session.commit()
+
+    async def resend_verification(self, email: str) -> None:
+        """Re-send the verification email if the account exists and is unverified.
+
+        Always returns None (no account enumeration); an unknown, inactive, or
+        already-verified email simply sends nothing.
+        """
+        user = await self._repo.get_by_email(email)
+        if not user or not user.is_active or user.email_verified_at is not None:
+            return
+        await self._enqueue_verification_email(NotificationService(self._session), user)
+        await self._session.commit()
+
+    async def request_password_reset(self, email: str) -> None:
+        """Email a reset link if the account exists — always returns None.
+
+        Deliberately reveals nothing about whether the address is registered (no
+        account enumeration): the caller gets the same response either way, and an
+        unknown or inactive email simply enqueues no mail.
+        """
+        user = await self._repo.get_by_email(email)
+        if not user or not user.is_active:
+            return
+        token = create_password_reset_token(str(user.id))
+        reset_url = f"{settings.APP_BASE_URL}/reset-password?token={token}"
+        await NotificationService(self._session).enqueue_email(
+            to_email=user.email,
+            to_name=user.full_name,
+            subject="Reset your Finguard password",
+            template="password_reset",
+            context={
+                "full_name": user.full_name,
+                "reset_url": reset_url,
+                "expires_minutes": settings.PASSWORD_RESET_EXPIRE_MINUTES,
+            },
+            # Fresh key per request so a legitimate re-request re-sends; the
+            # endpoint's rate limit is what bounds abuse.
+            idempotency_key=f"pwreset:{uuid.uuid4()}",
+            category=EmailCategory.ACCOUNT,
+        )
+        await self._session.commit()
+
+    async def reset_password(self, token: str, new_password: str) -> None:
+        """Set a new password from a valid reset token and end existing sessions.
+
+        The reset link is one-time-use (its jti is blacklisted after success), and
+        stamping ``password_changed_at`` invalidates every access/refresh token
+        issued before now (see ``token_issued_after_password_change``), so a reset
+        prompted by compromise also evicts the attacker.
+        """
+        payload = decode_password_reset_token(token)
+        jti: str | None = payload.get("jti")
+        redis = get_auth_redis()
+        if jti is not None and await redis.exists(f"blacklist:{jti}"):
+            raise UnauthorizedError("This reset link has already been used")
+
+        user = await self._repo.get_by_id(uuid.UUID(str(payload["sub"])))
+        if not user or not user.is_active:
+            raise UnauthorizedError("Invalid or expired reset link")
+        user.hashed_password = hash_password(new_password)
+        user.password_changed_at = datetime.now(UTC)
+        await self._repo.save(user)
+        await self._session.commit()
+        # Consume the link: a second use is rejected above.
+        if jti is not None:
+            await self._blacklist_jti(redis, jti, payload.get("exp"))
+
     async def refresh(self, refresh_token: str) -> TokenResponse:
         redis = get_auth_redis()
         payload = decode_token(refresh_token)
@@ -193,6 +312,13 @@ class IdentityService:
         user = await self._repo.get_by_id(uuid.UUID(str(payload["sub"])))
         if not user or not user.is_active:
             raise UnauthorizedError("User not found or disabled")
+
+        # A refresh token minted before the user's last password reset is dead —
+        # so a reset kills even a stolen 7-day refresh token.
+        if not token_issued_after_password_change(
+            payload.get("iat"), user.password_changed_at
+        ):
+            raise UnauthorizedError("Session ended — please sign in again")
 
         # Rotate: blacklist the just-consumed jti; issue a new token that
         # carries the same family_id so future replay detection works.

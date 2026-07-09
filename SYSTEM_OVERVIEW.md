@@ -437,8 +437,8 @@ All services are defined in `infrastructure/docker-compose.yml`. Background work
 
 | Service | Purpose |
 |---|---|
-| **celery-worker** | Queues: `ocr_processing`, `batch_processing`, `watchdog`. Concurrency: 2. Also runs RabbitMQ consumer and outbox projector when enabled. |
-| **celery-beat** | Periodic tasks; schedule persisted via `celerybeat_schedule` volume |
+| **celery-worker** | Queues: `ocr_processing`, `batch_processing`, `watchdog`, `notifications`. Concurrency: 2. Also runs RabbitMQ consumer and outbox projector when enabled. |
+| **celery-beat** | Periodic tasks; schedule persisted via `celerybeat_schedule` volume. Includes `email.flush_outbox` (60 s) and `email.dispatch_payment_reminders` (daily 08:00 UTC) |
 | **flower** | Celery monitoring UI (port 5555) |
 
 ### Monitoring Services (`--profile monitoring`)
@@ -457,18 +457,24 @@ All services are defined in `infrastructure/docker-compose.yml`. Background work
 
 ```
 finguard.users (
-  id              UUID PK,
-  email           VARCHAR UNIQUE,
-  full_name       VARCHAR,
-  hashed_password VARCHAR,
-  role            UserRole ENUM (owner | admin | manager | accountant | viewer),
-  is_active       BOOLEAN DEFAULT true,
-  is_verified     BOOLEAN DEFAULT false,  -- first-user bootstrap sets true; admin sets for subsequent users
-  created_at      TIMESTAMPTZ
+  id                  UUID PK,
+  email               VARCHAR UNIQUE,
+  full_name           VARCHAR,
+  hashed_password     VARCHAR,
+  role                UserRole ENUM (owner | admin | manager | accountant | viewer),
+  is_active           BOOLEAN DEFAULT true,
+  is_verified         BOOLEAN DEFAULT false,     -- admin-approval login gate
+  email_verified_at   TIMESTAMPTZ NULL,          -- self-service email-ownership gate (mig 0024)
+  password_changed_at TIMESTAMPTZ NULL,          -- reset stamp: invalidates tokens issued before it (mig 0023)
+  created_at          TIMESTAMPTZ
 )
 ```
 
-**Bootstrap behaviour**: The first user registered becomes `role=OWNER, is_verified=true` automatically. All subsequent self-registrations are `role=VIEWER, is_verified=false` and are blocked from login until an admin/owner verifies them. Alternatively, run `scripts.seed_users` (`make seed-users`) to create verified `OWNER` + `ADMIN` accounts from the `SEED_*` env vars without self-registering — idempotent (existing emails skipped) and refuses weak passwords in production.
+**Login = two independent gates** (both required): `email_verified_at IS NOT NULL` (the user clicked the link in their verification email) **and** `is_verified` (an owner/admin approved the account via `PATCH /users/{id}`). The gates are checked email-first (self-actionable) with distinct messages.
+
+**Bootstrap behaviour**: The first user registered becomes `role=OWNER, is_verified=true` with `email_verified_at` auto-set (they held the bootstrap key). All subsequent self-registrations are `role=VIEWER`, unverified on both gates, and blocked from login until they verify their email *and* an admin approves. Alternatively, run `scripts.seed_users` (`make seed-users`) to create fully-verified `OWNER` + `ADMIN` accounts from the `SEED_*` env vars — idempotent and refuses weak passwords in production.
+
+**Password reset / session invalidation**: `password_changed_at` is stamped on every reset; access/refresh tokens carry an `iat` claim and are rejected when issued before it — so a reset immediately evicts existing sessions, including a stolen 7-day refresh token.
 
 ### PostgreSQL — CRM Domain
 
@@ -736,6 +742,44 @@ finguard.alerts (
 ```
 
 Agent E's findings reach this table via the watchdog consumer (`workers/consumers/watchdog_consumer.py`), which creates an `Alert` from a watchdog result. Surfaced on `/dashboard/payables/alerts` and exposed via `/api/v1/alerts`.
+
+### PostgreSQL — Notifications Domain
+
+The transactional email pipeline (Gmail SMTP). A business action enqueues an
+`email_outbox` row *in its own transaction*; a Celery-beat worker
+(`email.flush_outbox`, 60 s) renders (Jinja2, HTML+text) and sends it via
+`aiosmtplib`, with at-least-once delivery. `idempotency_key` is unique so nothing
+sends twice; exhausted rows move to `email_dead_letters`. `MAIL_ENABLED=false`
+renders + logs but opens no socket (dev/CI never send).
+
+```
+email_outbox (                        -- mig 0021
+  id              UUID PK,
+  to_email        VARCHAR(320),  to_name VARCHAR(255),
+  subject         VARCHAR(255),
+  template        VARCHAR(100),       -- resolves to {template}.html + {template}.txt
+  context         JSONB,
+  status          EmailStatus (pending | sent | failed) (indexed),
+  attempts        INT,  last_error TEXT,
+  scheduled_for   TIMESTAMPTZ NULL,   -- future-dated (reminders); NULL = next flush
+  sent_at         TIMESTAMPTZ NULL,
+  idempotency_key VARCHAR(120) UNIQUE,  -- e.g. welcome:{user}, receipt:{payment}, reminder:{invoice}:{tier}
+  created_at      TIMESTAMPTZ (indexed)
+)
+email_dead_letters ( … )              -- terminal: moved after EMAIL_MAX_RETRIES
+
+email_opt_outs (                      -- mig 0022 — notification preferences
+  id UUID PK, email VARCHAR(320) (indexed), category VARCHAR(20),
+  created_at TIMESTAMPTZ,
+  UNIQUE (email, category)            -- presence = opted out
+)
+```
+
+**Categories & suppression**: `EmailCategory` = account / receipt / invoice
+(transactional, always sent) + approval / reminder (**suppressible** via
+`email_opt_outs`). `enqueue_email(..., category)` drops a suppressible mail when
+the recipient has opted out. Suppressible mail carries a signed, non-expiring
+one-click **unsubscribe** link (`List-Unsubscribe`-ready).
 
 ### MongoDB — Collections
 
@@ -1042,13 +1086,17 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/register` | — | Create user (first → OWNER+verified; subsequent → VIEWER+unverified) |
-| POST | `/token` | — | Login; sets HttpOnly access/refresh + CSRF/session cookies (access also in body); Redis lockout |
-| POST | `/token/refresh` | Refresh cookie + CSRF | Rotate tokens (jti blacklisted on use; reuse detected) |
+| POST | `/register` | — | Create user (first → OWNER+verified; subsequent → VIEWER, must verify email + await admin) |
+| POST | `/token` | — | Login; sets HttpOnly access/refresh + CSRF/session cookies (access also in body); Redis lockout. Requires **both** gates (email_verified + admin-approved) |
+| POST | `/token/refresh` | Refresh cookie + CSRF | Rotate tokens (jti blacklisted on use; reuse detected; rejects tokens issued before a password reset) |
+| POST | `/verify-email` | — (signed token) | Confirm email ownership from the link's token (idempotent); rate-limited 10/min |
+| POST | `/resend-verification` | — | Re-send the verification email; always 202 (no account enumeration); 5/min |
+| POST | `/forgot-password` | — | Request a reset link; always 202 (no enumeration); 5/min |
+| POST | `/reset-password` | — (signed token) | Set a new password from a one-time-use token; ends all existing sessions; 5/min |
 | POST | `/logout` | Cookie/Bearer + CSRF | Revoke access + refresh tokens; clears auth cookies |
 | GET | `/me` | Cookie/Bearer | Return authenticated user profile from backend (authoritative) |
 | GET | `/users` | Cookie/Bearer + `user:manage` | List all users (admin/owner only) |
-| PATCH | `/users/{user_id}` | Cookie/Bearer + `user:manage` | Update user role / verified status |
+| PATCH | `/users/{user_id}` | Cookie/Bearer + `user:manage` | Update user role / verified (admin-approval gate) |
 
 ### CRM — `/api/v1/crm`
 
@@ -1066,8 +1114,9 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/ledger` | `finance:write` | Create ledger entry |
 | GET | `/invoices` | `finance:read` | List invoices |
 | GET | `/invoices/{id}` | `finance:read` | Get invoice |
-| POST | `/invoices` | `finance:write` | Create invoice |
+| POST | `/invoices` | `finance:write` | Create invoice (lands as DRAFT) |
 | PATCH | `/invoices/{id}` | `finance:write` | Update invoice |
+| POST | `/invoices/{id}/send` | `finance:write` | Issue a draft invoice: flip DRAFT→SENT and email it to the customer |
 | POST | `/invoices/{id}/pay` | `finance:write` | Settle invoice (appends a `payment_applied` event for the balance) |
 | POST | `/invoices/{id}/credit-note` | `finance:write` | Apply a credit note (appends `credit_note_applied`; reduces receivable, no cash) |
 | POST | `/invoices/{id}/cancel` | `finance:write` | Cancel invoice (appends `invoice_cancelled`) |
@@ -1132,6 +1181,15 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 
 `audit:read` is a manager+ permission (oversight of who-did-what across domains).
 
+### Notifications — `/api/v1/notifications`
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/preferences` | Cookie/Bearer | The current user's suppressible email categories (approval / reminder) and opt-out state |
+| PUT | `/preferences` | Cookie/Bearer | Turn a suppressible category on/off for the current user |
+| GET | `/unsubscribe?token=` | — (signed token) | Public one-click unsubscribe landing (HTML confirmation) |
+| POST | `/unsubscribe?token=` | — (signed token) | RFC 8058 one-click unsubscribe (mail-client POST) |
+
 ### Special Endpoints
 
 | Method | Path | Auth | Description |
@@ -1151,9 +1209,12 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | Route | Purpose |
 |---|---|
 | `/` | Root redirect → `/dashboard` |
-| `/login` | JWT login form (`(auth)` route group) |
+| `/login` | JWT login form (`(auth)` route group); "Forgot password?" → `/forgot-password` |
 | `/signup` | User registration (`(auth)` route group) |
-| `/settings` | Account profile (name/email/role from `/me`) + server-revoking logout (root-level shell, no sidebar) |
+| `/forgot-password` | Request a reset link (always shows the same confirmation — no enumeration) |
+| `/reset-password` | Set a new password from the `?token=` link; redirects to login on success |
+| `/verify-email` | Auto-confirms the `?token=` from the verification email; shows verified / expired state |
+| `/settings` | Account profile (name/email/role from `/me`) + **Email notifications** toggles (suppressible categories via `/notifications/preferences`) + server-revoking logout |
 | `/support` | Help & contact surface — contact channels + documentation links (root-level shell, mirrors `/settings`) |
 | `/dashboard` | Root dashboard redirect |
 | `/dashboard/overview` | Main KPI overview |
@@ -1364,8 +1425,10 @@ Exchange: finguard.events  (type=TOPIC, durable=true)
 
 | Token Type | Algorithm | Default Expiry | Claims |
 |---|---|---|---|
-| Access token | HS256 | 30 minutes | `sub` (user UUID), `role`, `exp`, `jti` |
-| Refresh token | HS256 | 7 days | `sub`, `exp`, `jti` (for revocability) |
+| Access token | HS256 | 30 minutes | `sub` (user UUID), `role`, `exp`, `jti`, `iat` |
+| Refresh token | HS256 | 7 days | `sub`, `exp`, `jti`, `iat` (for revocability) |
+
+The `iat` (issued-at) claim backs password-reset session invalidation: a token minted before the user's `password_changed_at` is rejected by both `get_current_user` and the refresh path.
 
 Both tokens are signed with `JWT_SECRET_KEY` (which defaults to `SECRET_KEY` when unset, so a single-secret deployment still works but the auth key can be rotated independently).
 
@@ -1416,9 +1479,10 @@ After `MAX_LOGIN_ATTEMPTS` (default 5) consecutive failures, `TooManyRequestsErr
 
 ### User Lifecycle
 
-1. **First registration** → `role=OWNER, is_verified=true` — avoids chicken-and-egg admin creation.
-2. **Subsequent registrations** → `role=VIEWER, is_verified=false` — login returns `403 Forbidden` until an owner/admin calls `PATCH /users/{id}` to verify.
-3. **User management** — `GET /users` and `PATCH /users/{id}` require `user:manage` permission (ADMIN/OWNER only).
+1. **First registration** → `role=OWNER`, `is_verified=true`, email auto-verified — avoids chicken-and-egg admin creation.
+2. **Subsequent registrations** → `role=VIEWER`; a verification email is sent. Login stays `403` until **both** gates clear: the user verifies their email (`POST /verify-email`, self-service) **and** an owner/admin approves (`PATCH /users/{id}`). `/resend-verification` re-sends the link.
+3. **Password reset** — `POST /forgot-password` → emailed one-time link → `POST /reset-password`; the reset stamps `password_changed_at`, invalidating all existing sessions.
+4. **User management** — `GET /users` and `PATCH /users/{id}` require `user:manage` permission (ADMIN/OWNER only).
 
 ### Security Features
 

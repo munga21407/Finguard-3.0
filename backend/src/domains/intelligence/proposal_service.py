@@ -25,10 +25,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import settings
 from src.core.exceptions import ForbiddenError, NotFoundError, UnprocessableError
 from src.domains.identity.models import User
+from src.domains.identity.permissions import Permission
 from src.domains.intelligence.models import AgentActionProposal, ProposalStatus
 from src.domains.intelligence.tools.inventory_tools import propose_stock_movement
+from src.domains.notifications.reviewers import notify_reviewers
 
 # Action types whose approval replays a stock movement through the guarded tool.
 ACTION_STOCK_ADJUSTMENT = "stock.adjustment"
@@ -62,6 +65,23 @@ class ProposalService:
             status=ProposalStatus.PROPOSED,
         )
         self._session.add(proposal)
+        await self._session.flush()  # assign proposal.id before notifying
+        # Notify reviewers who can release this action class (inventory:adjust for
+        # a stock adjustment), except whoever triggered the agent. Enqueue-only.
+        await notify_reviewers(
+            self._session,
+            permission=Permission.INVENTORY_ADJUST,
+            subject="An agent action needs your review",
+            template="approval_needed",
+            context={
+                "summary": f"{agent_label} proposed an action ({action_type}) awaiting release.",
+                "detail": rationale or "",
+                "review_url": f"{settings.APP_BASE_URL}/dashboard/approvals",
+            },
+            resource_id=proposal.id,
+            key_prefix="proposal_review",
+            exclude_user_id=triggered_by,
+        )
         await self._session.commit()
         await self._session.refresh(proposal)
         return proposal

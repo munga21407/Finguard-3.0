@@ -1,0 +1,10 @@
+Something needs your review
+
+{% if reviewer_name %}Hi {{ reviewer_name }} — {% endif %}{{ summary }}
+{% if detail %}
+{{ detail }}
+{% endif %}
+Open the approvals inbox: {{ review_url }}
+
+You're receiving this because your role can approve this item.
+{% if unsubscribe_url %}Unsubscribe from approval emails: {{ unsubscribe_url }}{% endif %}

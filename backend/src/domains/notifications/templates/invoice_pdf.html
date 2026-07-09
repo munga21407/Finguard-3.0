@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 2cm; }
+  body { font-family: Helvetica, Arial, sans-serif; color: #1f2933; font-size: 12px; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #6b38d4; padding-bottom: 14px; }
+  .brand { font-size: 22px; font-weight: bold; color: #6b38d4; }
+  .doc { text-align: right; }
+  .doc h1 { margin: 0; font-size: 20px; letter-spacing: 1px; }
+  .doc .num { color: #8a94a6; font-size: 12px; }
+  .meta { margin-top: 26px; }
+  .meta .row { display: flex; justify-content: space-between; padding: 3px 0; }
+  .meta .k { color: #8a94a6; }
+  table.totals { width: 55%; margin-left: 45%; margin-top: 30px; border-collapse: collapse; }
+  table.totals td { padding: 7px 4px; border-bottom: 1px solid #ececf1; }
+  table.totals td.label { color: #8a94a6; }
+  table.totals td.val { text-align: right; font-variant-numeric: tabular-nums; }
+  table.totals tr.grand td { border-top: 2px solid #1f2933; border-bottom: none; font-weight: bold; font-size: 14px; }
+  .foot { margin-top: 40px; color: #8a94a6; font-size: 11px; border-top: 1px solid #ececf1; padding-top: 12px; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <div class="brand">Finguard</div>
+    <div class="doc">
+      <h1>INVOICE</h1>
+      <div class="num">{{ invoice_number }}</div>
+    </div>
+  </div>
+
+  <div class="meta">
+    {% if customer_name %}<div class="row"><span class="k">Bill to</span><span>{{ customer_name }}</span></div>{% endif %}
+    {% if due_date %}<div class="row"><span class="k">Due date</span><span>{{ due_date }}</span></div>{% endif %}
+    <div class="row"><span class="k">Currency</span><span>{{ currency }}</span></div>
+  </div>
+
+  <table class="totals">
+    <tr><td class="label">Total</td><td class="val">{{ currency }} {{ total }}</td></tr>
+    <tr class="grand"><td class="label">Amount due</td><td class="val">{{ currency }} {{ balance_due }}</td></tr>
+  </table>
+
+  <div class="foot">Please settle this invoice by the due date. Thank you for your business.</div>
+</body>
+</html>

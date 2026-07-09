@@ -47,14 +47,25 @@ async def test_register_enqueues_welcome(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
-async def test_second_registrant_welcome_is_pending_variant(db_session: AsyncSession) -> None:
-    svc = IdentityService(db_session)
-    await svc.register(_new_user())              # first → verified owner
-    second = await svc.register(_new_user())     # subsequent → unverified viewer
+async def test_second_registrant_gets_verification_email(db_session: AsyncSession) -> None:
+    from sqlalchemy import select
 
-    row = await _email_for(db_session, f"welcome:{second.id}")
+    svc = IdentityService(db_session)
+    await svc.register(_new_user())              # first → verified owner (welcome)
+    second = await svc.register(_new_user())     # subsequent → must verify email
+
+    # Non-bootstrap registrants get a verification email (not a welcome).
+    assert await _email_for(db_session, f"welcome:{second.id}") is None
+    row = (
+        await db_session.execute(
+            select(EmailOutbox).where(
+                EmailOutbox.to_email == second.email,
+                EmailOutbox.template == "verify_email",
+            )
+        )
+    ).scalars().first()
     assert row is not None
-    assert row.context["is_verified"] is False
+    assert "verify_url" in row.context
 
 
 @pytest.mark.asyncio

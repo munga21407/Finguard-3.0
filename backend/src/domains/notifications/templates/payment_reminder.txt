@@ -1,0 +1,9 @@
+{% if is_overdue %}Payment overdue{% else %}Payment reminder{% endif %} — invoice {{ invoice_number }}
+
+{% if customer_name %}Hi {{ customer_name }} — {% endif %}{% if is_overdue %}invoice {{ invoice_number }} is {{ days_overdue }} day{{ 's' if days_overdue != 1 else '' }} overdue.{% else %}this is a friendly reminder that invoice {{ invoice_number }} is due soon.{% endif %}
+
+Balance due:  {{ currency }} {{ balance_due }}
+{% if due_date %}Due date:     {{ due_date }}{% endif %}
+
+If you've already paid, please disregard this reminder.
+{% if unsubscribe_url %}Unsubscribe from reminders: {{ unsubscribe_url }}{% endif %}

@@ -1,0 +1,9 @@
+Verify your email
+
+{% if full_name %}Hi {{ full_name }} — {% endif %}thanks for registering with Finguard. Confirm this email address to continue. This link expires in {{ expires_hours }} hours.
+
+{{ verify_url }}
+
+After verifying, an administrator still needs to approve your account before you can sign in — you'll get a confirmation email when that's done.
+
+If you didn't create a Finguard account, you can ignore this email.

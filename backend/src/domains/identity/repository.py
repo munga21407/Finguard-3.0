@@ -1,9 +1,10 @@
 import uuid
+from collections.abc import Collection
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domains.identity.models import User
+from src.domains.identity.models import User, UserRole
 
 
 class UserRepository:
@@ -23,6 +24,20 @@ class UserRepository:
     async def list_all(self, limit: int = 100, offset: int = 0) -> list[User]:
         result = await self._session.execute(
             select(User).order_by(User.created_at.asc()).limit(limit).offset(offset)
+        )
+        return list(result.scalars().all())
+
+    async def list_active_by_roles(self, roles: Collection[UserRole]) -> list[User]:
+        """Active, verified users in any of *roles* — the candidate reviewers for
+        an approval notification. Empty *roles* returns nothing (no fan-out)."""
+        if not roles:
+            return []
+        result = await self._session.execute(
+            select(User).where(
+                User.role.in_(roles),
+                User.is_active.is_(True),
+                User.is_verified.is_(True),
+            )
         )
         return list(result.scalars().all())
 
