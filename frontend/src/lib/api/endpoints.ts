@@ -57,9 +57,13 @@ export const ENDPOINTS = {
     STOCK: (id: string) => `/api/v1/inventory/products/${id}/stock`,
     MOVEMENTS: (id: string) => `/api/v1/inventory/products/${id}/movements`,
     ADJUST: (id: string) => `/api/v1/inventory/products/${id}/adjust`,
+    PRODUCT_MOVEMENTS: (id: string) => `/api/v1/inventory/products/${id}/movements`,
+    PRODUCT_ADJUST: (id: string) => `/api/v1/inventory/products/${id}/adjust`,
     LEVELS: "/api/v1/inventory/levels",
     VALUATION: "/api/v1/inventory/reports/valuation",
     LOW_STOCK: "/api/v1/inventory/reports/low-stock",
+    VALUATION_REPORT: "/api/v1/inventory/reports/valuation",
+    LOW_STOCK_REPORT: "/api/v1/inventory/reports/low-stock",
   },
 
   // Health (unauthenticated; not under /api/v1)
@@ -103,17 +107,5 @@ export const ENDPOINTS = {
     ROOT: "/api/v1/audit",
     KPIS: "/api/v1/audit/kpis",
     ENTRY: (id: string) => `/api/v1/audit/${id}`,
-  },
-
-  // Notification preferences (email opt-outs) + delivery admin
-  NOTIFICATIONS: {
-    PREFERENCES: "/api/v1/notifications/preferences",
-    EMAIL_KPIS: "/api/v1/notifications/admin/email/kpis",
-    EMAIL_OUTBOX: "/api/v1/notifications/admin/email/outbox",
-    EMAIL_DEAD_LETTERS: "/api/v1/notifications/admin/email/dead-letters",
-    EMAIL_REPLAY: (id: string) =>
-      `/api/v1/notifications/admin/email/dead-letters/${id}/replay`,
-    EMAIL_RESEND: (id: string) =>
-      `/api/v1/notifications/admin/email/outbox/${id}/resend`,
   },
 } as const;

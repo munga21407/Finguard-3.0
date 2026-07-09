@@ -1,11 +1,15 @@
-// ─── Inventory (Stock Management) API ───────────────────────────────────────────
-// Typed wrappers over the /inventory endpoints, mirroring finance.ts. Types come
-// from the generated OpenAPI schema via @/types/api, so a backend contract change
-// surfaces here at compile time.
+// Inventory API
+// Frontend contract for the Stock Management module. The wrappers below support
+// both the newer inventory UI and the existing inventory hooks through a shared
+// endpoint layer.
 
 import { ENDPOINTS } from "@/lib/api/endpoints";
 import httpClient from "@/lib/api/http-client";
 import type {
+  ApiInventoryProduct,
+  ApiInventoryProductCreate,
+  ApiInventoryProductListParams,
+  ApiInventoryProductUpdate,
   ApiLowStockItem,
   ApiMovementCreate,
   ApiProduct,
@@ -14,23 +18,36 @@ import type {
   ApiStockLevel,
   ApiStockLevelView,
   ApiStockMovement,
+  ApiStockMovementCreate,
   ApiValuationReport,
 } from "@/types/api";
 
-export async function listProducts(limit = 100): Promise<ApiProduct[]> {
-  const { data } = await httpClient.get<ApiProduct[]>(ENDPOINTS.INVENTORY.PRODUCTS, {
-    params: { limit },
+export async function listInventoryProducts(
+  params?: ApiInventoryProductListParams,
+): Promise<ApiInventoryProduct[]> {
+  const { data } = await httpClient.get<ApiInventoryProduct[]>(ENDPOINTS.INVENTORY.PRODUCTS, {
+    params,
   });
   return data;
 }
 
-export async function getProduct(id: string): Promise<ApiProduct> {
-  const { data } = await httpClient.get<ApiProduct>(ENDPOINTS.INVENTORY.PRODUCT(id));
+export async function getInventoryProduct(id: string): Promise<ApiInventoryProduct> {
+  const { data } = await httpClient.get<ApiInventoryProduct>(ENDPOINTS.INVENTORY.PRODUCT(id));
   return data;
 }
 
-export async function createProduct(payload: ApiProductCreate): Promise<ApiProduct> {
-  const { data } = await httpClient.post<ApiProduct>(ENDPOINTS.INVENTORY.PRODUCTS, payload);
+export async function createInventoryProduct(
+  body: ApiInventoryProductCreate,
+): Promise<ApiInventoryProduct> {
+  const { data } = await httpClient.post<ApiInventoryProduct>(ENDPOINTS.INVENTORY.PRODUCTS, body);
+  return data;
+}
+
+export async function updateInventoryProduct(
+  id: string,
+  body: ApiInventoryProductUpdate,
+): Promise<ApiInventoryProduct> {
+  const { data } = await httpClient.patch<ApiInventoryProduct>(ENDPOINTS.INVENTORY.PRODUCT(id), body);
   return data;
 }
 
@@ -39,8 +56,64 @@ export async function getStockLevel(id: string): Promise<ApiStockLevel> {
   return data;
 }
 
+export async function listStockLevels(): Promise<ApiStockLevelView[]> {
+  const { data } = await httpClient.get<ApiStockLevelView[]>(ENDPOINTS.INVENTORY.LEVELS);
+  return data;
+}
+
+export async function listProductMovements(productId: string): Promise<ApiStockMovement[]> {
+  const { data } = await httpClient.get<ApiStockMovement[]>(
+    ENDPOINTS.INVENTORY.PRODUCT_MOVEMENTS(productId),
+  );
+  return data;
+}
+
+export async function applyStockMovement(
+  productId: string,
+  body: ApiStockMovementCreate,
+): Promise<ApiStockMovement> {
+  const { data } = await httpClient.post<ApiStockMovement>(
+    ENDPOINTS.INVENTORY.PRODUCT_MOVEMENTS(productId),
+    body,
+  );
+  return data;
+}
+
+export async function adjustStock(
+  productId: string,
+  body: ApiStockMovementCreate | ApiStockAdjustmentCreate,
+): Promise<ApiStockMovement> {
+  const { data } = await httpClient.post<ApiStockMovement>(
+    ENDPOINTS.INVENTORY.PRODUCT_ADJUST(productId),
+    body,
+  );
+  return data;
+}
+
+export async function getInventoryValuation(): Promise<ApiValuationReport> {
+  const { data } = await httpClient.get<ApiValuationReport>(ENDPOINTS.INVENTORY.VALUATION_REPORT);
+  return data;
+}
+
+export async function listLowStockItems(): Promise<ApiLowStockItem[]> {
+  const { data } = await httpClient.get<ApiLowStockItem[]>(ENDPOINTS.INVENTORY.LOW_STOCK_REPORT);
+  return data;
+}
+
+export async function listProducts(limit = 100): Promise<ApiProduct[]> {
+  return listInventoryProducts({ limit }) as Promise<ApiProduct[]>;
+}
+
+export async function getProduct(id: string): Promise<ApiProduct> {
+  return getInventoryProduct(id) as Promise<ApiProduct>;
+}
+
+export async function createProduct(payload: ApiProductCreate): Promise<ApiProduct> {
+  return createInventoryProduct(payload) as Promise<ApiProduct>;
+}
+
 export async function listMovements(id: string, limit = 50): Promise<ApiStockMovement[]> {
-  const { data } = await httpClient.get<ApiStockMovement[]>(ENDPOINTS.INVENTORY.MOVEMENTS(id), {
+  const { data } = await httpClient.get<ApiStockMovement[]>(ENDPOINTS.INVENTORY.PRODUCT_MOVEMENTS(id), {
     params: { limit },
   });
   return data;
@@ -50,32 +123,9 @@ export async function recordMovement(
   id: string,
   payload: ApiMovementCreate,
 ): Promise<ApiStockMovement> {
-  const { data } = await httpClient.post<ApiStockMovement>(
-    ENDPOINTS.INVENTORY.MOVEMENTS(id),
-    payload,
-  );
-  return data;
+  return applyStockMovement(id, payload as ApiStockMovementCreate);
 }
 
-export async function adjustStock(
-  id: string,
-  payload: ApiStockAdjustmentCreate,
-): Promise<ApiStockMovement> {
-  const { data } = await httpClient.post<ApiStockMovement>(ENDPOINTS.INVENTORY.ADJUST(id), payload);
-  return data;
-}
-
-export async function listLevels(): Promise<ApiStockLevelView[]> {
-  const { data } = await httpClient.get<ApiStockLevelView[]>(ENDPOINTS.INVENTORY.LEVELS);
-  return data;
-}
-
-export async function getValuation(): Promise<ApiValuationReport> {
-  const { data } = await httpClient.get<ApiValuationReport>(ENDPOINTS.INVENTORY.VALUATION);
-  return data;
-}
-
-export async function listLowStock(): Promise<ApiLowStockItem[]> {
-  const { data } = await httpClient.get<ApiLowStockItem[]>(ENDPOINTS.INVENTORY.LOW_STOCK);
-  return data;
-}
+export const listLevels = listStockLevels;
+export const getValuation = getInventoryValuation;
+export const listLowStock = listLowStockItems;

@@ -179,6 +179,27 @@ export type ApiAlertType     = S["AlertType"];
 export type ApiAlertSeverity = S["AlertSeverity"];
 export type ApiAlertStatus   = S["AlertStatus"];
 
+// Backwards-compatible inventory names used by the stock management UI.
+export type ApiInventoryProduct = ApiProduct & {
+  stock_level?: ApiStockLevel | ApiStockLevelView | null;
+};
+export type ApiInventoryProductCreate = ApiProductCreate;
+export type ApiInventoryProductUpdate = ApiProductUpdate;
+export interface ApiInventoryProductListParams {
+  limit?: number;
+  offset?: number;
+  category?: string;
+  low_stock?: boolean;
+  q?: string;
+}
+export type ApiStockMovementCreate = ApiMovementCreate & {
+  product_id?: string;
+  location_id?: string | null;
+};
+export type ApiStockMovementType = ApiMovementType;
+export type ApiStockMovementReason = ApiMovementReason;
+export type ApiValuationReportCategory = ApiValuationReport["categories"][number];
+
 // NOTE: Agent structured-output models (ExtractedInvoice, WatchdogAnalysis,
 // CashFlowForecast, AgentF/G outputs, AgentRun*, etc.) are intentionally NOT
 // aliased here.  They are carried inside endpoint responses as `dict[str, Any]`
