@@ -260,6 +260,40 @@ async def mark_invoice_paid(
     return result
 
 
+@router.post("/invoices/{invoice_id}/send", response_model=InvoiceResponse)
+async def send_invoice(
+    invoice_id: uuid.UUID, db: DBSession, current_user: RequireFinanceWrite
+) -> InvoiceResponse:
+    """Issue a draft invoice — flip it to SENT and email it to the customer."""
+    invoice = await FinanceService(db).send_invoice(invoice_id, current_user)
+    result = InvoiceResponse.model_validate(invoice)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.INVOICE_SENT,
+        "invoice",
+        resource_id=invoice.id,
+        metadata={"invoice_number": invoice.invoice_number},
+    )
+    return result
+
+
+@router.post("/invoices/{invoice_id}/resend", response_model=InvoiceResponse)
+async def resend_invoice(
+    invoice_id: uuid.UUID, db: DBSession, current_user: RequireFinanceWrite
+) -> InvoiceResponse:
+    """Re-email an already-issued invoice to the customer (status unchanged)."""
+    invoice = await FinanceService(db).resend_invoice(invoice_id, current_user)
+    result = InvoiceResponse.model_validate(invoice)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.INVOICE_SENT,
+        "invoice",
+        resource_id=invoice.id,
+        metadata={"invoice_number": invoice.invoice_number, "resend": True},
+    )
+    return result
+
+
 @router.post("/invoices/{invoice_id}/credit-note", response_model=InvoiceResponse)
 async def apply_credit_note(
     invoice_id: uuid.UUID,

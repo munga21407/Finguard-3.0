@@ -28,6 +28,7 @@ import argparse
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from src.core.config import settings
 from src.core.security import hash_password
@@ -147,6 +148,9 @@ async def seed(*, dry_run: bool) -> dict[str, int]:
                     role=spec.role,
                     is_active=True,
                     is_verified=True,
+                    # Seeded first-login accounts skip email verification too — both
+                    # login gates are satisfied so they can sign in immediately.
+                    email_verified_at=datetime.now(UTC),
                 )
             )
             logger.info("Created %s account: %s", spec.role.value, spec.email)

@@ -1,0 +1,10 @@
+Invoice {{ invoice_number }}
+
+{% if customer_name %}Hi {{ customer_name }} — {% endif %}please find your invoice below.
+
+Invoice:     {{ invoice_number }}
+Amount due:  {{ currency }} {{ balance_due }}
+Total:       {{ currency }} {{ total }}
+{% if due_date %}Due date:    {{ due_date }}{% endif %}
+
+Please settle this invoice by the due date. Thank you for your business.

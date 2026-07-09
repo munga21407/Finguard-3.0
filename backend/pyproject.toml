@@ -19,9 +19,10 @@ dependencies = [
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.9",
-    # Transactional email (Gmail SMTP) + templating
+    # Transactional email (Gmail SMTP) + templating + PDF invoices
     "aiosmtplib>=3.0.0",
     "jinja2>=3.1.0",
+    "weasyprint>=62",
     # Background tasks
     "celery[redis]>=5.4.0",
     # ML / anomaly detection + forecasting

@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # fixed dev-only key is derived (never from SECRET_KEY). See key_manager.py.
     FINGUARD_CA_PRIVATE_KEY_HEX: str = ""
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
+    # Public base URL of the app, used to build links inside emails (e.g. the
+    # approvals inbox). Defaults to the dev frontend origin.
+    APP_BASE_URL: str = "http://localhost:3000"
 
     # One-time bootstrap secret that must be supplied in the registration payload
     # to claim the OWNER role on the very first account. Closes the "anyone who
@@ -59,6 +62,8 @@ class Settings(BaseSettings):
     CSRF_ENABLED: bool = True
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    PASSWORD_RESET_EXPIRE_MINUTES: int = 60  # reset-link validity
+    EMAIL_VERIFICATION_EXPIRE_HOURS: int = 48  # verify-link validity
     MAX_LOGIN_ATTEMPTS: int = 5
     LOCKOUT_DURATION_MINUTES: int = 30
     PASSWORD_MIN_LENGTH: int = 8
@@ -133,8 +138,13 @@ class Settings(BaseSettings):
     SMTP_APP_PASSWORD: str = ""         # 16-char Google app password
     MAIL_FROM_NAME: str = "Finguard"
     MAIL_FROM_ADDRESS: str = ""         # defaults to SMTP_USERNAME (see validator)
+    MAIL_REPLY_TO: str = ""             # Reply-To header; defaults to MAIL_FROM_ADDRESS
     EMAIL_MAX_RETRIES: int = 5          # attempts before an email is dead-lettered
     EMAIL_POLL_INTERVAL: float = 60.0   # Celery-beat flush cadence (seconds)
+    # Payment-reminder tiers (operator-tunable). due_soon fires within N days
+    # before the due date; each overdue threshold fires once as it's crossed.
+    REMINDER_DUE_SOON_DAYS: int = 3
+    REMINDER_OVERDUE_DAYS: list[int] = [1, 7, 14, 30]
 
     @field_validator("JWT_SECRET_KEY", mode="before")
     @classmethod

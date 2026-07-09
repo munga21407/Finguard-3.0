@@ -74,5 +74,11 @@ celery_app.conf.update(
             # EMAIL_POLL_INTERVAL (default 60s).
             "schedule": settings.EMAIL_POLL_INTERVAL,
         },
+        "dispatch-payment-reminders": {
+            "task": "email.dispatch_payment_reminders",
+            # Daily at 08:00 UTC — enqueue due-soon/overdue reminders (idempotent
+            # per invoice+tier, so a daily sweep escalates without re-nagging).
+            "schedule": crontab(hour=8, minute=0),
+        },
     },
 )

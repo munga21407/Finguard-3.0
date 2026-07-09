@@ -102,3 +102,11 @@ def role_permissions(role: UserRole) -> frozenset[Permission]:
 
 def has_permission(role: UserRole, permission: Permission) -> bool:
     return permission in role_permissions(role)
+
+
+def roles_with_permission(permission: Permission) -> frozenset[UserRole]:
+    """Every role that grants *permission* — used to resolve who may review an
+    item (e.g. notify all users who can approve a payable)."""
+    return frozenset(
+        role for role, perms in _ROLE_PERMISSIONS.items() if permission in perms
+    )

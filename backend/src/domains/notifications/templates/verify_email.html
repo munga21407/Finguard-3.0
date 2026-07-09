@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 style="margin:0 0 12px; font-size:20px; color:#1f2933;">Verify your email</h1>
+<p style="margin:0 0 16px; font-size:15px; line-height:1.5;">
+  {% if full_name %}Hi {{ full_name }} — {% endif %}thanks for registering with
+  Finguard. Confirm this email address to continue. This link expires in
+  {{ expires_hours }} hours.
+</p>
+<a href="{{ verify_url }}" style="display:inline-block; background:#6b38d4; color:#ffffff; text-decoration:none; padding:11px 20px; border-radius:8px; font-size:14px; font-weight:bold;">
+  Verify email
+</a>
+<p style="margin:18px 0 0; font-size:13px; color:#8a94a6;">
+  After verifying, an administrator still needs to approve your account before
+  you can sign in — you'll get a confirmation email when that's done.
+</p>
+{% endblock %}
+{% block footer %}If you didn't create a Finguard account, you can ignore this email.{% endblock %}

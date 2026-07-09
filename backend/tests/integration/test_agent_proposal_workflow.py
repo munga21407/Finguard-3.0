@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import ForbiddenError, UnprocessableError
@@ -24,6 +25,7 @@ from src.domains.intelligence.proposal_service import (
 from src.domains.inventory.schemas import InventoryMovementCreate, ProductCreate
 from src.domains.inventory.service import InventoryService
 from src.domains.inventory.types import MovementReason, MovementType, UnitOfMeasure
+from src.domains.notifications.models import EmailOutbox
 
 
 def _user(role: UserRole = UserRole.MANAGER) -> User:
@@ -215,3 +217,30 @@ async def test_node_helper_does_not_queue_a_rejected_adjustment(
     assert result["status"] == "rejected"
     pending = await ProposalService(db_session).list_pending()
     assert all(p.payload.get("product_ref") != str(product.id) for p in pending)
+
+
+@pytest.mark.asyncio
+async def test_create_proposal_notifies_adjust_reviewers(db_session: AsyncSession) -> None:
+    """Submitting an agent proposal emails users who can release it (inventory:
+    adjust), excluding whoever triggered the agent."""
+    reviewer = await _persisted_user(db_session, UserRole.MANAGER)
+    product = await _product_with_stock(db_session)
+
+    proposal = await ProposalService(db_session).create_proposal(
+        agent_label="k_stockkeeper",
+        action_type=ACTION_STOCK_ADJUSTMENT,
+        payload=_adjustment_payload(product.id, "5"),
+        triggered_by=uuid.uuid4(),   # some non-reviewer requester
+        rationale="stock-take variance",
+    )
+
+    row = (
+        await db_session.execute(
+            select(EmailOutbox).where(
+                EmailOutbox.idempotency_key == f"proposal_review:{proposal.id}:{reviewer.id}"
+            )
+        )
+    ).scalar_one_or_none()
+    assert row is not None
+    assert row.template == "approval_needed"
+    assert row.to_email == reviewer.email
