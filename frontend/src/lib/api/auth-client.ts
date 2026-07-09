@@ -127,6 +127,61 @@ class AuthAPIClient {
       // Network errors are swallowed — local state is cleared regardless.
     }
   }
+
+  // ── Password reset ───────────────────────────────────────────────────────────
+
+  /** Request a reset link. Always resolves (the API never reveals whether the
+   *  email is registered), so the UI shows the same confirmation regardless. */
+  async forgotPassword(email: string): Promise<void> {
+    await fetch(`${BASE_URL}${ENDPOINTS.AUTH.FORGOT_PASSWORD}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  /** Set a new password from a reset token. Throws on an invalid/expired link. */
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    const res = await fetch(`${BASE_URL}${ENDPOINTS.AUTH.RESET_PASSWORD}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, new_password: newPassword }),
+    });
+    if (!res.ok) {
+      throw new Error(
+        res.status === 401
+          ? "This reset link is invalid or has expired. Request a new one."
+          : "Could not reset your password. Please try again.",
+      );
+    }
+  }
+
+  // ── Email verification ───────────────────────────────────────────────────────
+
+  /** Confirm email ownership from a verification token. Throws on invalid/expired. */
+  async verifyEmail(token: string): Promise<void> {
+    const res = await fetch(`${BASE_URL}${ENDPOINTS.AUTH.VERIFY_EMAIL}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    if (!res.ok) {
+      throw new Error(
+        res.status === 401
+          ? "This verification link is invalid or has expired."
+          : "Could not verify your email. Please try again.",
+      );
+    }
+  }
+
+  /** Re-send a verification email. Always resolves (never reveals account state). */
+  async resendVerification(email: string): Promise<void> {
+    await fetch(`${BASE_URL}${ENDPOINTS.AUTH.RESEND_VERIFICATION}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+  }
 }
 
 export const authClient = new AuthAPIClient();

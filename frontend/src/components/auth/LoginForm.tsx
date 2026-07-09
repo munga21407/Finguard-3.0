@@ -3,6 +3,7 @@
 // ─── LoginForm ────────────────────────────────────────────────────────────────
 
 import { useState } from "react";
+import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -72,12 +73,12 @@ export function LoginForm() {
 
       {/* Forgot password */}
       <div className="flex justify-end -mt-2">
-        <a
-          href="#"
+        <Link
+          href="/forgot-password"
           className="text-xs text-slate-500 hover:text-blue-400 transition-colors"
         >
           Forgot password?
-        </a>
+        </Link>
       </div>
 
       {/* Submit */}

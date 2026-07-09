@@ -8,12 +8,18 @@ export const ENDPOINTS = {
     REFRESH: "/api/v1/identity/token/refresh",
     LOGOUT: "/api/v1/identity/logout",
     ME: "/api/v1/identity/me",
+    FORGOT_PASSWORD: "/api/v1/identity/forgot-password",
+    RESET_PASSWORD: "/api/v1/identity/reset-password",
+    VERIFY_EMAIL: "/api/v1/identity/verify-email",
+    RESEND_VERIFICATION: "/api/v1/identity/resend-verification",
   },
 
   // Finance
   FINANCE: {
     LEDGER: "/api/v1/finance/ledger",
     INVOICES: "/api/v1/finance/invoices",
+    INVOICE_SEND: (id: string) => `/api/v1/finance/invoices/${id}/send`,
+    INVOICE_RESEND: (id: string) => `/api/v1/finance/invoices/${id}/resend`,
     EXPENSES: "/api/v1/finance/expenses",
     RECEIPTS: "/api/v1/finance/receipts",
     BUDGETS: "/api/v1/finance/budgets",
@@ -97,5 +103,17 @@ export const ENDPOINTS = {
     ROOT: "/api/v1/audit",
     KPIS: "/api/v1/audit/kpis",
     ENTRY: (id: string) => `/api/v1/audit/${id}`,
+  },
+
+  // Notification preferences (email opt-outs) + delivery admin
+  NOTIFICATIONS: {
+    PREFERENCES: "/api/v1/notifications/preferences",
+    EMAIL_KPIS: "/api/v1/notifications/admin/email/kpis",
+    EMAIL_OUTBOX: "/api/v1/notifications/admin/email/outbox",
+    EMAIL_DEAD_LETTERS: "/api/v1/notifications/admin/email/dead-letters",
+    EMAIL_REPLAY: (id: string) =>
+      `/api/v1/notifications/admin/email/dead-letters/${id}/replay`,
+    EMAIL_RESEND: (id: string) =>
+      `/api/v1/notifications/admin/email/outbox/${id}/resend`,
   },
 } as const;

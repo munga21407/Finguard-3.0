@@ -24,7 +24,9 @@ import {
   listVaultTransfers,
   rejectBankStatement,
   rejectPayable,
+  resendInvoice,
   schedulePayable,
+  sendInvoice,
 } from "@/lib/api/finance";
 import type {
   ApiBankStatementImport,
@@ -175,6 +177,24 @@ export function usePayableQueue() {
   return useQuery<ApiPayableQueue>({
     queryKey: financeKeys.payableQueue,
     queryFn: getPayableQueue,
+  });
+}
+
+/** Issue a draft invoice (SENT + emailed to the customer); refresh the list. */
+export function useSendInvoice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => sendInvoice(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: financeKeys.invoices });
+    },
+  });
+}
+
+/** Re-email an already-issued invoice (status unchanged). */
+export function useResendInvoice() {
+  return useMutation({
+    mutationFn: (id: string) => resendInvoice(id),
   });
 }
 

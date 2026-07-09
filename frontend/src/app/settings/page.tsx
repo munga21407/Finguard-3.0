@@ -6,6 +6,11 @@
 
 import { useAuthContext } from "@/lib/auth/auth-context";
 import { LogOut, Mail, Shield, User as UserIcon } from "lucide-react";
+import {
+  useEmailPreferences,
+  useUpdateEmailPreference,
+} from "@/lib/hooks/useEmailPreferences";
+import type { ApiCategoryPreference } from "@/types/api";
 
 export default function SettingsPage() {
   const { user, isLoading, logout } = useAuthContext();
@@ -44,6 +49,8 @@ export default function SettingsPage() {
         </dl>
       </section>
 
+      <EmailNotifications />
+
       <section className="rounded-2xl border border-gray-200 bg-white p-6">
         <h2 className="text-sm font-semibold text-gray-900">Session</h2>
         <p className="text-sm text-gray-500 mt-1">
@@ -59,6 +66,63 @@ export default function SettingsPage() {
         </button>
       </section>
     </div>
+  );
+}
+
+// ── Email notifications ───────────────────────────────────────────────────────
+// Toggle the categories a user can turn off. Transactional mail (receipts,
+// invoices, account) is mandatory and never appears here.
+function EmailNotifications() {
+  const { data, isLoading, isError } = useEmailPreferences();
+  const update = useUpdateEmailPreference();
+
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-6 space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold text-gray-900">Email notifications</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Choose which optional emails you receive. Receipts, invoices, and account
+          emails are always sent.
+        </p>
+      </div>
+
+      {isLoading && <p className="text-sm text-gray-400">Loading preferences…</p>}
+      {isError && (
+        <p className="text-sm text-red-600">Couldn&apos;t load your preferences.</p>
+      )}
+
+      {data && (
+        <div className="divide-y divide-gray-100">
+          {data.preferences.map((pref: ApiCategoryPreference) => {
+            const on = !pref.opted_out; // "on" = subscribed
+            return (
+              <div key={pref.category} className="flex items-center justify-between py-3">
+                <span className="text-sm font-medium text-gray-900">{pref.label}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={on}
+                  aria-label={pref.label}
+                  disabled={update.isPending}
+                  onClick={() =>
+                    update.mutate({ category: pref.category, opted_out: on })
+                  }
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
+                    on ? "bg-lf-primary" : "bg-gray-300"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      on ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
