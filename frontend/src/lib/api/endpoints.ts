@@ -38,6 +38,17 @@ export const ENDPOINTS = {
     PAYABLE_SCHEDULE: (id: string) => `/api/v1/finance/payables/${id}/schedule`,
   },
 
+  // Inventory / stock management
+  INVENTORY: {
+    PRODUCTS: "/api/v1/inventory/products",
+    PRODUCT: (id: string) => `/api/v1/inventory/products/${id}`,
+    PRODUCT_MOVEMENTS: (id: string) => `/api/v1/inventory/products/${id}/movements`,
+    PRODUCT_ADJUST: (id: string) => `/api/v1/inventory/products/${id}/adjust`,
+    LEVELS: "/api/v1/inventory/levels",
+    VALUATION_REPORT: "/api/v1/inventory/reports/valuation",
+    LOW_STOCK_REPORT: "/api/v1/inventory/reports/low-stock",
+  },
+
   // CRM
   CRM: {
     CUSTOMERS: "/api/v1/crm/customers",

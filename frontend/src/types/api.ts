@@ -147,6 +147,150 @@ export type ApiAlertType     = S["AlertType"];
 export type ApiAlertSeverity = S["AlertSeverity"];
 export type ApiAlertStatus   = S["AlertStatus"];
 
+// Inventory / stock management
+// Hand-written until the backend inventory domain is added and schema.d.ts is
+// regenerated. Keep these names stable so callers can switch to generated
+// schema aliases without changing imports.
+export type ApiUnitOfMeasure =
+  | "each"
+  | "kg"
+  | "litre"
+  | "metre"
+  | "box"
+  | "pack";
+
+export type ApiStockMovementType =
+  | "receipt"
+  | "issue"
+  | "sale"
+  | "return_in"
+  | "adjustment"
+  | "transfer";
+
+export type ApiStockMovementReason =
+  | "purchase"
+  | "sale"
+  | "damage"
+  | "theft"
+  | "stock_take"
+  | "expiry"
+  | "correction"
+  | "other";
+
+export interface ApiStockLevel {
+  id: string;
+  product_id: string;
+  location_id: string | null;
+  quantity_on_hand: string;
+  quantity_reserved: string;
+  average_cost: string;
+  updated_at: string;
+}
+
+export interface ApiInventoryProduct {
+  id: string;
+  sku: string;
+  name: string;
+  description: string | null;
+  unit: ApiUnitOfMeasure;
+  category: string | null;
+  cost_price: string;
+  selling_price: string;
+  reorder_level: string;
+  reorder_quantity: string;
+  barcode: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  stock_level?: ApiStockLevel | null;
+}
+
+export interface ApiInventoryProductCreate {
+  sku: string;
+  name: string;
+  description?: string | null;
+  unit: ApiUnitOfMeasure;
+  category?: string | null;
+  cost_price: string;
+  selling_price: string;
+  reorder_level: string;
+  reorder_quantity: string;
+  barcode?: string | null;
+}
+
+export type ApiInventoryProductUpdate = Partial<ApiInventoryProductCreate> & {
+  is_active?: boolean;
+};
+
+export interface ApiInventoryProductListParams {
+  limit?: number;
+  offset?: number;
+  category?: string;
+  low_stock?: boolean;
+  q?: string;
+}
+
+export interface ApiStockMovementCreate {
+  product_id?: string;
+  location_id?: string | null;
+  movement_type: ApiStockMovementType;
+  reason?: ApiStockMovementReason | null;
+  quantity: string;
+  unit_cost?: string | null;
+  reference_type?: string | null;
+  reference_id?: string | null;
+  note?: string | null;
+}
+
+export interface ApiStockMovement {
+  id: string;
+  product_id: string;
+  location_id: string | null;
+  sequence: number;
+  movement_type: ApiStockMovementType;
+  reason: ApiStockMovementReason | null;
+  quantity: string;
+  unit_cost: string | null;
+  balance_after: string;
+  reference_type: string | null;
+  reference_id: string | null;
+  note: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface ApiValuationReportItem {
+  product_id: string;
+  sku: string;
+  name: string;
+  category: string | null;
+  quantity_on_hand: string;
+  average_cost: string;
+  value: string;
+}
+
+export interface ApiValuationReportCategory {
+  category: string | null;
+  value: string;
+}
+
+export interface ApiValuationReport {
+  total_value: string;
+  by_category: ApiValuationReportCategory[];
+  items: ApiValuationReportItem[];
+}
+
+export interface ApiLowStockItem {
+  product_id: string;
+  sku: string;
+  name: string;
+  category: string | null;
+  quantity_on_hand: string;
+  reorder_level: string;
+  reorder_quantity: string;
+  unit: ApiUnitOfMeasure;
+}
+
 // NOTE: Agent structured-output models (ExtractedInvoice, WatchdogAnalysis,
 // CashFlowForecast, AgentF/G outputs, AgentRun*, etc.) are intentionally NOT
 // aliased here.  They are carried inside endpoint responses as `dict[str, Any]`
