@@ -23,6 +23,7 @@ import type {
   ApiInventoryProductUpdate,
   ApiLowStockItem,
   ApiStockLevel,
+  ApiStockLevelView,
   ApiStockMovement,
   ApiStockMovementCreate,
   ApiValuationReport,
@@ -58,7 +59,7 @@ export function useInventoryProduct(id: string | null) {
 }
 
 export function useStockLevels() {
-  return useQuery<ApiStockLevel[]>({
+  return useQuery<ApiStockLevelView[]>({
     queryKey: inventoryKeys.levels,
     queryFn: listStockLevels,
   });

@@ -119,8 +119,11 @@ async def generate_vision_content[T: BaseModel](
     mime_type: str,
     response_schema: type[T],
     temperature: float | None = None,
+    model: str | None = None,
 ) -> T:
     """Call the configured LLM with an image + prompt → structured output.
+
+    ``model`` overrides the default vision model (higher-fidelity re-scan, S6-6).
 
     Raises:
         LLMUnavailableError — on timeout or exhausted retry budget.
@@ -131,6 +134,7 @@ async def generate_vision_content[T: BaseModel](
         mime_type=mime_type,
         response_schema=response_schema,
         temperature=temperature,
+        model=model,
     )
 
 

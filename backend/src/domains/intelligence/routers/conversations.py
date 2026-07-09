@@ -128,6 +128,7 @@ class ConversationOrchestrator:
             "messages": [HumanMessage(content=intent)],
             "gen_ui_payloads": [],
             "error_messages": [],
+            "handoffs": [],
             "next": "supervisor",
             "context": {
                 "current_intent": intent,

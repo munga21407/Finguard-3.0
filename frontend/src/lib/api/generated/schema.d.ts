@@ -601,6 +601,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/expenses/stock-purchase": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Stock Purchase
+         * @description Book a stock purchase: one expense + one inventory RECEIPT in a single
+         *     atomic commit (the finance ↔ inventory purchase seam).
+         */
+        post: operations["create_stock_purchase_api_v1_finance_expenses_stock_purchase_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/invoices/{invoice_id}/cogs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Invoice Cogs
+         * @description Cost of goods sold for an invoice's tracked sales — read from inventory's
+         *     weighted-average cost (finance → inventory read seam).
+         */
+        get: operations["invoice_cogs_api_v1_finance_invoices__invoice_id__cogs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/payables/queue": {
         parameters: {
             query?: never;
@@ -1069,6 +1111,288 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/intelligence/admin/agent-tuning": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Tuning View
+         * @description Return the currently effective tuning (env > DB overlay > code default).
+         */
+        get: operations["get_agent_tuning_view_api_v1_intelligence_admin_agent_tuning_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/admin/agent-tuning/{section}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Agent Tuning
+         * @description Upsert a runtime override for one tuning section (applies without restart).
+         */
+        put: operations["update_agent_tuning_api_v1_intelligence_admin_agent_tuning__section__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/admin/tax-rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Tax Rate Schedule
+         * @description List the effective-dated tax-rate schedule Agent F resolves against.
+         */
+        get: operations["list_tax_rate_schedule_api_v1_intelligence_admin_tax_rates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/admin/tax-rates/{rate_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upsert Tax Rate
+         * @description Set/replace the tax rate for ``rate_key`` effective from ``effective_from``.
+         */
+        put: operations["upsert_tax_rate_api_v1_intelligence_admin_tax_rates__rate_key__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Proposals
+         * @description The pending agent-action queue awaiting human sign-off.
+         */
+        get: operations["list_proposals_api_v1_intelligence_proposals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/proposals/{proposal_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Proposal
+         * @description Release a pending agent proposal — applies its write exactly once.
+         *
+         *     Gated by ``inventory:adjust`` (manager+); the service additionally blocks the
+         *     human who triggered the agent from approving their own action (strict SoD).
+         */
+        post: operations["approve_proposal_api_v1_intelligence_proposals__proposal_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intelligence/proposals/{proposal_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Proposal
+         * @description Decline a pending agent proposal (no write).
+         */
+        post: operations["reject_proposal_api_v1_intelligence_proposals__proposal_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Products */
+        get: operations["list_products_api_v1_inventory_products_get"];
+        put?: never;
+        /** Create Product */
+        post: operations["create_product_api_v1_inventory_products_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/products/{product_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Product */
+        get: operations["get_product_api_v1_inventory_products__product_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Product */
+        patch: operations["update_product_api_v1_inventory_products__product_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/inventory/products/{product_id}/stock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Stock Level */
+        get: operations["get_stock_level_api_v1_inventory_products__product_id__stock_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/products/{product_id}/movements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Movements */
+        get: operations["list_movements_api_v1_inventory_products__product_id__movements_get"];
+        put?: never;
+        /** Record Movement */
+        post: operations["record_movement_api_v1_inventory_products__product_id__movements_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/products/{product_id}/adjust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adjust Stock */
+        post: operations["adjust_stock_api_v1_inventory_products__product_id__adjust_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/levels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Levels */
+        get: operations["list_levels_api_v1_inventory_levels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/reports/valuation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Valuation Report */
+        get: operations["valuation_report_api_v1_inventory_reports_valuation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/reports/low-stock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Low Stock Report */
+        get: operations["low_stock_report_api_v1_inventory_reports_low_stock_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/alerts": {
         parameters: {
             query?: never;
@@ -1328,6 +1652,55 @@ export interface components {
             user_id?: string | null;
         };
         /**
+         * AdminTuningActionResponse
+         * @description Result of an admin tuning / tax-rate mutation.
+         */
+        AdminTuningActionResponse: {
+            /** Target */
+            target: string;
+            /** Status */
+            status: string;
+        };
+        /**
+         * AgentActionProposalResponse
+         * @description A pending (or decided) agent-proposed action in the HITL approval queue.
+         */
+        AgentActionProposalResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Agent Label */
+            agent_label: string;
+            /** Action Type */
+            action_type: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "proposed" | "applied" | "rejected";
+            /** Rationale */
+            rationale?: string | null;
+            /** Triggered By */
+            triggered_by?: string | null;
+            /** Reviewed By */
+            reviewed_by?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Applied Ref */
+            applied_ref?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
          * AgentRunStatus
          * @enum {string}
          */
@@ -1350,6 +1723,46 @@ export interface components {
             last_status: components["schemas"]["AgentRunStatus"] | null;
             /** Last Run At */
             last_run_at: string | null;
+        };
+        /**
+         * AgentTuningSectionUpdate
+         * @description Partial override payload for one tuning section (agent_config row).
+         */
+        AgentTuningSectionUpdate: {
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * AgentTuningView
+         * @description Effective (env > DB > default) tuning for each agent section — read-only view.
+         */
+        AgentTuningView: {
+            /** Reconciler */
+            reconciler: {
+                [key: string]: unknown;
+            };
+            /** Watchdog */
+            watchdog: {
+                [key: string]: unknown;
+            };
+            /** Auditor */
+            auditor: {
+                [key: string]: unknown;
+            };
+            /** Bankability */
+            bankability: {
+                [key: string]: unknown;
+            };
+            /** Classifier */
+            classifier: {
+                [key: string]: unknown;
+            };
+            /** Receipt */
+            receipt: {
+                [key: string]: unknown;
+            };
         };
         /** AlertCreate */
         AlertCreate: {
@@ -1435,7 +1848,7 @@ export interface components {
          * AlertType
          * @enum {string}
          */
-        AlertType: "duplicate_invoice" | "anomaly" | "vendor_activity" | "budget_overspend";
+        AlertType: "duplicate_invoice" | "anomaly" | "vendor_activity" | "budget_overspend" | "low_stock";
         /**
          * AuditActorType
          * @description Who initiated the recorded activity.
@@ -1937,12 +2350,41 @@ export interface components {
             hub_artifact_id?: string | null;
         };
         /**
+         * InventoryMovementCreate
+         * @description A receipt/issue/sale/return. Adjustments go through
+         *     :class:`StockAdjustmentCreate` (they need a reason + a signed delta).
+         */
+        InventoryMovementCreate: {
+            movement_type: components["schemas"]["MovementType"];
+            /** Quantity */
+            quantity: number | string;
+            /** Unit Cost */
+            unit_cost?: number | string | null;
+            reason?: components["schemas"]["MovementReason"] | null;
+            /** Note */
+            note?: string | null;
+            /** Reference Type */
+            reference_type?: string | null;
+            /** Reference Id */
+            reference_id?: string | null;
+        };
+        /**
          * InvoiceCancelRequest
          * @description Body for ``POST /invoices/{id}/cancel`` — void an uncollectable invoice.
          */
         InvoiceCancelRequest: {
             /** Reason */
             reason?: string | null;
+        };
+        /** InvoiceCogsResponse */
+        InvoiceCogsResponse: {
+            /**
+             * Invoice Id
+             * Format: uuid
+             */
+            invoice_id: string;
+            /** Cogs */
+            cogs: string;
         };
         /** InvoiceCreate */
         InvoiceCreate: {
@@ -2183,6 +2625,35 @@ export interface components {
              */
             created_at: string;
         };
+        /** LowStockItem */
+        LowStockItem: {
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /** Sku */
+            sku: string;
+            /** Name */
+            name: string;
+            /** Quantity On Hand */
+            quantity_on_hand: string;
+            /** Reorder Level */
+            reorder_level: string;
+            /** Reorder Quantity */
+            reorder_quantity: string;
+        };
+        /**
+         * MovementReason
+         * @enum {string}
+         */
+        MovementReason: "purchase" | "sale" | "damage" | "theft" | "stock_take" | "expiry" | "correction" | "other";
+        /**
+         * MovementType
+         * @description The signed direction is derived from the type, not stored free-form.
+         * @enum {string}
+         */
+        MovementType: "receipt" | "issue" | "sale" | "return_in" | "adjustment" | "transfer";
         /**
          * MpesaCallbackPayload
          * @description Daraja STK Push callback envelope.
@@ -2227,6 +2698,10 @@ export interface components {
             context: {
                 [key: string]: unknown;
             };
+            /** Handoffs */
+            handoffs?: {
+                [key: string]: unknown;
+            }[];
         };
         /**
          * PayableCreate
@@ -2370,6 +2845,107 @@ export interface components {
              */
             created_at: string;
         };
+        /** ProductCreate */
+        ProductCreate: {
+            /** Sku */
+            sku: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** @default each */
+            unit: components["schemas"]["UnitOfMeasure"];
+            /** Category */
+            category?: string | null;
+            /**
+             * Cost Price
+             * @default 0
+             */
+            cost_price: number | string;
+            /**
+             * Selling Price
+             * @default 0
+             */
+            selling_price: number | string;
+            /**
+             * Reorder Level
+             * @default 0
+             */
+            reorder_level: number | string;
+            /**
+             * Reorder Quantity
+             * @default 0
+             */
+            reorder_quantity: number | string;
+            /** Barcode */
+            barcode?: string | null;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+        };
+        /** ProductResponse */
+        ProductResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Sku */
+            sku: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            unit: components["schemas"]["UnitOfMeasure"];
+            /** Category */
+            category: string | null;
+            /** Cost Price */
+            cost_price: string;
+            /** Selling Price */
+            selling_price: string;
+            /** Reorder Level */
+            reorder_level: string;
+            /** Reorder Quantity */
+            reorder_quantity: string;
+            /** Barcode */
+            barcode: string | null;
+            /** Is Active */
+            is_active: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ProductUpdate */
+        ProductUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            unit?: components["schemas"]["UnitOfMeasure"] | null;
+            /** Category */
+            category?: string | null;
+            /** Cost Price */
+            cost_price?: number | string | null;
+            /** Selling Price */
+            selling_price?: number | string | null;
+            /** Reorder Level */
+            reorder_level?: number | string | null;
+            /** Reorder Quantity */
+            reorder_quantity?: number | string | null;
+            /** Barcode */
+            barcode?: string | null;
+            /** Is Active */
+            is_active?: boolean | null;
+        };
         /**
          * ReceiptExpenseCreate
          * @description Reviewed receipt-scan fields submitted to POST /finance/receipts.
@@ -2402,6 +2978,10 @@ export interface components {
         /**
          * ReceiptExtraction
          * @description Structured output from Gemini vision OCR of a receipt image.
+         *
+         *     ``suggested_category`` is produced by the *same* vision call as the OCR
+         *     fields (Sprint 3: one Gemini call instead of a second classification call);
+         *     the validator clamps any off-taxonomy value to ``"other"``.
          */
         ReceiptExtraction: {
             /** Merchant Name */
@@ -2422,6 +3002,11 @@ export interface components {
              * @default []
              */
             line_items: string[];
+            /**
+             * Suggested Category
+             * @default other
+             */
+            suggested_category: string;
             /**
              * Confidence
              * @default 0
@@ -2576,6 +3161,148 @@ export interface components {
              */
             kind: "source" | "status" | "rail";
         };
+        /**
+         * StockAdjustmentCreate
+         * @description Stock-take correction. ``quantity`` is a signed delta (negative writes
+         *     stock off; positive writes it up). A reason is mandatory.
+         */
+        StockAdjustmentCreate: {
+            /** Quantity */
+            quantity: number | string;
+            reason: components["schemas"]["MovementReason"];
+            /** Note */
+            note?: string | null;
+        };
+        /** StockLevelResponse */
+        StockLevelResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /** Location Id */
+            location_id: string | null;
+            /** Quantity On Hand */
+            quantity_on_hand: string;
+            /** Quantity Reserved */
+            quantity_reserved: string;
+            /** Average Cost */
+            average_cost: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * StockLevelView
+         * @description One product's on-hand snapshot for the /levels overview.
+         */
+        StockLevelView: {
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /** Sku */
+            sku: string;
+            /** Name */
+            name: string;
+            /** Category */
+            category: string | null;
+            /** Quantity On Hand */
+            quantity_on_hand: string;
+            /** Quantity Reserved */
+            quantity_reserved: string;
+            /** Average Cost */
+            average_cost: string;
+            /** Reorder Level */
+            reorder_level: string;
+        };
+        /** StockMovementResponse */
+        StockMovementResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /** Sequence */
+            sequence: number;
+            movement_type: components["schemas"]["MovementType"];
+            movement_reason: components["schemas"]["MovementReason"] | null;
+            /** Quantity */
+            quantity: string;
+            /** Unit Cost */
+            unit_cost: string | null;
+            /** Balance After */
+            balance_after: string;
+            /** Reference Type */
+            reference_type: string | null;
+            /** Reference Id */
+            reference_id: string | null;
+            /** Note */
+            note: string | null;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * StockPurchaseCreate
+         * @description Record a stock purchase: one expense + one inventory RECEIPT, applied
+         *     atomically. The inventory side stores the linkage (``reference=expense``);
+         *     finance keeps no product FK — the dependency arrow stays finance → inventory.
+         */
+        StockPurchaseCreate: {
+            expense: components["schemas"]["ExpenseCreate"];
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /** Quantity */
+            quantity: number | string;
+            /** Unit Cost */
+            unit_cost: number | string;
+        };
+        /** StockPurchaseResponse */
+        StockPurchaseResponse: {
+            expense: components["schemas"]["ExpenseResponse"];
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            /**
+             * Movement Id
+             * Format: uuid
+             */
+            movement_id: string;
+            /** Quantity */
+            quantity: string;
+            /** Balance After */
+            balance_after: string;
+        };
         /** TaskStatusResponse */
         TaskStatusResponse: {
             /** Session Id */
@@ -2596,6 +3323,35 @@ export interface components {
             /** Detail */
             detail?: string | null;
         };
+        /**
+         * TaxRateUpsert
+         * @description Set/replace an effective-dated tax rate for Agent F.
+         */
+        TaxRateUpsert: {
+            /** Rate */
+            rate: number;
+            /**
+             * Effective From
+             * Format: date
+             */
+            effective_from: string;
+            /** Note */
+            note?: string | null;
+        };
+        /** TaxRateView */
+        TaxRateView: {
+            /** Rate Key */
+            rate_key: string;
+            /** Rate */
+            rate: number;
+            /**
+             * Effective From
+             * Format: date
+             */
+            effective_from: string;
+            /** Note */
+            note?: string | null;
+        };
         /** TokenRequest */
         TokenRequest: {
             /**
@@ -2611,6 +3367,11 @@ export interface components {
          * @enum {string}
          */
         TransactionType: "debit" | "credit";
+        /**
+         * UnitOfMeasure
+         * @enum {string}
+         */
+        UnitOfMeasure: "each" | "kg" | "litre" | "metre" | "box" | "pack";
         /** UserCreate */
         UserCreate: {
             /**
@@ -2677,6 +3438,22 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** ValuationCategoryLine */
+        ValuationCategoryLine: {
+            /** Category */
+            category: string;
+            /** Quantity */
+            quantity: string;
+            /** Value */
+            value: string;
+        };
+        /** ValuationReport */
+        ValuationReport: {
+            /** Total Value */
+            total_value: string;
+            /** Categories */
+            categories: components["schemas"]["ValuationCategoryLine"][];
         };
         /** VaultBalance */
         VaultBalance: {
@@ -3821,6 +4598,70 @@ export interface operations {
             };
         };
     };
+    create_stock_purchase_api_v1_finance_expenses_stock_purchase_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StockPurchaseCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockPurchaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    invoice_cogs_api_v1_finance_invoices__invoice_id__cogs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invoice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceCogsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     payable_queue_api_v1_finance_payables_queue_get: {
         parameters: {
             query?: {
@@ -4484,6 +5325,547 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_tuning_view_api_v1_intelligence_admin_agent_tuning_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentTuningView"];
+                };
+            };
+        };
+    };
+    update_agent_tuning_api_v1_intelligence_admin_agent_tuning__section__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                section: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentTuningSectionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTuningActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tax_rate_schedule_api_v1_intelligence_admin_tax_rates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxRateView"][];
+                };
+            };
+        };
+    };
+    upsert_tax_rate_api_v1_intelligence_admin_tax_rates__rate_key__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rate_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaxRateUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTuningActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_proposals_api_v1_intelligence_proposals_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentActionProposalResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_proposal_api_v1_intelligence_proposals__proposal_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentActionProposalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_proposal_api_v1_intelligence_proposals__proposal_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentActionProposalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_products_api_v1_inventory_products_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_product_api_v1_inventory_products_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_product_api_v1_inventory_products__product_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_product_api_v1_inventory_products__product_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_stock_level_api_v1_inventory_products__product_id__stock_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockLevelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_movements_api_v1_inventory_products__product_id__movements_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                product_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockMovementResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_movement_api_v1_inventory_products__product_id__movements_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InventoryMovementCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockMovementResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    adjust_stock_api_v1_inventory_products__product_id__adjust_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StockAdjustmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockMovementResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_levels_api_v1_inventory_levels_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockLevelView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    valuation_report_api_v1_inventory_reports_valuation_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValuationReport"];
+                };
+            };
+        };
+    };
+    low_stock_report_api_v1_inventory_reports_low_stock_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LowStockItem"][];
                 };
             };
         };

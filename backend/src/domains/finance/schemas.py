@@ -105,6 +105,7 @@ class InvoiceResponse(BaseModel):
 
 # ── Invoice event log (event sourcing) ────────────────────────────────────────
 
+
 class InvoiceEventResponse(BaseModel):
     id: uuid.UUID
     invoice_id: uuid.UUID
@@ -144,6 +145,7 @@ class InvoiceReconstructionResponse(BaseModel):
 
 # ── Expenses ──────────────────────────────────────────────────────────────────
 
+
 class ExpenseCreate(BaseModel):
     expense_ref: str | None = None
     customer_id: uuid.UUID | None = None
@@ -162,6 +164,7 @@ class ReceiptExpenseCreate(BaseModel):
     scanned paper receipt is overwhelmingly a cash purchase; the user can
     override it.
     """
+
     merchant_name: str | None = None
     category: str = Field(min_length=1, max_length=100)
     amount: Decimal = Field(gt=0)
@@ -191,7 +194,32 @@ class ExpenseResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class StockPurchaseCreate(BaseModel):
+    """Record a stock purchase: one expense + one inventory RECEIPT, applied
+    atomically. The inventory side stores the linkage (``reference=expense``);
+    finance keeps no product FK — the dependency arrow stays finance → inventory."""
+
+    expense: ExpenseCreate
+    product_id: uuid.UUID
+    quantity: Decimal = Field(gt=0)
+    unit_cost: Decimal = Field(gt=0)
+
+
+class StockPurchaseResponse(BaseModel):
+    expense: ExpenseResponse
+    product_id: uuid.UUID
+    movement_id: uuid.UUID
+    quantity: Decimal
+    balance_after: Decimal
+
+
+class InvoiceCogsResponse(BaseModel):
+    invoice_id: uuid.UUID
+    cogs: Decimal
+
+
 # ── Accounts payable (approval workflow) ──────────────────────────────────────
+
 
 class PayableCreate(BaseModel):
     """A bill submitted into the AP approval queue (lands at PENDING_REVIEW)."""
@@ -245,6 +273,7 @@ class PayableQueueResponse(BaseModel):
 
 
 # ── M-Pesa ────────────────────────────────────────────────────────────────────
+
 
 class MpesaCallbackItem(BaseModel):
     Name: str
@@ -307,6 +336,7 @@ class BudgetResponse(BaseModel):
 
 # ── Cash Payments ─────────────────────────────────────────────────────────────
 
+
 class PaymentCreate(BaseModel):
     invoice_id: uuid.UUID
     amount: Decimal = Field(gt=0, description="Must be greater than zero")
@@ -334,6 +364,7 @@ class PaymentResponse(BaseModel):
 
 
 # ── Bank statement import (Agent C reconciliation source) ─────────────────────
+
 
 class BankStatementLineImport(BaseModel):
     """One bank statement line submitted to POST /finance/reconciliation/bank-statements/import.
@@ -370,6 +401,7 @@ class BankStatementLineResponse(BaseModel):
 
 
 # ── Reconciliation flow (Sankey) ──────────────────────────────────────────────
+
 
 class SankeyNode(BaseModel):
     """A single node in the invoice-lifecycle → settlement Sankey diagram."""
@@ -417,6 +449,7 @@ class ReconciliationFlowResponse(BaseModel):
 
 
 # ── Vault transfers + per-vault balances (treasury) ───────────────────────────
+
 
 class VaultTransferCreate(BaseModel):
     """Record an internal movement of the business's own money between vaults.

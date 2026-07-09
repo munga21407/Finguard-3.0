@@ -75,6 +75,26 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_EMBEDDING_MODEL: str = "text-embedding-004"  # tax-RAG retrieval embeddings
+    # Higher-fidelity vision model used to re-scan low-confidence receipts
+    # (S6-6). When it equals GEMINI_MODEL the second pass is skipped (no gain).
+    GEMINI_VISION_RETRY_MODEL: str = "gemini-2.5-pro"
+
+    # Agent H (Financial Advisor) — when true, actionable-tier advice is flagged
+    # `requires_review` so a human signs off before concrete recommendations are
+    # acted on (advice-liability guardrail, S6-5). Off by default; a request may
+    # also opt in per-call via context["require_advice_review"].
+    AGENT_H_REVIEW_GATE: bool = False
+
+    # A2A P4 — multi-domain planner. When true, a supervisor decision naming ≥2
+    # target agents routes to the `planner` node, which builds a dependency DAG
+    # (agent_registry.build_plan) and fans agents out stage-by-stage in parallel
+    # via LangGraph `Send`. Off by default: single-agent flows are unaffected and
+    # the compiled graph is identical to the pre-P4 topology. See
+    # docs/A2A_PROTOCOL.md §4.4.
+    A2A_PLANNER_ENABLED: bool = False
+    # Safety ceiling on how many times a single orchestration may re-plan (a
+    # consumer appending context["_replan_targets"]) before the planner finishes.
+    A2A_MAX_REPLANS: int = 2
     # Per-agent LLM cost attribution is now model-keyed and externally
     # configurable via the LLM_PRICING_JSON env var — see
     # src/domains/intelligence/llm/pricing.py. The old hardcoded single-rate
@@ -101,6 +121,20 @@ class Settings(BaseSettings):
     FX_API_URL: str = "https://open.er-api.com/v6/latest/USD"
     METROPOL_API_KEY: str = ""         # Metropol credit bureau API (commercial — deferred)
     KRA_ECITIZEN_API_KEY: str = ""     # KRA e-Citizen VAT/tax status API
+
+    # Transactional email (Gmail SMTP, one account per self-hosted deployment).
+    # MAIL_ENABLED=false ⇒ dry-run: the sender renders the message and logs it but
+    # never opens an SMTP connection, so dev/CI never send real mail. Sending uses
+    # an app password (requires 2FA on the account) over STARTTLS.
+    MAIL_ENABLED: bool = False
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""             # the gmail / workspace address
+    SMTP_APP_PASSWORD: str = ""         # 16-char Google app password
+    MAIL_FROM_NAME: str = "Finguard"
+    MAIL_FROM_ADDRESS: str = ""         # defaults to SMTP_USERNAME (see validator)
+    EMAIL_MAX_RETRIES: int = 5          # attempts before an email is dead-lettered
+    EMAIL_POLL_INTERVAL: float = 60.0   # Celery-beat flush cadence (seconds)
 
     @field_validator("JWT_SECRET_KEY", mode="before")
     @classmethod
@@ -138,6 +172,18 @@ class Settings(BaseSettings):
             return base.rsplit("/", 1)[0] + "/2"
         return v
 
+    @field_validator("MAIL_FROM_ADDRESS", mode="before")
+    @classmethod
+    def default_mail_from(cls, v: str, info: ValidationInfo) -> str:
+        """Default the envelope From to the authenticated SMTP account.
+
+        Gmail rejects a From that differs from the authenticated user anyway, so a
+        single-account deployment never needs to set this explicitly.
+        """
+        if v:
+            return v
+        return str((info.data or {}).get("SMTP_USERNAME", ""))
+
     @model_validator(mode="after")
     def _validate_production(self) -> "Settings":
         """Fail fast on unsafe production configuration.
@@ -171,6 +217,30 @@ class Settings(BaseSettings):
             problems.append(
                 "INITIAL_BOOTSTRAP_KEY must be a strong (>=32 char) non-placeholder "
                 "value (required to claim the first OWNER account)"
+            )
+
+        # Live M-Pesa ingestion hardening: the Daraja STK callback marks invoices
+        # paid, and Safaricom does not sign callbacks, so a production deployment
+        # that has enabled M-Pesa MUST pin the callback source to Safaricom's IP
+        # ranges. Without the allowlist the payment webhook is effectively
+        # unauthenticated — anyone could POST a "paid" callback.
+        mpesa_enabled = bool(
+            self.MPESA_CONSUMER_KEY
+            and self.MPESA_CONSUMER_SECRET
+            and self.MPESA_SHORTCODE
+        )
+        if mpesa_enabled and not self.MPESA_CALLBACK_ALLOWED_IPS:
+            problems.append(
+                "MPESA_CALLBACK_ALLOWED_IPS must be set when M-Pesa is configured "
+                "(the STK callback marks invoices paid and is otherwise unauthenticated)"
+            )
+
+        # Transactional email: if enabled in production it must actually be able to
+        # send, or downstream code silently dry-runs (no mail ever leaves).
+        if self.MAIL_ENABLED and not (self.SMTP_USERNAME and self.SMTP_APP_PASSWORD):
+            problems.append(
+                "SMTP_USERNAME and SMTP_APP_PASSWORD must be set when MAIL_ENABLED "
+                "(otherwise email silently dry-runs and nothing is delivered)"
             )
 
         if problems:

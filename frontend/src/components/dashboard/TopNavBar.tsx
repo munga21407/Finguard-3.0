@@ -30,7 +30,7 @@ export interface AgentNotification {
 // Section tabs map to their closest existing routes; active state is derived
 // from the current pathname (no caller-supplied prop needed).
 const sectionLinks = [
-  { label: "Approvals", href: "/dashboard/payables/queue" },
+  { label: "Approvals", href: "/dashboard/approvals" },
   { label: "Reports", href: "/dashboard/overview" },
   { label: "Audit", href: "/dashboard/intelligence" },
 ] as const;

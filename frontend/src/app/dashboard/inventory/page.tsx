@@ -1,396 +1,132 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import {
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  ClipboardList,
-  Package,
-  Plus,
-  RotateCcw,
-  Search,
-  SlidersHorizontal,
-} from "lucide-react";
+import { useMemo, useState } from "react";
+import { KpiCard } from "@/components/dashboard/KpiCard";
+import { Modal, NewProductForm } from "@/components/dashboard/inventory/InventoryDialogs";
+import { ProductDetailPanel } from "@/components/dashboard/inventory/ProductDetailPanel";
 import { QueryState } from "@/components/ui/QueryState";
-import {
-  useApplyStockMovement,
-  useCreateInventoryProduct,
-  useInventoryProducts,
-  useInventorySummary,
-  useInventoryValuation,
-  useProductMovements,
-  useStockLevels,
-} from "@/lib/hooks/useInventoryData";
-import { cn } from "@/lib/utils/cn";
-import { formatDateTime, formatMoney } from "@/lib/utils/format";
-import type {
-  ApiInventoryProduct,
-  ApiStockLevel,
-  ApiStockMovementReason,
-  ApiStockMovementType,
-  ApiUnitOfMeasure,
-} from "@/types/api";
+import { useLevels, useLowStock, useProducts, useValuation } from "@/lib/hooks/useInventory";
 
-const UNITS: ApiUnitOfMeasure[] = ["each", "kg", "litre", "metre", "box", "pack"];
-const EMPTY_PRODUCTS: ApiInventoryProduct[] = [];
-const EMPTY_LEVELS: ApiStockLevel[] = [];
-const MOVEMENTS: Array<{
-  value: ApiStockMovementType;
-  label: string;
-  icon: typeof ArrowDownToLine;
-}> = [
-  { value: "receipt", label: "Receive", icon: ArrowDownToLine },
-  { value: "issue", label: "Issue", icon: ArrowUpFromLine },
-  { value: "sale", label: "Sale", icon: Package },
-  { value: "return_in", label: "Return", icon: RotateCcw },
-  { value: "adjustment", label: "Adjust", icon: SlidersHorizontal },
-];
-const REASONS: ApiStockMovementReason[] = [
-  "purchase",
-  "sale",
-  "damage",
-  "theft",
-  "stock_take",
-  "expiry",
-  "correction",
-  "other",
-];
+export default function InventoryPage() {
+  const products = useProducts();
+  const levels = useLevels();
+  const valuation = useValuation();
+  const lowStock = useLowStock();
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [showNew, setShowNew] = useState(false);
 
-const num = (value: string | number | null | undefined): number =>
-  value == null ? 0 : typeof value === "string" ? Number(value) || 0 : value;
+  const onHandById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const level of levels.data ?? []) map.set(level.product_id, level.quantity_on_hand);
+    return map;
+  }, [levels.data]);
 
-function formatQuantity(value: string | number | null | undefined, unit?: string): string {
-  const n = num(value);
-  const formatted = n.toLocaleString("en-KE", {
-    minimumFractionDigits: n % 1 === 0 ? 0 : 3,
-    maximumFractionDigits: 3,
-  });
-  return unit ? `${formatted} ${unit}` : formatted;
-}
-
-function levelFor(product: ApiInventoryProduct, levels: ApiStockLevel[]): ApiStockLevel | null {
-  return product.stock_level ?? levels.find((level) => level.product_id === product.id) ?? null;
-}
-
-function lowStock(product: ApiInventoryProduct, level: ApiStockLevel | null): boolean {
-  return num(level?.quantity_on_hand) <= num(product.reorder_level);
-}
-
-function KpiCard({
-  label,
-  value,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  icon: typeof Package;
-}) {
-  return (
-    <div className="bg-lf-surface-container-lowest rounded-xl border border-lf-outline-variant/10 p-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)]">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-xs font-semibold tracking-widest uppercase text-lf-on-surface-variant">
-          {label}
-        </span>
-        <Icon size={18} className="text-lf-primary" />
-      </div>
-      <p className="mt-3 text-2xl font-bold tracking-tight text-lf-on-surface">{value}</p>
-    </div>
+  const lowIds = useMemo(
+    () => new Set((lowStock.data ?? []).map((item) => item.product_id)),
+    [lowStock.data],
   );
-}
-
-function ProductCreateForm() {
-  const create = useCreateInventoryProduct();
-  const [open, setOpen] = useState(false);
-  const [sku, setSku] = useState("");
-  const [name, setName] = useState("");
-  const [unit, setUnit] = useState<ApiUnitOfMeasure>("each");
-  const [category, setCategory] = useState("");
-  const [costPrice, setCostPrice] = useState("");
-  const [sellingPrice, setSellingPrice] = useState("");
-  const [reorderLevel, setReorderLevel] = useState("0");
-  const [reorderQuantity, setReorderQuantity] = useState("0");
-  const [barcode, setBarcode] = useState("");
-
-  const canSubmit =
-    sku.trim() !== "" &&
-    name.trim() !== "" &&
-    Number(costPrice) >= 0 &&
-    Number(sellingPrice) >= 0 &&
-    !create.isPending;
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!canSubmit) return;
-    create.mutate(
-      {
-        sku: sku.trim(),
-        name: name.trim(),
-        unit,
-        category: category.trim() || null,
-        cost_price: costPrice || "0",
-        selling_price: sellingPrice || "0",
-        reorder_level: reorderLevel || "0",
-        reorder_quantity: reorderQuantity || "0",
-        barcode: barcode.trim() || null,
-      },
-      {
-        onSuccess: () => {
-          setSku("");
-          setName("");
-          setCategory("");
-          setCostPrice("");
-          setSellingPrice("");
-          setReorderLevel("0");
-          setReorderQuantity("0");
-          setBarcode("");
-          setOpen(false);
-        },
-      },
-    );
-  }
 
   return (
-    <div className="bg-lf-surface-container-lowest rounded-xl border border-lf-outline-variant/10 p-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)]">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center justify-between gap-3 text-left"
-      >
-        <span>
-          <span className="block text-base font-bold text-lf-on-surface">Product catalog</span>
-          <span className="block text-xs text-lf-on-surface-variant">
-            Add SKUs, prices, units, and reorder policy.
-          </span>
-        </span>
-        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-lf-primary text-lf-on-primary">
-          <Plus size={17} />
-        </span>
-      </button>
-
-      {open && (
-        <form onSubmit={submit} className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <input
-            value={sku}
-            onChange={(event) => setSku(event.target.value)}
-            placeholder="SKU"
-            className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-          />
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Product name"
-            className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-          />
-          <select
-            value={unit}
-            onChange={(event) => setUnit(event.target.value as ApiUnitOfMeasure)}
-            className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-          >
-            {UNITS.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-          <input
-            value={category}
-            onChange={(event) => setCategory(event.target.value)}
-            placeholder="Category"
-            className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-          />
-          <input
-            value={costPrice}
-            onChange={(event) => setCostPrice(event.target.value)}
-            inputMode="decimal"
-            placeholder="Cost price"
-            className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-          />
-          <input
-            value={sellingPrice}
-            onChange={(event) => setSellingPrice(event.target.value)}
-            inputMode="decimal"
-            placeholder="Selling price"
-            className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-          />
-          <input
-            value={reorderLevel}
-            onChange={(event) => setReorderLevel(event.target.value)}
-            inputMode="decimal"
-            placeholder="Reorder level"
-            className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-          />
-          <input
-            value={reorderQuantity}
-            onChange={(event) => setReorderQuantity(event.target.value)}
-            inputMode="decimal"
-            placeholder="Reorder quantity"
-            className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-          />
-          <input
-            value={barcode}
-            onChange={(event) => setBarcode(event.target.value)}
-            placeholder="Barcode"
-            className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30 md:col-span-2"
-          />
-          <div className="flex items-center gap-3 md:col-span-2">
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="rounded-lg bg-lf-primary px-4 py-2.5 text-xs font-bold text-lf-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {create.isPending ? "Creating..." : "Create product"}
-            </button>
-            {create.isError && (
-              <span className="text-xs text-lf-error">
-                Could not create product. Check SKU uniqueness and permissions.
-              </span>
-            )}
-          </div>
-        </form>
-      )}
-    </div>
-  );
-}
-
-function MovementForm({ product }: { product: ApiInventoryProduct }) {
-  const apply = useApplyStockMovement();
-  const [movementType, setMovementType] = useState<ApiStockMovementType>("receipt");
-  const [quantity, setQuantity] = useState("");
-  const [unitCost, setUnitCost] = useState("");
-  const [reason, setReason] = useState<ApiStockMovementReason>("purchase");
-  const [referenceType, setReferenceType] = useState("");
-  const [referenceId, setReferenceId] = useState("");
-  const [note, setNote] = useState("");
-
-  const needsReason = movementType === "adjustment";
-  const canSubmit =
-    Number(quantity) > 0 &&
-    (!needsReason || reason !== null) &&
-    !(movementType === "receipt" && unitCost.trim() === "") &&
-    !apply.isPending;
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!canSubmit) return;
-    apply.mutate(
-      {
-        productId: product.id,
-        body: {
-          product_id: product.id,
-          movement_type: movementType,
-          quantity,
-          unit_cost: unitCost.trim() || null,
-          reason: needsReason ? reason : null,
-          reference_type: referenceType.trim() || null,
-          reference_id: referenceId.trim() || null,
-          note: note.trim() || null,
-        },
-      },
-      {
-        onSuccess: () => {
-          setQuantity("");
-          setUnitCost("");
-          setReferenceType("");
-          setReferenceId("");
-          setNote("");
-        },
-      },
-    );
-  }
-
-  return (
-    <form onSubmit={submit} className="rounded-xl border border-lf-outline-variant/10 bg-lf-surface-container-lowest p-5">
-      <div className="mb-4 flex items-center justify-between gap-3">
+    <div className="space-y-6 p-6">
+      <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-base font-bold text-lf-on-surface">Record movement</h3>
-          <p className="text-xs text-lf-on-surface-variant">
-            Every stock change is posted to the append-only ledger.
+          <h1 className="text-2xl font-semibold text-lf-on-surface">Stock Management</h1>
+          <p className="text-sm text-lf-on-surface-variant">
+            Track inventory levels, movement history, and reorder alerts.
           </p>
+        </div>
+        <button
+          onClick={() => setShowNew(true)}
+          className="rounded-lg bg-lf-primary px-4 py-2 text-sm font-semibold text-lf-on-primary hover:opacity-90"
+        >
+          New product
+        </button>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <KpiCard
+          title="Inventory value"
+          value={valuation.data ? `KES ${valuation.data.total_value}` : "—"}
+          subtext="On-hand × average cost"
+        />
+        <KpiCard title="Products" value={String(products.data?.length ?? "—")} />
+        <KpiCard
+          title="Low stock"
+          value={String(lowStock.data?.length ?? "—")}
+          urgentBadge={lowStock.data && lowStock.data.length > 0 ? { label: "Reorder" } : undefined}
+        />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="rounded-xl border border-lf-outline-variant/10 bg-lf-surface-container-lowest p-4">
+          <h2 className="mb-3 text-sm font-semibold text-lf-on-surface">Products</h2>
+          <QueryState
+            isLoading={products.isLoading}
+            isError={products.isError}
+            isEmpty={products.data?.length === 0}
+            emptyLabel="No products yet — add your first one."
+            onRetry={products.refetch}
+          >
+            <ul className="space-y-2">
+              {products.data?.map((product) => {
+                const isLow = lowIds.has(product.id);
+                const onHand = onHandById.get(product.id) ?? "0";
+                return (
+                  <li key={product.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedProductId(product.id)}
+                      className={`w-full rounded-lg border px-3 py-3 text-left transition-colors ${
+                        selectedProductId === product.id
+                          ? "border-lf-primary bg-lf-primary/10"
+                          : "border-lf-outline-variant/20 bg-lf-surface hover:border-lf-primary/50"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-lf-on-surface">{product.name}</p>
+                          <p className="text-xs text-lf-on-surface-variant">SKU {product.sku}</p>
+                        </div>
+                        <span
+                          className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-widest ${
+                            isLow
+                              ? "bg-lf-error-container text-lf-on-error-container"
+                              : "bg-lf-secondary-container text-lf-on-secondary-container"
+                          }`}
+                        >
+                          {isLow ? "Low stock" : "Active"}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-lf-on-surface-variant">
+                        <span>On hand: {onHand}</span>
+                        <span>Reorder: {product.reorder_level}</span>
+                        <span>Unit: {product.unit}</span>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </QueryState>
+        </div>
+
+        <div>
+          {selectedProductId ? (
+            <ProductDetailPanel productId={selectedProductId} />
+          ) : (
+            <div className="rounded-xl border border-lf-outline-variant/10 bg-lf-surface-container-lowest p-6 text-sm text-lf-on-surface-variant">
+              Select a product to view its stock level and movement history.
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        {MOVEMENTS.map(({ value, label, icon: Icon }) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setMovementType(value)}
-            className={cn(
-              "flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors",
-              movementType === value
-                ? "border-lf-primary bg-lf-primary text-lf-on-primary"
-                : "border-lf-outline-variant/30 text-lf-on-surface-variant hover:bg-lf-surface-container",
-            )}
-          >
-            <Icon size={14} />
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <input
-          value={quantity}
-          onChange={(event) => setQuantity(event.target.value)}
-          inputMode="decimal"
-          placeholder={`Quantity (${product.unit})`}
-          className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-        />
-        <input
-          value={unitCost}
-          onChange={(event) => setUnitCost(event.target.value)}
-          inputMode="decimal"
-          placeholder={movementType === "receipt" ? "Unit cost required" : "Unit cost optional"}
-          className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-        />
-        {needsReason && (
-          <select
-            value={reason}
-            onChange={(event) => setReason(event.target.value as ApiStockMovementReason)}
-            className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30 sm:col-span-2"
-          >
-            {REASONS.map((option) => (
-              <option key={option} value={option}>
-                {option.replace("_", " ")}
-              </option>
-            ))}
-          </select>
-        )}
-        <input
-          value={referenceType}
-          onChange={(event) => setReferenceType(event.target.value)}
-          placeholder="Reference type"
-          className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-        />
-        <input
-          value={referenceId}
-          onChange={(event) => setReferenceId(event.target.value)}
-          placeholder="Reference id"
-          className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30"
-        />
-        <input
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-          placeholder="Note"
-          className="rounded-lg border border-lf-outline-variant/40 bg-lf-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-lf-primary/30 sm:col-span-2"
-        />
-      </div>
-
-      <div className="mt-4 flex items-center gap-3">
-        <button
-          type="submit"
-          disabled={!canSubmit}
-          className="rounded-lg bg-lf-primary px-4 py-2.5 text-xs font-bold text-lf-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
-        >
-          {apply.isPending ? "Posting..." : "Post movement"}
-        </button>
-        {apply.isError && (
-          <span className="text-xs text-lf-error">
-            Movement rejected. Check stock on hand, required fields, and permissions.
-          </span>
-        )}
-      </div>
-    </form>
+      {showNew && (
+        <Modal title="Create product" onClose={() => setShowNew(false)}>
+          <NewProductForm onDone={() => setShowNew(false)} />
+        </Modal>
+      )}
+    </div>
   );
 }
 
@@ -401,7 +137,7 @@ function ProductList({
   onSelect,
 }: {
   products: ApiInventoryProduct[];
-  levels: ApiStockLevel[];
+  levels: ApiStockLevelView[];
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
@@ -466,7 +202,7 @@ function ProductDetail({
   levels,
 }: {
   product: ApiInventoryProduct | null;
-  levels: ApiStockLevel[];
+  levels: ApiStockLevelView[];
 }) {
   const movementsQ = useProductMovements(product?.id ?? null);
   const level = product ? levelFor(product, levels) : null;
@@ -700,19 +436,19 @@ export default function InventoryPage() {
             />
           </QueryState>
 
-          {valuationQ.data && valuationQ.data.by_category.length > 0 && (
+          {valuationQ.data && valuationQ.data.categories.length > 0 && (
             <div className="rounded-xl border border-lf-outline-variant/10 bg-lf-surface-container-lowest p-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)]">
               <h3 className="mb-4 text-base font-bold text-lf-on-surface">
                 Valuation by category
               </h3>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {valuationQ.data.by_category.map((category) => (
+                {valuationQ.data.categories.map((category) => (
                   <div
-                    key={category.category ?? "uncategorized"}
+                    key={category.category}
                     className="rounded-lg border border-lf-outline-variant/10 bg-lf-surface p-4"
                   >
                     <p className="text-xs font-semibold uppercase tracking-widest text-lf-on-surface-variant">
-                      {category.category ?? "Uncategorized"}
+                      {category.category || "Uncategorized"}
                     </p>
                     <p className="mt-2 text-lg font-bold text-lf-on-surface">
                       {formatMoney(category.value)}

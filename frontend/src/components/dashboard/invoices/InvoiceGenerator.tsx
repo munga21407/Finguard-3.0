@@ -1,8 +1,11 @@
 "use client";
 
 // ─── InvoiceGenerator ─────────────────────────────────────────────────────────
-// Agent A UI: user describes an invoice in plain language → 2-second mock
-// extraction → structured, editable React Hook Form preview ready to send.
+// Agent A UI: user describes an invoice in plain language → live Gemini (Agent A)
+// extraction via extractInvoice() → structured, editable React Hook Form preview.
+// Saving calls createInvoice(), which persists a DRAFT invoice (the backend
+// defaults new invoices to InvoiceStatus.DRAFT); there is no send/notify step yet,
+// so the UI must not claim the invoice was delivered to the client.
 //
 // State machine: 'idle' → 'extracting' → 'ready'
 // This prevents impossible states (e.g. loading=true while data is present)
@@ -475,7 +478,9 @@ export function InvoiceGenerator() {
             />
           </Field>
 
-          {/* Actions */}
+          {/* Actions — creating an invoice persists it as a DRAFT. There is no
+              separate "send" path yet, so we expose a single honest action rather
+              than a dead "Save as Draft" button that did nothing. */}
           <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-lf-outline-variant/20">
             <button
               type="submit"
@@ -491,14 +496,7 @@ export function InvoiceGenerator() {
               ) : (
                 <Send size={14} />
               )}
-              {isSubmitting ? "Sending…" : "Send Invoice"}
-            </button>
-            <button
-              type="button"
-              className="flex items-center gap-2 px-5 py-2.5 border border-lf-outline-variant text-lf-on-surface-variant rounded-xl text-sm font-semibold hover:bg-lf-surface-container-low transition-all"
-            >
-              <FileText size={14} />
-              Save as Draft
+              {isSubmitting ? "Saving…" : "Save Draft Invoice"}
             </button>
           </div>
         </form>
@@ -507,26 +505,15 @@ export function InvoiceGenerator() {
       {/* ── Success state ─────────────────────────────────────────────────── */}
       {saved && (
         <div className="bg-lf-surface-container-lowest rounded-2xl border border-lf-outline-variant/20 p-8 flex flex-col items-center gap-4 text-center">
-          <div className="w-14 h-14 rounded-full bg-[#dcfce7] flex items-center justify-center">
-            <svg
-              width="28"
-              height="28"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#166534"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
+          <div className="w-14 h-14 rounded-full bg-lf-primary-fixed flex items-center justify-center">
+            <FileText size={26} className="text-lf-primary" />
           </div>
           <div>
             <p className="text-base font-bold text-lf-on-surface">
-              Invoice sent successfully
+              Draft invoice saved
             </p>
             <p className="text-sm text-lf-on-surface-variant mt-1">
-              The client will receive a notification shortly.
+              It&apos;s saved as a draft under Receivables, ready to review and send.
             </p>
           </div>
           <button

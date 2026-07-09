@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 style="margin:0 0 12px; font-size:20px; color:#1f2933;">Pipeline smoke test</h1>
+<p style="margin:0 0 16px; font-size:15px; line-height:1.5;">
+  Hello {{ name | default("there") }} — this is the Finguard email pipeline
+  confirming that rendering and delivery work end to end.
+</p>
+{% endblock %}

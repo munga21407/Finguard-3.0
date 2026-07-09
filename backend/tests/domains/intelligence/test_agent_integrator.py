@@ -8,6 +8,7 @@ HTTP caller is injected, so no network is touched.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -22,6 +23,7 @@ from src.domains.intelligence.agents.i_integrator import (
     _fetch_kra_status,
     _fetch_metropol_score,
     _fetch_mpesa_data,
+    _fetch_mpesa_ledger,
     _normalise_to_kes,
 )
 
@@ -85,6 +87,86 @@ async def test_mpesa_live_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
     out = await _fetch_mpesa_data(_SeqCaller())
     assert out["status"] == LIVE
+
+
+# ── M-Pesa: real callback ledger feed (S6-3) ──────────────────────────────────
+
+class _FakeResult:
+    def __init__(self, rows: list) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list:
+        return self._rows
+
+
+class _FakeSession:
+    def __init__(self, rows: list) -> None:
+        self._rows = rows
+
+    async def __aenter__(self) -> _FakeSession:
+        return self
+
+    async def __aexit__(self, *_a: Any) -> bool:
+        return False
+
+    async def execute(self, *_a: Any, **_k: Any) -> _FakeResult:
+        return _FakeResult(self._rows)
+
+
+def _patch_ledger(monkeypatch: pytest.MonkeyPatch, rows: list) -> None:
+    monkeypatch.setattr(i_integrator, "AsyncSessionLocal", lambda: _FakeSession(rows))
+
+
+@pytest.mark.asyncio
+async def test_mpesa_ledger_returns_live_feed(monkeypatch: pytest.MonkeyPatch) -> None:
+    ts = datetime(2026, 6, 1, 9, 30, tzinfo=UTC)
+    _patch_ledger(monkeypatch, [
+        ("ABC123", 4500.00, "254700000001", "INV-1", ts),
+        ("DEF456", 1200.50, "254700000002", None, ts),
+    ])
+    out = await _fetch_mpesa_ledger()
+    assert out is not None
+    assert out["status"] == LIVE
+    assert out["feed"] == "callback"
+    assert out["transaction_count"] == 2
+    assert out["recent_credit_kes"] == 5700.50
+    assert out["recent_transactions"][0]["trans_id"] == "ABC123"
+    assert out["recent_transactions"][0]["timestamp"] == ts.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_mpesa_ledger_empty_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_ledger(monkeypatch, [])
+    assert await _fetch_mpesa_ledger() is None
+
+
+@pytest.mark.asyncio
+async def test_mpesa_ledger_db_error_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom() -> None:
+        raise RuntimeError("no db")
+
+    monkeypatch.setattr(i_integrator, "AsyncSessionLocal", _boom)
+    assert await _fetch_mpesa_ledger() is None
+
+
+@pytest.mark.asyncio
+async def test_mpesa_data_prefers_ledger_over_sandbox_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Even with sandbox creds present, the real callback ledger wins.
+    monkeypatch.setattr(i_integrator.settings, "MPESA_CONSUMER_KEY", "k")
+    monkeypatch.setattr(i_integrator.settings, "MPESA_CONSUMER_SECRET", "s")
+    ts = datetime(2026, 6, 1, tzinfo=UTC)
+    _patch_ledger(monkeypatch, [("XYZ", 999.0, "254700000003", "INV-9", ts)])
+
+    class _ShouldNotCall:
+        async def ainvoke(self, _p: dict[str, Any]) -> dict[str, Any]:
+            raise AssertionError("sandbox probe must not run when ledger has rows")
+
+    out = await _fetch_mpesa_data(_ShouldNotCall())
+    assert out["status"] == LIVE
+    assert out["feed"] == "callback"
+    assert out["transaction_count"] == 1
 
 
 # ── Metropol & KRA: deferred — unavailable unless real or manual (never faked) ─

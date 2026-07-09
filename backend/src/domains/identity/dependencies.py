@@ -110,8 +110,16 @@ RequireFinanceWrite = Annotated[User, Depends(require_permission(Permission.FINA
 RequireFinanceReconcile = Annotated[
     User, Depends(require_permission(Permission.FINANCE_RECONCILE))
 ]
+RequireFinanceApprove = Annotated[
+    User, Depends(require_permission(Permission.FINANCE_APPROVE))
+]
 RequireCrmRead = Annotated[User, Depends(require_permission(Permission.CRM_READ))]
 RequireCrmWrite = Annotated[User, Depends(require_permission(Permission.CRM_WRITE))]
+RequireInventoryRead = Annotated[User, Depends(require_permission(Permission.INVENTORY_READ))]
+RequireInventoryWrite = Annotated[User, Depends(require_permission(Permission.INVENTORY_WRITE))]
+RequireInventoryAdjust = Annotated[
+    User, Depends(require_permission(Permission.INVENTORY_ADJUST))
+]
 RequireIntelligenceRead = Annotated[
     User, Depends(require_permission(Permission.INTELLIGENCE_READ))
 ]

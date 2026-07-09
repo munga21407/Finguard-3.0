@@ -56,7 +56,13 @@ Finguard-3.0/
 │   │       ├── 0002_invoice_events.py # Append-only invoice_events log + backfill (event sourcing)
 │   │       ├── 0003_alerts.py … 0009_bank_line_review_gate.py # alerts, payment links/bank rail,
 │   │       │                          # vault transfers, settlement idempotency, bank-line review gate
-│   │       └── 0010_audit_logs.py     # append-only audit_logs table + audit_actor_type/audit_outcome enums
+│   │       ├── 0010_audit_logs.py     # append-only audit_logs table + audit_actor_type/audit_outcome enums
+│   │       ├── 0011_invoice_credit_snapshots.py # invoices.amount_credited (+ swapped CHECK) +
+│   │       │                          # invoice_snapshots fold-cache (credit_note/cancellation events)
+│   │       ├── 0012_expense_approval.py # expenses AP approval columns (approval_status maker-checker +
+│   │       │                          # submitted_by/reviewed_by/reviewed_at/scheduled_for)
+│   │       ├── 0013_outbox_dead_letter.py # outbox_events.retry_count/last_error + outbox_dead_letters table
+│   │       └── 0014_agent_e_models.py # finguard.agent_e_models — serialized per-customer IsolationForest store
 │   ├── scripts/
 │   │   ├── ingest_kra_docs.py         # Seeds knowledge_base with KRA docs via pgvector
 │   │   └── kra_docs/                  # Source KRA regulation documents
@@ -90,15 +96,20 @@ Finguard-3.0/
 │       │   │   ├── repository.py
 │       │   │   └── schemas.py
 │       │   ├── finance/               # Finance domain
-│       │   │   ├── models.py          # LedgerEntry, Invoice, InvoiceEvent, Budget, MpesaTransaction,
-│       │   │   │                      # Expense, Payment, BankStatementLine, OutboxEvent ORM
-│       │   │   ├── events.py          # fold_invoice_events() — pure event-sourcing fold → InvoiceState
-│       │   │   ├── router.py          # /api/v1/finance endpoints (RBAC: RequireFinanceRead/Write);
-│       │   │   │                      # POST /receipts; GET /invoices/{id}/events + /reconstruction
+│       │   │   ├── models.py          # LedgerEntry, Invoice, InvoiceEvent, InvoiceSnapshot, Budget,
+│       │   │   │                      # MpesaTransaction, Expense (+AP approval cols), Payment,
+│       │   │   │                      # BankStatementLine, OutboxEvent, OutboxDeadLetter ORM
+│       │   │   ├── events.py          # fold_invoice_events() — pure fold → InvoiceState (issuance,
+│       │   │   │                      # payment_applied, credit_note_applied, invoice_cancelled)
+│       │   │   ├── reports.py         # pure builders: income statement, cash flow, tax liability
+│       │   │   ├── router.py          # /api/v1/finance endpoints (RBAC: RequireFinanceRead/Write/Reconcile);
+│       │   │   │                      # receipts, credit-note/cancel, reports, bank-statements,
+│       │   │   │                      # vault-transfers, payables approval queue, invoice events/reconstruction
 │       │   │   ├── service.py         # Outbox-first event publishing; M-Pesa strict validation;
-│       │   │   │                      # invoice events appended + projected; row-lock cash payments
+│       │   │   │                      # invoice events appended + projected; AP approval state machine;
+│       │   │   │                      # report generation; row-lock cash payments
 │       │   │   ├── repository.py      # incl. InvoiceEventRepository (append-only)
-│       │   │   ├── schemas.py         # ReceiptExpenseCreate + finance request/response models
+│       │   │   ├── schemas.py         # ReceiptExpenseCreate, ReportType/FinancialReport, Payable* models
 │       │   │   └── types.py           # VaultType (MPESA | CASH) dual-vault enum
 │       │   ├── intelligence/          # AI/ML domain
 │       │       ├── llm_client.py      # back-compat facade re-exporting the llm/ package surface
@@ -107,11 +118,13 @@ Finguard-3.0/
 │       │       │                      #   telemetry.py (agent_context/observe_llm_call), pricing.py (model-keyed cost)
 │       │       ├── observability.py   # @traced_tool — per-tool latency/outcome metrics
 │       │       ├── orchestrator.py    # LangGraph StateGraph builder; _tracked node wrapper
-│       │       ├── router.py          # aggregates routers/ sub-routers (insights, receipts, conversations)
-│       │       ├── routers/           # HTTP split by concern + _common.py (idempotency, orchestrator, GenUI)
+│       │       ├── router.py          # aggregates routers/ sub-routers (insights, receipts, conversations, admin, telemetry)
+│       │       ├── routers/           # HTTP split by concern + _common.py (idempotency, orchestrator, GenUI):
+│       │       │                      #   insights, receipts, conversations,
+│       │       │                      #   admin.py (KRA KB ingest, USER_MANAGE), telemetry.py (GenUI error reports)
 │       │       ├── service.py         # Gemini streaming chat service
-│       │       ├── schemas.py         # OrchestratorState, all agent output models
-│       │       ├── models.py          # AgentRun, KnowledgeBase (pgvector) ORM
+│       │       ├── schemas.py         # OrchestratorState, all agent output models (incl. AgentHOutput + ui_widgets)
+│       │       ├── models.py          # AgentRun, AgentEModel (per-customer IsolationForest), KnowledgeBase (pgvector) ORM
 │       │       ├── dependencies.py    # FastAPI dependency injection
 │       │       ├── agents/
 │       │       │   ├── supervisor.py  # ReAct supervisor node ✅
@@ -133,6 +146,7 @@ Finguard-3.0/
 │       │       │   ├── c_reconciler.py
 │       │       │   ├── d_forecaster.py
 │       │       │   ├── e_watchdog.py
+│       │       │   ├── h_advisor.py   # advisor system prompt + GenUI component catalog + H_ADVISOR_ALLOWED_COMPONENTS
 │       │       │   └── supervisor.py
 │       │       ├── security/
 │       │       │   ├── vc_issuer.py   # Ed25519-signed Verifiable Credentials (SOC-2 audit; EdDSA-only, HS256 sunset)
@@ -145,11 +159,16 @@ Finguard-3.0/
 │       │           ├── event_publisher.py # RabbitMQ publish tool
 │       │           ├── http_caller.py     # httpx tool; SSRF guard (_assert_public_url); no redirects
 │       │           └── mongo_reader.py    # MongoDB read tool
-│       │   └── audit/                  # Audit / activity-log domain
-│       │       ├── models.py          # AuditLog ORM (append-only); AuditAction/ActorType/Outcome enums
-│       │       ├── service.py         # AuditService.record / record_safe / record_user_action / query / kpis
-│       │       ├── router.py          # /api/v1/audit (list+filters, /kpis, /{id}); RBAC: RequireAuditRead
-│       │       └── schemas.py         # AuditLogResponse, AuditLogPage, AuditKpis
+│       │   ├── audit/                  # Audit / activity-log domain
+│       │   │   ├── models.py          # AuditLog ORM (append-only); AuditAction/ActorType/Outcome enums
+│       │   │   ├── service.py         # AuditService.record / record_safe / record_user_action / query / kpis
+│       │   │   ├── router.py          # /api/v1/audit (list+filters, /kpis, /{id}); RBAC: RequireAuditRead
+│       │   │   └── schemas.py         # AuditLogResponse, AuditLogPage, AuditKpis
+│       │   └── alerts/                 # Alerts domain (durable agent-raised alerts)
+│       │       ├── models.py          # Alert ORM; AlertType/AlertSeverity/AlertStatus enums
+│       │       ├── service.py         # create / list active+resolved / resolve / kpis
+│       │       ├── router.py          # /api/v1/alerts (CRUD + /resolved + /kpis + /{id}/resolve)
+│       │       └── schemas.py         # AlertResponse, AlertKpis
 │       ├── infrastructure/
 │       │   ├── database/
 │       │   │   ├── postgres.py        # AsyncSessionLocal, Base, init_db (SELECT 1 only — no create_all);
@@ -173,8 +192,9 @@ Finguard-3.0/
 ├── frontend/                          # Next.js 15 application
 │   ├── package.json
 │   ├── playwright.config.ts
-│   ├── e2e/
-│   │   └── chat-composite-flow.spec.ts
+│   ├── e2e/                           # Playwright specs: chat-composite-flow, chat-genui-fallback,
+│   │   │                              #   customer-picker-invoice, dashboard-live-data,
+│   │   └── …                          #   reconciliation, treasury (+ helpers.ts)
 │   └── src/
 │       ├── app/
 │       │   ├── layout.tsx
@@ -196,12 +216,13 @@ Finguard-3.0/
 │       │       ├── budgets/page.tsx
 │       │       ├── transactions/page.tsx
 │       │       ├── receivables/page.tsx
+│       │       ├── reconciliation/page.tsx # Bank-statement reconciliation + treasury/vault panel
 │       │       ├── operations/
 │       │       │   ├── page.tsx       # Operations control surface (live System Health + Activity Log cards)
 │       │       │   └── logs/page.tsx  # Audit / activity-log view (RequirePermission minRole="MANAGER")
 │       │       └── payables/
 │       │           ├── page.tsx
-│       │           ├── queue/page.tsx  # Approval queue (static mock — no backend endpoint yet)
+│       │           ├── queue/page.tsx  # AP approval queue — wired to /finance/payables (maker-checker)
 │       │           └── alerts/page.tsx
 │       ├── components/
 │       │   ├── auth/
@@ -492,7 +513,9 @@ finguard.invoices (
   tax             NUMERIC(18,2) DEFAULT 0,
   total           NUMERIC(18,2),
   amount_paid     NUMERIC(18,2) DEFAULT 0,
-  balance_due     NUMERIC(18,2),     -- CHECK ck_invoices_balance_due_consistent: balance_due = total - amount_paid
+  amount_credited NUMERIC(18,2) DEFAULT 0,   -- credit notes reduce the receivable without moving cash
+  balance_due     NUMERIC(18,2),     -- CHECK ck_invoices_balance_due_consistent:
+                                     --   balance_due = total - amount_credited - amount_paid
   currency        VARCHAR(3) DEFAULT 'KES',
   due_date        TIMESTAMPTZ,
   paid_at         TIMESTAMPTZ,
@@ -505,13 +528,23 @@ finguard.invoice_events (              -- append-only event log (event sourcing)
   id              UUID PK,
   invoice_id      UUID FK → invoices (indexed),
   sequence        INT,               -- per-invoice monotonic version (1 = issuance)
-  event_type      VARCHAR(50),       -- invoice_issued | payment_applied (InvoiceEventType)
-  amount          NUMERIC(18,2),     -- signed contribution (invoice total for issuance, paid amount)
+  event_type      VARCHAR(50),       -- invoice_issued | payment_applied | credit_note_applied |
+                                     --   invoice_cancelled (InvoiceEventType — varchar, no DDL per type)
+  amount          NUMERIC(18,2),     -- signed contribution (invoice total for issuance, paid/credited amount)
   payload         JSON,
   occurred_at     TIMESTAMPTZ,
   recorded_by     UUID,
   created_at      TIMESTAMPTZ,
   UNIQUE (invoice_id, sequence)        -- gap-free history; writers serialise on the invoice FOR UPDATE lock
+)
+
+finguard.invoice_snapshots (           -- fold-result cache so the projection replays only the tail
+  id              UUID PK,
+  invoice_id      UUID FK → invoices (indexed),
+  sequence        INT,               -- log position the snapshot was taken at
+  state           JSON,              -- cached InvoiceState fold result
+  created_at      TIMESTAMPTZ,
+  UNIQUE (invoice_id, sequence)
 )
 
 finguard.budgets (
@@ -547,6 +580,12 @@ finguard.expenses (
   vault           VaultType ENUM (MPESA | CASH),
   mpesa_trans_id  UUID FK → mpesa_transactions,
   invoice_id      UUID FK → invoices,
+  -- AP maker-checker approval (defaults to 'approved' so existing/immediate paths are unchanged):
+  approval_status VARCHAR(20) DEFAULT 'approved' (indexed),  -- draft → pending_review → approved → scheduled | rejected
+  submitted_by    UUID,              -- maker
+  reviewed_by     UUID,              -- checker
+  reviewed_at     TIMESTAMPTZ,
+  scheduled_for   TIMESTAMPTZ,       -- payment run date once approved
   -- Receipt-scan provenance (nullable; populated by POST /finance/receipts):
   merchant_name   VARCHAR(255),      -- OCR audit trail
   kra_pin         VARCHAR(20),       -- feeds Agent F (tax compliance)
@@ -581,7 +620,21 @@ finguard.outbox_events (
   routing_key     VARCHAR(255),
   payload         JSON,
   published       BOOLEAN DEFAULT false (indexed),  -- projector flips to true after broker ack
+  retry_count     INT DEFAULT 0,     -- per-event publish failures; event moves to DLQ at OUTBOX_MAX_RETRIES
+  last_error      TEXT,              -- last publish exception for triage
   created_at      TIMESTAMPTZ
+)
+
+finguard.outbox_dead_letters (        -- events that exhausted OUTBOX_MAX_RETRIES; out of the publish loop
+  id                 UUID PK,
+  original_event_id  UUID,
+  exchange           VARCHAR(100),
+  routing_key        VARCHAR(255),
+  payload            JSON,
+  retry_count        INT,
+  last_error         TEXT,
+  original_created_at TIMESTAMPTZ,
+  created_at         TIMESTAMPTZ
 )
 ```
 
@@ -608,7 +661,33 @@ finguard.knowledge_base (
   content         TEXT,
   vector_embeddings VECTOR(768),    -- pgvector, HNSW L2 index (m=16, ef_construction=64)
   metadata_payload JSONB,
-  created_at      TIMESTAMPTZ
+  created_at      TIMESTAMPTZ,
+  UNIQUE (document_title, section_key)  -- uq_knowledge_base_title_section: idempotent ingest key
+                                        --   (ON CONFLICT (document_title, section_key) upsert)
+)
+
+finguard.agent_e_models (              -- serialized per-customer IsolationForest (weekly retrain)
+  id              UUID PK,
+  customer_id     UUID UNIQUE (indexed),
+  model_type      VARCHAR(100) DEFAULT 'isolation_forest',
+  payload         BYTEA,             -- serialized model bytes
+  n_samples       INT DEFAULT 0,
+  version         INT DEFAULT 1,     -- bumped on each retrain upsert
+  trained_at      TIMESTAMPTZ
+)
+
+agent_action_proposals (              -- human-in-the-loop queue for value-changing agent actions (mig 0020)
+  id              UUID PK,
+  agent_label     VARCHAR(50),       -- the maker (e.g. 'k_stockkeeper')
+  action_type     VARCHAR(40) (indexed), -- '<domain>.<verb>', e.g. 'stock.adjustment' → selects approval permission
+  payload         JSONB,             -- exact tool args to replay the guarded write on approval
+  status          VARCHAR(20) (indexed), -- proposed → applied | rejected (claim-first exactly-once)
+  rationale       TEXT,
+  triggered_by    UUID,              -- the human who ran the agent (requester); strict SoD: cannot self-approve
+  reviewed_by     UUID,              -- the human who released it (the checker)
+  reviewed_at     TIMESTAMPTZ,
+  applied_ref     VARCHAR(100),      -- resulting movement/expense id once applied
+  created_at      TIMESTAMPTZ (indexed)
 )
 ```
 
@@ -634,7 +713,29 @@ finguard.audit_logs (                  -- append-only activity trail; never UPDA
 )
 ```
 
-Written **only** via `AuditService` at explicit service/router call sites (not middleware) — `record` (commits its own row, after the business action), `record_safe` (best-effort, never raises — for post-commit paths where audit failure must not 500), and `record_user_action` (the common "authenticated user did X" wrapper). Request context (ip, request id) is attached automatically from `core/request_context.py`. Currently instrumented: identity login success/failure, alert created/resolved.
+Written **only** via `AuditService` at explicit service/router call sites (not middleware) — `record` (commits its own row, after the business action), `record_safe` (best-effort, never raises — for post-commit paths where audit failure must not 500), and `record_user_action` (the common "authenticated user did X" wrapper). Request context (ip, request id) is attached automatically from `core/request_context.py`. Instrumented across domains (the `AuditAction` registry): auth login success/failure; CRM customer created/updated; invoice created/updated/paid, credit-note applied, cancelled; payment recorded; expense + budget created; AP payable submitted/approved/rejected/scheduled; alert created/resolved; agent action runs.
+
+### PostgreSQL — Alerts Domain
+
+```
+finguard.alerts (
+  id               UUID PK,
+  type             AlertType ENUM (duplicate_invoice | anomaly | vendor_activity | budget_overspend),
+  severity         AlertSeverity ENUM (critical | warning | info),
+  status           AlertStatus ENUM (active | resolved) DEFAULT active,
+  title            VARCHAR(255),
+  body             TEXT,
+  source_agent     VARCHAR(100),       -- e.g. agent the alert originated from (nullable)
+  vc_id            VARCHAR(255),        -- linked Verifiable Credential id (nullable)
+  metadata_payload JSONB DEFAULT '{}',
+  resolved_by      UUID FK → users (nullable),
+  resolved_at      TIMESTAMPTZ,
+  resolution_note  TEXT,
+  created_at       TIMESTAMPTZ
+)
+```
+
+Agent E's findings reach this table via the watchdog consumer (`workers/consumers/watchdog_consumer.py`), which creates an `Alert` from a watchdog result. Surfaced on `/dashboard/payables/alerts` and exposed via `/api/v1/alerts`.
 
 ### MongoDB — Collections
 
@@ -649,7 +750,7 @@ Written **only** via `AuditService` at explicit service/router call sites (not m
 
 All agents are LangGraph nodes. They receive `OrchestratorState`, perform their task, update `state["context"]`, and return to the supervisor unconditionally. Every result is written to `intelligence_hub` by `hub_writer_node`.
 
-**Implementation Status**: ✅ Complete — all 10 agents are fully implemented.
+**Implementation Status**: ✅ Complete — all 11 agents (A–K) are fully implemented. Agent K (Stock Steward) operates over the inventory domain and is the first agent whose value-changing writes go through the human-in-the-loop approval queue (see Agent K below and §8 `/proposals`).
 
 ### GenUI Payload Contract
 
@@ -749,7 +850,9 @@ class CompositeGenUIPayload(BaseModel):
 | SQL access | `execute_readonly_sql()` for recent amounts and invoices |
 | Output schema | `WatchdogAnalysis` |
 | GenUI payload | `CompositeGenUIPayload` → `component_id: "BudgetWatchdogMeter"` |
-| Method | HMM (3-state) + IsolationForest + rapidfuzz duplicate detection + Gemini narrative + VC issuance |
+| Method | HMM (3-state) + **persisted per-customer IsolationForest** + rapidfuzz duplicate detection + Gemini narrative + VC issuance |
+| Model store | `finguard.agent_e_models` — the weekly `batch.retrain_agent_e_models` Celery task fits one forest per customer over the trailing 90 days of categorized transactions and upserts the serialized bytes (`version` bumped). Scoring loads the customer's row; a brand-new customer falls back to an on-the-fly fit plus an async background fit. |
+| Alert sink | A watchdog finding becomes a durable `finguard.alerts` row via `watchdog_consumer.py` |
 | Hub TTL | 30 minutes |
 
 ---
@@ -788,9 +891,11 @@ class CompositeGenUIPayload(BaseModel):
 
 | Field | Value |
 |---|---|
-| File | `agents/h_advisor.py` |
+| File | `agents/h_advisor.py`; prompt + catalog in `prompts/h_advisor.py` |
 | Trigger | Supervisor routes here for advisory/recommendation requests |
 | Context key written | `advice` |
+| Output schema | `AgentHOutput` (`narrative_response` always required + optional `ui_widgets: list[GenUIPayload]`) — Gemini structured output |
+| GenUI | The system prompt embeds a **GenUI component catalog** (`H_ADVISOR_GENUI_CATALOG`); emitted widgets are allowlist-filtered against `H_ADVISOR_ALLOWED_COMPONENTS` (`MiniTrendSparkline`, `TransactionHistoryList`, `SemiCircleGaugeCard`) — unknown `component_id`s are dropped — then appended to `OrchestratorState.gen_ui_payloads` so the chat renders them inline. Narrative still goes to `context["advice"]`. |
 | Method | RBAC role resolution → CRM profile → aggregated watchdog/forecast/tax context → Gemini multi-step reasoning. VIEWERs get summaries; MANAGERs+ get full actionable recommendations. |
 | Hub TTL | 1 hour |
 
@@ -818,6 +923,20 @@ class CompositeGenUIPayload(BaseModel):
 | Context key written | `executive_summary` |
 | Method | Collates non-empty context from agents A–I, Gemini ≤5-bullet summary, locale-aware output from CRM `preferred_locale` |
 | Hub TTL | 30 minutes |
+
+---
+
+### Agent K — Stock Steward ✅
+
+| Field | Value |
+|---|---|
+| File | `agents/k_stockkeeper.py` |
+| Domain | Inventory (products, stock levels, append-only movement ledger) |
+| Trigger | Inventory / stock-health intents |
+| Context key written | `stock_steward` (narrative + `proposed_actions`, `can_act`) |
+| Tools | Typed inventory tools; the **only** write path is `propose_stock_movement`, which routes through `InventoryService` (row lock, non-negative guard, weighted-avg costing, agent-attributed audit) — never LLM-authored SQL |
+| A2A | Soft-consumes Agent D's cash-flow forecast when present (advisory only) |
+| Human-in-the-loop | A stock **ADJUSTMENT** (creates/destroys stock) is never applied inline — it is persisted to `agent_action_proposals` at `proposed` for a second human holding `inventory:adjust` to release via `/proposals/{id}/approve`. Routine receipts/issues keep the inline path. Segregation of duties (requester ≠ approver) + exactly-once apply (claim-first) enforced in `ProposalService` |
 
 ---
 
@@ -950,11 +1069,28 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/invoices` | `finance:write` | Create invoice |
 | PATCH | `/invoices/{id}` | `finance:write` | Update invoice |
 | POST | `/invoices/{id}/pay` | `finance:write` | Settle invoice (appends a `payment_applied` event for the balance) |
-| GET | `/invoices/{id}/events` | `finance:read` | Append-only invoice event history (issuance, payments), oldest first |
+| POST | `/invoices/{id}/credit-note` | `finance:write` | Apply a credit note (appends `credit_note_applied`; reduces receivable, no cash) |
+| POST | `/invoices/{id}/cancel` | `finance:write` | Cancel invoice (appends `invoice_cancelled`) |
+| GET | `/invoices/{id}/events` | `finance:read` | Append-only invoice event history (issuance, payments, credits), oldest first |
 | GET | `/invoices/{id}/reconstruction` | `finance:read` | Fold the event log; `matches_projection` proves the row equals the events |
+| GET | `/reports` | `finance:read` | CoreReports catalog with live ready/no_data status (drives the report menu) |
+| GET | `/reports/{report_type}` | `finance:read` | Generate one report from live data: `income_statement` \| `cash_flow` \| `tax_liability` |
 | POST | `/expenses` | `finance:write` | Create expense (publishes via outbox) |
 | GET | `/expenses` | `finance:read` | List expenses |
 | POST | `/receipts` | `finance:write` | Persist a reviewed receipt scan as an expense (budget burn-down + `expenses.created`) |
+| GET | `/payables/queue` | `finance:read` | AP approval queue (pending/scheduled payables) |
+| POST | `/payables` | `finance:write` | Create a payable (maker) |
+| POST | `/payables/{id}/approve` | `finance:approve` | Approve a payable (checker; triggers deferred budget burn-down). Submitter ≠ approver enforced in service |
+| POST | `/payables/{id}/reject` | `finance:approve` | Reject a payable (checker) |
+| POST | `/payables/{id}/schedule` | `finance:approve` | Schedule an approved payable for a payment run |
+| GET | `/reconciliation-flow` | `finance:read` | Reconciliation flow summary (bank-line ↔ ledger state) |
+| POST | `/bank-statements` | `finance:reconcile` | Import bank statement lines (idempotent + provenance) |
+| GET | `/bank-statements` | `finance:read` | List imported bank statement lines |
+| POST | `/bank-statements/{id}/approve` | `finance:reconcile` | Approve a reconciliation match (maker-checker review gate) |
+| POST | `/bank-statements/{id}/reject` | `finance:reconcile` | Reject a reconciliation match |
+| GET | `/vault-balances` | `finance:read` | Per-vault (MPESA/CASH) balances |
+| POST | `/vault-transfers` | `finance:write` | Move funds between vaults (overdraw-guarded) |
+| GET | `/vault-transfers` | `finance:read` | List vault transfers |
 | POST | `/mpesa/callback` | IP allowlist (+ optional HMAC) | M-Pesa Daraja STK callback; `verify_mpesa_signature` authenticates the origin against `MPESA_CALLBACK_ALLOWED_IPS` (fail-closed 503 if no control configured), then strict MpesaStkCallback validation; stores raw_payload |
 | POST | `/payments/cash` | `finance:write` | Record cash payment (row-locked for UPDATE) |
 | POST | `/budgets` | `finance:write` | Create budget |
@@ -970,6 +1106,21 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/receipts/scan` | `intelligence:read` | Receipt OCR graph (receipt_ocr → receipt_classifier); multipart image/PDF upload ≤10 MB; returns extraction + suggested category (no persistence) |
 | POST | `/conversation` | `intelligence:read` | Dual-path; stores task_owner for IDOR guard |
 | GET | `/conversation/{session_id}/status` | `intelligence:read` | Owner-verified status poll |
+| POST | `/admin/knowledge-base/ingest` | `user:manage` | Upload a `.txt`/`.md` KRA document; chunked + Gemini-embedded into the pgvector KB (idempotent upsert — same code path as `scripts.ingest_kra_docs`) |
+| POST | `/genui/error` | `intelligence:read` | GenUI error-boundary telemetry sink (frontend reports a crashed widget; returns 202) |
+| GET | `/proposals` | `intelligence:read` | Human-in-the-loop queue: value-changing agent actions awaiting release (currently Agent K stock adjustments) |
+| POST | `/proposals/{id}/approve` | `inventory:adjust` | Release a pending agent proposal — applies the write exactly once (claim-first). Requester ≠ approver enforced in service |
+| POST | `/proposals/{id}/reject` | `inventory:adjust` | Reject a pending agent proposal (no write) |
+
+### Alerts — `/api/v1/alerts`
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `` | `intelligence:read` | Create an alert |
+| GET | `` | `intelligence:read` | List active alerts |
+| GET | `/resolved` | `intelligence:read` | List resolved alerts |
+| GET | `/kpis` | `intelligence:read` | Alert summary counts for dashboard cards |
+| POST | `/{alert_id}/resolve` | `intelligence:read` | Resolve an alert (records `resolved_by` / `resolved_at` / note) |
 
 ### Audit — `/api/v1/audit`
 
@@ -1013,8 +1164,11 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | `/dashboard/transactions` | Transaction list + ReceiptScanner (upload → OCR → review → create expense). Target of the sidebar "New Transaction" CTA |
 | `/dashboard/receivables` | AR: InvoiceTable (live `useInvoices`/`useCustomers`), AgentStatus |
 | `/dashboard/payables` | AP: DepartmentBudgets (live `useBudgets`), RecentOutgoing (live `useExpenses`), AgentIntegrations |
-| `/dashboard/payables/queue` | Approval queue UI (invoice review states) — static mock; no backend approval endpoint yet |
-| `/dashboard/payables/alerts` | Budget alerts |
+| `/dashboard/payables/queue` | AP approval queue — wired to `/finance/payables` maker-checker (create → approve/reject/schedule); `finance:approve` to review |
+| `/dashboard/payables/alerts` | Budget alerts (live `/api/v1/alerts`) |
+| `/dashboard/approvals` | **Unified approvals inbox** — one reviewer surface for both financial approvals (`/finance/payables/queue`) and agent actions (`/intelligence/proposals`). Manager+ to act; server enforces per-domain permission + segregation of duties |
+| `/dashboard/inventory` | Inventory (Agent K domain): products, stock levels, valuation, low-stock — live `useInventory` hooks |
+| `/dashboard/reconciliation` | Bank-statement reconciliation + treasury/vault-transfer panel (live `/finance/bank-statements`, `/finance/vault-*`) |
 | `/dashboard/operations` | Operations control surface — live System Health card (`/health/ready` poll) + an Activity Log card linking to the audit trail + links to queue/alerts |
 | `/dashboard/operations/logs` | Audit / activity-log view (`ActivityLog`): KPI tiles, action/outcome filters, paginated table, detail drawer. Gated by `RequirePermission minRole="MANAGER"` |
 
@@ -1131,6 +1285,7 @@ No central switch statement to edit — the registry resolution + boundary handl
 | `lib/hooks/useFinanceData.ts` | TanStack Query hooks `useInvoices`/`useExpenses`/`useBudgets`/`useCustomers` over finance+CRM REST; centralised `financeKeys` for cache invalidation. Source of the live dashboard widgets |
 | `lib/hooks/useHealth.ts` | `useReadiness()` — polls `/health/ready` every 15s (10s `staleTime`); backs the Operations System Health card |
 | `lib/api/audit.ts` | `listAuditLogs`, `getAuditKpis`, `getAuditLog` over `/api/v1/audit`. **Types are hand-written here, not derived from the generated `schema.d.ts`** (escape-hatch pattern — see the OpenAPI sync-types gate) |
+| `lib/api/alerts.ts` | Alert list/resolve/kpis over `/api/v1/alerts`; backs the payables alerts surface |
 | `lib/hooks/useAuditLog.ts` | `useAuditLogs` / `useAuditKpis` TanStack Query hooks (filter + paging state); backs the `ActivityLog` view |
 | `lib/auth/auth-context.tsx` | React context; hydrates `user` via `GET /me` (not JWT decode); proactive refresh on expiry |
 | `lib/auth/token-manager.ts` | reads `fg_csrf` (CSRF header source) + `fg_session` markers; clears them on logout. Access/refresh tokens are HttpOnly cookies (not JS-readable) |
@@ -1227,25 +1382,31 @@ class Permission(enum.StrEnum):
     FINANCE_READ      = "finance:read"
     FINANCE_WRITE     = "finance:write"
     FINANCE_RECONCILE = "finance:reconcile"   # import settlements / auto-reconcile — manager+
+    FINANCE_APPROVE   = "finance:approve"      # sign off an AP payable (spend authorization) — manager+
     CRM_READ          = "crm:read"
     CRM_WRITE         = "crm:write"
+    INVENTORY_READ    = "inventory:read"
+    INVENTORY_WRITE   = "inventory:write"
+    INVENTORY_ADJUST  = "inventory:adjust"     # stock write-up/write-off + release agent adjustments — manager+
     INTELLIGENCE_READ = "intelligence:read"
     INTELLIGENCE_ACT  = "intelligence:act"
     USER_MANAGE       = "user:manage"
     AUDIT_READ        = "audit:read"           # read the cross-domain audit trail — manager+
 ```
 
-Permissions accumulate up the role hierarchy (`viewer ⊂ accountant ⊂ manager ⊂ admin ⊂ owner`):
+Permissions accumulate up the role hierarchy (`viewer ⊂ accountant ⊂ manager ⊂ admin ⊂ owner`). The matrix is written out explicitly per role in `permissions.py` (not via inheritance) so each role's exact grant is auditable at a glance:
 
 | Role | Permissions |
 |---|---|
-| `viewer` | `finance:read`, `crm:read`, `intelligence:read` |
-| `accountant` | All read + `finance:write`, `crm:write`, `intelligence:act` |
-| `manager` | All accountant + `finance:reconcile`, `audit:read` (reconciliation authority + audit oversight — separation of duties) |
+| `viewer` | `finance:read`, `crm:read`, `inventory:read`, `intelligence:read` |
+| `accountant` | All read + `finance:write`, `crm:write`, `inventory:write`, `intelligence:act` |
+| `manager` | All accountant + `finance:reconcile`, `finance:approve`, `inventory:adjust`, `audit:read` (higher-trust authorities held back from the accountant — separation of duties) |
 | `admin` | All manager + `user:manage` |
 | `owner` | All permissions |
 
-`require_permission(*required)` in `dependencies.py` returns an async FastAPI dependency that raises `ForbiddenError (403)` if the authenticated user lacks any required permission. Ready-made aliases: `RequireFinanceRead`, `RequireFinanceWrite`, `RequireCrmRead`, `RequireCrmWrite`, `RequireIntelligenceRead`, `RequireIntelligenceAct`, `RequireUserManage`, `RequireAuditRead`.
+**Two-layer authorization for approvals.** A permission answers *who may approve* (role authority, enforced at the endpoint). It cannot express *not your own* — that object-level segregation of duties (payable submitter ≠ approver; bank-line importer ≠ approver; agent requester ≠ proposal approver) is enforced in the service layer. Spend approval (`finance:approve`) is deliberately a separate grant from settlement import (`finance:reconcile`) so the matrix stays legible about who can authorize payments.
+
+`require_permission(*required)` in `dependencies.py` returns an async FastAPI dependency that raises `ForbiddenError (403)` if the authenticated user lacks any required permission. Ready-made aliases: `RequireFinanceRead`, `RequireFinanceWrite`, `RequireFinanceReconcile`, `RequireFinanceApprove`, `RequireCrmRead`, `RequireCrmWrite`, `RequireInventoryRead`, `RequireInventoryWrite`, `RequireInventoryAdjust`, `RequireIntelligenceRead`, `RequireIntelligenceAct`, `RequireUserManage`, `RequireAuditRead`.
 
 ### Login Lockout
 
@@ -1346,7 +1507,7 @@ ENABLE_EXPENSE_EVENT_CONSUMER=false
 ENABLE_OUTBOX_PROJECTOR=false
 OUTBOX_POLL_INTERVAL=5.0         # projector poll cadence (seconds) — actively used
 OUTBOX_BATCH_SIZE=50            # reserved; projector currently uses a fixed 100-row batch
-OUTBOX_MAX_RETRIES=5           # reserved; projector has no retry counter (retries are implicit via re-poll)
+OUTBOX_MAX_RETRIES=5           # per-event publish-failure cap; event is moved to outbox_dead_letters at this count
 RABBITMQ_CONSUMER_RETRY_SECONDS=5
 WATCHDOG_CONSUMER_INTERVAL_SECONDS=30
 
@@ -1391,8 +1552,8 @@ Every agent writes an `InsightArtifact` to MongoDB `intelligence_hub` with a per
 **File**: `agents/hub_writer.py`
 
 ### 4. Transactional Outbox Pattern
-Every PostgreSQL write that must trigger messaging also inserts a row into `outbox_events` **in the same transaction**. The outbox projector (`run_projector`, polling every `OUTBOX_POLL_INTERVAL`s) selects up to 100 rows where `published = False`, oldest-first, under `SELECT … FOR UPDATE SKIP LOCKED`, publishes each to RabbitMQ, then flips `published = True` — all inside a single `session.begin()`. If `rabbitmq_publisher.publish()` raises `BrokerUnavailableError`, the exception propagates out of `session.begin()` and the whole batch rolls back, so the rows stay `published = False` and are retried on the next poll cycle — events are never silently dropped. This yields **at-least-once** delivery (a crash after broker ACK but before DB commit republishes on the next poll), so consumers must be idempotent. There is no `PROCESSED`/`DEAD_LETTER` status or `retry_count` column — retries are implicit via re-polling, and the projector forwards to RabbitMQ only (it does not write to MongoDB).
-**Files**: `workers/outbox/projector.py`, `infrastructure/message_bus/rabbitmq_publisher.py`
+Every PostgreSQL write that must trigger messaging also inserts a row into `outbox_events` **in the same transaction**. The outbox projector (`run_projector`, polling every `OUTBOX_POLL_INTERVAL`s) selects up to 100 rows where `published = False`, oldest-first, under `SELECT … FOR UPDATE SKIP LOCKED`, and publishes each to RabbitMQ. Publishing is now **per-event isolated**: a failed `rabbitmq_publisher.publish()` no longer rolls back the whole batch — it increments that row's `retry_count` and records `last_error`, so a single poison event cannot block the others. An event that exhausts `OUTBOX_MAX_RETRIES` is moved to the dedicated `outbox_dead_letters` table (out of the publish loop entirely) rather than retried forever. On a clean publish the row flips `published = True`. This yields **at-least-once** delivery (a crash after broker ACK but before DB commit republishes on the next poll), so consumers must be idempotent. The projector forwards to RabbitMQ only (it does not write to MongoDB).
+**Files**: `workers/outbox/projector.py`, `infrastructure/message_bus/rabbitmq_publisher.py`, `domains/finance/models.py` (`OutboxEvent`, `OutboxDeadLetter`)
 
 ### 5. RabbitMQ Event-Driven Watchdog
 Expense creation publishes `expenses.created` to RabbitMQ; watchdog consumer invokes Agent E asynchronously.
@@ -1474,8 +1635,8 @@ Agents D/E/F/G build `CompositeGenUIPayload` with deterministic `props` and LLM-
 **File**: `domains/identity/service.py`
 
 ### 25. Event Sourcing for the Invoice Lifecycle (scoped)
-The `invoice_events` table is an **append-only log** that is the source of truth for an invoice's monetary state. Issuance appends `invoice_issued` (sequence 1, amount = total); each payment appends `payment_applied`. `fold_invoice_events()` is a **pure** function that replays the sequence into a derived `InvoiceState` (`amount_paid` / `balance_due` / status). The materialized `invoices` row is a **synchronous projection** of that fold — re-derived in the same transaction after every append — so the `CHECK (balance_due = total - amount_paid)` constraint and the `FOR UPDATE` payment serialization are preserved (no behavioural regression vs. the previous imperative updates). Sequence allocation is race-free because writers hold the invoice's `FOR UPDATE` lock; `UNIQUE (invoice_id, sequence)` is the backstop. `GET /invoices/{id}/reconstruction` folds the log and reports `matches_projection`, letting an auditor prove the read model has not drifted from the events. Deliberately scoped to invoices/payments (not the whole system); async projection, snapshotting, and `credit_note`/`cancellation` events are deferred — see `docs/SCALING.md`.
-**Files**: `domains/finance/events.py`, `domains/finance/models.py` (`InvoiceEvent`), `domains/finance/service.py`
+The `invoice_events` table is an **append-only log** that is the source of truth for an invoice's monetary state. Issuance appends `invoice_issued` (sequence 1, amount = total); each payment appends `payment_applied`. `fold_invoice_events()` is a **pure** function that replays the sequence into a derived `InvoiceState` (`amount_paid` / `balance_due` / status). The materialized `invoices` row is a **synchronous projection** of that fold — re-derived in the same transaction after every append — so the `balance_due` consistency CHECK and the `FOR UPDATE` payment serialization are preserved (no behavioural regression vs. the previous imperative updates). Sequence allocation is race-free because writers hold the invoice's `FOR UPDATE` lock; `UNIQUE (invoice_id, sequence)` is the backstop. `GET /invoices/{id}/reconstruction` folds the log and reports `matches_projection`, letting an auditor prove the read model has not drifted from the events. The model now also folds `credit_note_applied` (reduces the receivable without moving cash — `invoices.amount_credited`, CHECK swapped to `balance_due = total - amount_credited - amount_paid`) and `invoice_cancelled`. `invoice_snapshots` caches the fold result every N events so the synchronous projection replays only the tail instead of the whole log. Still deliberately scoped to invoices/payments (not the whole system); async projection is deferred — see `docs/SCALING.md`.
+**Files**: `domains/finance/events.py`, `domains/finance/models.py` (`InvoiceEvent`, `InvoiceSnapshot`), `domains/finance/service.py`
 
 ### 26. Per-Agent LLM Observability (contextvar attribution)
 Every graph node is wrapped at registration by `orchestrator._tracked(name, node)`, which sets a `current_agent_id` contextvar for the node's execution. The Gemini client's `observe_llm_call()` reads that contextvar and records **per-agent** Prometheus metrics for each call — latency (`agent_llm_processing_seconds`), tokens (`agent_llm_tokens_total{kind=prompt|completion}`), estimated cost (`agent_llm_cost_usd_total`, tokens × the model-keyed rate from `llm/pricing.py`, overridable via `LLM_PRICING_JSON`), and outcome (`agent_llm_calls_total{status}`). This gives central attribution with no per-agent edits, so a Grafana panel can show which agent burns the most tokens (e.g. Agent B/C dumping `ledger_entries`). Recording is best-effort and never throws into the agent path (non-numeric token counts are coerced/skipped). Agent E calls the Gemini client directly (not the shared helpers) and so calls `observe_llm_call(..., elapsed=None)` to add tokens/cost without double-counting the latency it already records.
@@ -1503,9 +1664,13 @@ All tasks use `asyncio.run()` to bridge into the async layer (see Design Pattern
 
 | Task | Schedule | Purpose |
 |---|---|---|
-| `reporting_tasks.generate_monthly_intelligence_report` | Monthly, 1st at 00:00 | Runs Agent F + G per active customer; writes to `intelligence_hub` |
-| `dlq.drain_watchdog_dlq` | Weekly, Sunday at 02:00 | Drains RabbitMQ DLQ; discards poison messages after 3 total deaths |
+| `batch.classify_unclassified_ledger_entries` | Every 5 min | Sweeps unclassified ledger entries (Agent B) |
+| `batch.run_batch_reconciliation` | Every 15 min | Pass-1 exact + pass-2 Gemini reconciliation (Agent C) |
+| `batch.run_batch_bank_reconciliation` | Every 15 min | Bank-statement-line reconciliation pass |
+| `reporting.dispatch_monthly_reports` | Monthly, 1st at 00:00 | Fans out `generate_monthly_intelligence_report` (Agent F + G) per active customer → `intelligence_hub` |
+| `dlq.drain_watchdog_dlq` | Every 15 min | Drains RabbitMQ DLQ; discards poison messages after 3 total deaths |
 | `batch.enforce_data_retention` | Weekly, Sunday at 02:00 | Deletes `ledger_entries` older than 7 years (GDPR / Kenya DPA) |
+| `batch.retrain_agent_e_models` | Weekly, Sunday at 03:00 | Re-fits each customer's Agent E IsolationForest over the trailing 90 days; upserts to `agent_e_models` |
 
 ### OCR Queue (`ocr_processing`)
 
@@ -1521,8 +1686,10 @@ All tasks use `asyncio.run()` to bridge into the async layer (see Design Pattern
 |---|---|
 | `batch.classify_unclassified_ledger_entries` | Sweeps `ledger_entries WHERE category IS NULL`; batches of 50; `FOR UPDATE SKIP LOCKED` |
 | `batch.run_batch_reconciliation` | Pass-1 exact match + pass-2 Gemini confirmation; 100 tx/batch |
+| `batch.run_batch_bank_reconciliation` | Reconciles imported bank-statement lines against the ledger |
 | `batch.enforce_data_retention` | Bounded-batch deletion of 7-year-old ledger rows |
-| `reporting_tasks.generate_monthly_intelligence_report` | Agent F + G sequential run; 3× retry with 60s delay |
+| `batch.retrain_agent_e_models` | Fits one IsolationForest per customer over the trailing 90 days; upserts serialized bytes to `agent_e_models` |
+| `reporting.dispatch_monthly_reports` → `reporting.generate_monthly_intelligence_report` | Per-customer fan-out; Agent F + G sequential run; 3× retry with 60s delay |
 | `dlq.drain_watchdog_dlq` | Non-blocking DLQ drain; republishes or discards after 3 deaths |
 
 ---
@@ -1631,13 +1798,13 @@ ENABLE_OUTBOX_PROJECTOR=true         # Starts PostgreSQL outbox → MongoDB proj
 | B | Transaction Classifier | ✅ Complete | Gemini zero-shot + batch Celery | `classified_transactions` | — | 1h |
 | C | Reconciler | ✅ Complete | Exact match + Gemini semantic scoring; atomic transaction | `reconciliation_report` | — | 10m |
 | D | Cash-Flow Forecaster | ✅ Complete | Holt-Winters + regime detection + CoVe schema-masked SQL | `forecast` | `CashFlowChart` | 1h |
-| E | Budget Watchdog | ✅ Complete | HMM + IsolationForest + rapidfuzz + AML flag | `watchdog_result` | `BudgetWatchdogMeter` | 30m |
+| E | Budget Watchdog | ✅ Complete | HMM + persisted per-customer IsolationForest (weekly retrain) + rapidfuzz + AML flag; raises durable `alerts` | `watchdog_result` | `BudgetWatchdogMeter` | 30m |
 | F | Tax Auditor | ✅ Complete | Deterministic Kenya tax + pgvector RAG + AML flag | `tax_audit_result` | `TaxLiabilityDonut` | 1d |
 | G | Credit Strategist | ✅ Complete | Holt-Winters + bankability score + Gemini NLG | `credit_strategy_result` | `BankabilityScoreRadar` | 1d |
-| H | Financial Advisor | ✅ Complete | Gemini multi-step reasoning + RBAC clip | `advice` | — | 1h |
+| H | Financial Advisor | ✅ Complete | Gemini multi-step reasoning + RBAC clip; structured `AgentHOutput` + allowlisted GenUI widgets | `advice` | `MiniTrendSparkline` / `TransactionHistoryList` / `SemiCircleGaugeCard` (allowlisted) | 1h |
 | I | External Integrator | ✅ Complete | httpx M-Pesa (sandbox) / free FX provider / Metropol / KRA + SSRF guard; explicit per-source status (live/manual/mock/unavailable) | `external_data` | — | 1h |
 | J | Executive Summarizer | ✅ Complete | Gemini context distillation ≤5 bullets + locale-aware | `executive_summary` | — | 30m |
 
 ---
 
-*Last updated: 2026-06-22*
+*Last updated: 2026-06-24*

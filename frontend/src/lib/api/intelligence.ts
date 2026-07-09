@@ -12,6 +12,7 @@ import httpClient from "@/lib/api/http-client";
 import { ENDPOINTS } from "@/lib/api/endpoints";
 import type {
   ApiActionFeedItem,
+  ApiAgentActionProposal,
   ApiAgentTelemetry,
   ApiInsightFeedItem,
   ApiKnowledgeIngestResponse,
@@ -33,6 +34,37 @@ export async function ingestKnowledgeBase(
     ENDPOINTS.INTELLIGENCE.KB_INGEST,
     form,
     { headers: { "Content-Type": "multipart/form-data" } },
+  );
+  return data;
+}
+
+// ── Agent action approval queue (human-in-the-loop) ───────────────────────────
+// A value-changing agent action (e.g. an Agent K stock adjustment) lands as a
+// proposal a human with the domain permission must release. The reviewer must
+// differ from whoever triggered the agent (segregation of duties, enforced by the
+// backend). The Axios interceptor injects the Idempotency-Key on these POSTs.
+
+export async function getAgentProposals(): Promise<ApiAgentActionProposal[]> {
+  const { data } = await httpClient.get<ApiAgentActionProposal[]>(
+    ENDPOINTS.INTELLIGENCE.PROPOSALS,
+  );
+  return data;
+}
+
+export async function approveAgentProposal(
+  id: string,
+): Promise<ApiAgentActionProposal> {
+  const { data } = await httpClient.post<ApiAgentActionProposal>(
+    ENDPOINTS.INTELLIGENCE.PROPOSAL_APPROVE(id),
+  );
+  return data;
+}
+
+export async function rejectAgentProposal(
+  id: string,
+): Promise<ApiAgentActionProposal> {
+  const { data } = await httpClient.post<ApiAgentActionProposal>(
+    ENDPOINTS.INTELLIGENCE.PROPOSAL_REJECT(id),
   );
   return data;
 }

@@ -16,6 +16,14 @@ from src.domains.alerts.schemas import AlertCreate, AlertKpis
 # most one active alert.
 DEDUP_KEY = "dedup_key"
 
+# Ordering used to decide whether a re-detected condition should escalate the
+# severity of its existing active alert (higher wins).
+_SEVERITY_RANK = {
+    AlertSeverity.INFO: 0,
+    AlertSeverity.WARNING: 1,
+    AlertSeverity.CRITICAL: 2,
+}
+
 # Above this IsolationForest score a transaction is anomalous enough to alert on
 # even when the HMM budget state is not yet CRITICAL.  Mirrors the threshold the
 # watchdog agent uses to decide whether to publish an anomaly event.
@@ -128,9 +136,7 @@ class AlertService:
         await self._session.refresh(alert)
         return alert
 
-    async def create_alert_idempotent(
-        self, data: AlertCreate, dedup_key: str
-    ) -> Alert | None:
+    async def create_alert_idempotent(self, data: AlertCreate, dedup_key: str) -> Alert | None:
         """Create an alert unless an *active* one already carries ``dedup_key``.
 
         Returns the new ``Alert`` when one was created, or ``None`` when an
@@ -153,6 +159,51 @@ class AlertService:
         await self._session.commit()
         await self._session.refresh(alert)
         return alert
+
+    async def escalate_or_create_alert(self, data: AlertCreate, dedup_key: str) -> Alert | None:
+        """Create an alert for ``dedup_key`` unless an active one exists; if it
+        does and ``data`` is a *more severe* grade, escalate the existing alert in
+        place (so a WARNING low-stock becomes CRITICAL on stockout without
+        spawning a duplicate). Returns the created/updated alert."""
+        result = await self._session.execute(
+            select(Alert)
+            .where(Alert.status == AlertStatus.ACTIVE)
+            .where(Alert.metadata_payload[DEDUP_KEY].astext == dedup_key)
+            .limit(1)
+        )
+        existing = result.scalar_one_or_none()
+        if existing is None:
+            return await self.create_alert_idempotent(data, dedup_key)
+        if _SEVERITY_RANK[data.severity] > _SEVERITY_RANK[existing.severity]:
+            existing.severity = data.severity
+            existing.title = data.title
+            existing.body = data.body
+            existing.metadata_payload = {
+                **existing.metadata_payload,
+                **data.metadata_payload,
+                DEDUP_KEY: dedup_key,
+            }
+            await self._session.commit()
+            await self._session.refresh(existing)
+        return existing
+
+    async def resolve_active_by_dedup(self, dedup_key: str, *, note: str | None = None) -> int:
+        """Resolve every ACTIVE alert carrying ``dedup_key`` (system-resolved, no
+        user actor). Returns how many were resolved. Used to auto-clear a
+        condition that has recovered (e.g. stock replenished above reorder)."""
+        result = await self._session.execute(
+            select(Alert)
+            .where(Alert.status == AlertStatus.ACTIVE)
+            .where(Alert.metadata_payload[DEDUP_KEY].astext == dedup_key)
+        )
+        alerts = list(result.scalars().all())
+        for alert in alerts:
+            alert.status = AlertStatus.RESOLVED
+            alert.resolved_at = datetime.now(UTC)
+            alert.resolution_note = note
+        if alerts:
+            await self._session.commit()
+        return len(alerts)
 
     async def list_alerts(self, status: AlertStatus, limit: int = 50) -> list[Alert]:
         stmt = (

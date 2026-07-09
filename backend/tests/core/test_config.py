@@ -23,7 +23,11 @@ _BOOTSTRAP = "b" * 40  # one-time OWNER bootstrap secret
 
 
 def _settings(**over: object) -> Settings:
-    return Settings(**{**_BASE, **over})  # type: ignore[arg-type]
+    # _env_file=None keeps these tests hermetic: without it pydantic-settings
+    # leaks the repo `.env` (which carries sandbox M-Pesa keys, a real SECRET_KEY,
+    # etc.) into every unset field, making the production-validation assertions
+    # depend on whatever happens to be in `.env`.
+    return Settings(_env_file=None, **{**_BASE, **over})  # type: ignore[arg-type]
 
 
 def test_dev_allows_placeholder_secret() -> None:
@@ -85,3 +89,45 @@ def test_production_rejects_unsafe_config(override: dict) -> None:
     base.update(override)
     with pytest.raises(ValidationError):
         _settings(**base)
+
+
+_PROD_OK = {
+    "ENVIRONMENT": "production",
+    "SECRET_KEY": _STRONG_SECRET,
+    "DEBUG": False,
+    "DATABASE_READONLY_URL": _RO_URL,
+    "METRICS_AUTH_SECRET": _METRICS,
+    "FINGUARD_CA_PRIVATE_KEY_HEX": _CA_KEY,
+    "INITIAL_BOOTSTRAP_KEY": _BOOTSTRAP,
+    "ALLOWED_ORIGINS": ["https://app.finguard.io"],
+}
+
+
+def test_production_mpesa_enabled_requires_callback_allowlist() -> None:
+    """A live M-Pesa deployment must pin the STK callback to Safaricom's IPs —
+    the callback marks invoices paid and is otherwise unauthenticated."""
+    with pytest.raises(ValidationError):
+        _settings(
+            **_PROD_OK,
+            MPESA_CONSUMER_KEY="ck",
+            MPESA_CONSUMER_SECRET="cs",
+            MPESA_SHORTCODE="600000",
+            # MPESA_CALLBACK_ALLOWED_IPS deliberately unset
+        )
+
+
+def test_production_mpesa_with_allowlist_boots() -> None:
+    s = _settings(
+        **_PROD_OK,
+        MPESA_CONSUMER_KEY="ck",
+        MPESA_CONSUMER_SECRET="cs",
+        MPESA_SHORTCODE="600000",
+        MPESA_CALLBACK_ALLOWED_IPS=["196.201.214.0/24"],
+    )
+    assert s.MPESA_CALLBACK_ALLOWED_IPS == ["196.201.214.0/24"]
+
+
+def test_production_without_mpesa_does_not_require_allowlist() -> None:
+    """M-Pesa is optional; a deployment that hasn't configured it needs no allowlist."""
+    s = _settings(**_PROD_OK)
+    assert s.MPESA_CALLBACK_ALLOWED_IPS == []

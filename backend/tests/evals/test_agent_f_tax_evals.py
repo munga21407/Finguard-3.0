@@ -14,20 +14,21 @@ from __future__ import annotations
 
 import pytest
 
-from src.domains.intelligence.agents.f_auditor import (
-    _AML_REPORTING_THRESHOLD,
-    _CIT_RATE,
-    _VAT_RATE,
-    _VAT_THRESHOLD_ANNUAL_KES,
-    _calculate_tax_liability,
-)
+from src.domains.intelligence.agents.f_auditor import _calculate_tax_liability
+from src.domains.intelligence.tuning import AuditorTuning
 from tests.evals.datasets import AML_CASES, TAX_CASES, AmlCase, TaxCase
+
+# Statutory defaults (the tax rates/thresholds were externalised into
+# AuditorTuning in Sprint 1; the golden tests pin the *default* values so a
+# change to them is a deliberate regulatory update, and compute liabilities
+# against those defaults regardless of any env/DB override in the test env).
+_RATES = AuditorTuning()
 
 
 @pytest.mark.parametrize("case", TAX_CASES, ids=lambda c: c.id)
 def test_tax_liability_matches_golden(case: TaxCase) -> None:
     tax_type, liability, etr = _calculate_tax_liability(
-        case.revenue, case.opex, case.tax_regime, case.period_days
+        case.revenue, case.opex, case.tax_regime, case.period_days, _RATES
     )
     assert tax_type == case.expected_type, case.note
     # abs=0.01 (one cent) absorbs float-repr noise from round(_, 2) while still
@@ -38,7 +39,7 @@ def test_tax_liability_matches_golden(case: TaxCase) -> None:
 
 @pytest.mark.parametrize("case", AML_CASES, ids=lambda c: c.id)
 def test_aml_flag_threshold(case: AmlCase) -> None:
-    flag = case.max_single_tx_kes >= _AML_REPORTING_THRESHOLD
+    flag = case.max_single_tx_kes >= _RATES.aml_reporting_threshold_kes
     assert flag is case.expected_flag, case.note
 
 
@@ -46,10 +47,10 @@ def test_regulatory_constants_pinned() -> None:
     """Golden KRA figures — changing one must be a deliberate regulatory update.
 
     This is the test that catches silent drift like the KES 5M-vs-8M VAT
-    threshold: the constants are pinned to their statutory values, so an edit to
-    `f_auditor.py` that diverges fails CI rather than shipping wrong tax math.
+    threshold: the AuditorTuning defaults are pinned to their statutory values, so
+    an edit that diverges fails CI rather than shipping wrong tax math.
     """
-    assert _VAT_RATE == 0.16, "Kenya VAT standard rate is 16%"
-    assert _CIT_RATE == 0.30, "Kenya resident CIT rate is 30%"
-    assert _VAT_THRESHOLD_ANNUAL_KES == 5_000_000.0, "KRA mandatory VAT registration threshold"
-    assert _AML_REPORTING_THRESHOLD == 1_000_000.0, "AML single-transaction reporting threshold"
+    assert _RATES.vat_rate == 0.16, "Kenya VAT standard rate is 16%"
+    assert _RATES.cit_rate == 0.30, "Kenya resident CIT rate is 30%"
+    assert _RATES.vat_threshold_annual_kes == 5_000_000.0, "KRA mandatory VAT registration threshold"
+    assert _RATES.aml_reporting_threshold_kes == 1_000_000.0, "AML single-transaction threshold"

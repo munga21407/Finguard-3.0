@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import operator
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from langchain_core.messages import BaseMessage
@@ -28,6 +28,7 @@ AGENT_NAMES = Literal[
     "h_advisor",
     "i_integrator",
     "j_summarizer",
+    "k_stockkeeper",
     "FINISH",
 ]
 
@@ -100,6 +101,64 @@ class AgentHOutput(BaseModel):
     )
 
 
+class ProposedStockAction(BaseModel):
+    """A structured, human-confirmable stock correction proposed by Agent K.
+
+    All figures (``quantity``, ``resulting_on_hand``) are computed by the
+    deterministic reorder/valuation tools — never invented by the LLM (first
+    principle #4). ``status`` is ``"proposed"`` unless an operator pre-authorised
+    an apply *and* the actor holds ``INTELLIGENCE_ACT`` + inventory-write authority.
+    """
+
+    product_id: str
+    sku: str
+    movement_type: str          # receipt | issue | adjustment | …
+    quantity: float
+    reason: str | None = None
+    rationale: str = ""         # plain-language "why" (LLM narration is separate)
+    resulting_on_hand: float | None = None
+    status: Literal["proposed", "applied", "rejected"] = "proposed"
+    detail: str | None = None   # rejection reason / applied movement id
+
+
+class AgentKOutput(BaseModel):
+    """Structured output for Agent K (Stock Steward).
+
+    The steward returns a conversational ``narrative_response`` grounded in the
+    deterministic stock snapshot (on-hand, valuation, low-stock, reorder points).
+    It narrates and prioritises; it does **not** emit figures — the node attaches
+    the deterministic ``proposed_actions`` itself. Mirrors ``AgentHOutput``.
+    """
+
+    narrative_response: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "The steward's natural-language read on stock health for the SME, in "
+            "Markdown. Always shown to the user; never leave it empty. Do NOT "
+            "invent SKUs, quantities, or values — narrate only the figures given."
+        ),
+    )
+
+
+class AgentActionProposalResponse(BaseModel):
+    """A pending (or decided) agent-proposed action in the HITL approval queue."""
+
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    agent_label: str
+    action_type: str
+    payload: dict[str, Any]
+    status: Literal["proposed", "applied", "rejected"]
+    rationale: str | None = None
+    triggered_by: uuid.UUID | None = None
+    reviewed_by: uuid.UUID | None = None
+    reviewed_at: datetime | None = None
+    applied_ref: str | None = None
+    created_at: datetime
+
+
 class KeyFinding(BaseModel):
     """A single key metric distilled from agent analysis for GenUI metric badges."""
 
@@ -140,6 +199,43 @@ class CompositeGenUIPayload(BaseModel):
         )
 
 
+class AgentHandoff(BaseModel):
+    """Typed provenance envelope an agent's output publishes (A2A P1).
+
+    Additive to the raw ``context[context_key]`` write — the envelope records
+    *which* agent produced *what*, with a ``status`` so a downstream consumer (or
+    the planner / Agent J) can tell an ``ok`` result from a ``degraded`` one
+    without re-deriving it, and ``depends_on`` for lineage. ``payload`` is left
+    empty by default (the data lives in context under ``context_key``); it exists
+    for callers that want to attach a compact provenance snapshot. See
+    docs/A2A_PROTOCOL.md §4.1.
+    """
+
+    agent_id: str
+    context_key: str
+    status: Literal["ok", "degraded", "empty", "error"] = "ok"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    produced_at: str = ""
+    depends_on: list[str] = Field(default_factory=list)
+
+
+def merge_context(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    """Reducer for ``OrchestratorState.context`` — shallow per-key merge, right wins.
+
+    Replaces the default last-write-**replace** channel behaviour so that when
+    several agents run in one parallel stage (A2A P4), each can land *its own*
+    key without clobbering a sibling's write. Given the invariant that every
+    agent writes only the keys it owns (disjoint across agents — see
+    ``agent_registry.write_keys`` and its contract test), this merge is
+    conflict-free and reproduces the old full-dict-carry accumulation while being
+    parallel-safe. See docs/A2A_PROTOCOL.md §4.3.
+
+    Note: a shallow merge cannot *delete* a key — nothing in the graph relies on
+    removing a context key mid-session (agent outputs are write-once).
+    """
+    return {**left, **right}
+
+
 class OrchestratorState(TypedDict):
     """Shared state threaded through every node in the LangGraph.
 
@@ -150,13 +246,20 @@ class OrchestratorState(TypedDict):
     alongside the conversational messages; the operator.add reducer
     appends new payloads without overwriting earlier ones, so the full
     render history is preserved for the session.
+
+    ``context`` uses the :func:`merge_context` reducer (per-key merge) rather
+    than plain replacement, so an agent returns only the keys it owns and the
+    reducer reassembles the accumulated dict — the enabler for parallel fan-out.
     """
 
     messages: Annotated[list[BaseMessage], add_messages]
     gen_ui_payloads: Annotated[list[GenUIPayload], operator.add]
     error_messages: Annotated[list[str], operator.add]
+    # A2A P1 — append-only log of AgentHandoff envelopes (as dicts). operator.add
+    # concatenation is parallel-safe: hub_writer emits each agent's handoff once.
+    handoffs: Annotated[list[dict[str, Any]], operator.add]
     next: str                        # which node the supervisor routes to next
-    context: dict[str, Any]          # arbitrary data accumulated across nodes
+    context: Annotated[dict[str, Any], merge_context]  # accumulated across nodes
     session_id: str
     user_id: str | None
     mode: str                        # "insights" | "actions"
@@ -233,6 +336,8 @@ class OrchestrationResponse(BaseModel):
     answer: str
     agents_invoked: list[str]
     context: dict[str, Any]
+    # A2A P1 — per-agent provenance envelopes accumulated during the run.
+    handoffs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +380,12 @@ class WatchdogAnalysis(BaseModel):
     vc_id: str | None
     event_published: bool
     summary: str
+    # Anomaly-model provenance (Sprint 4 — honesty): "persisted" = the customer's
+    # weekly-retrained IsolationForest; "on_the_fly" = a degraded per-call fit for
+    # a brand-new customer with no persisted model yet. ``degraded`` mirrors this
+    # so the UI can flag a lower-confidence result.
+    isolation_model: str = "persisted"
+    degraded: bool = False
 
     @field_validator("state_probabilities")
     @classmethod
@@ -352,8 +463,61 @@ class AgentGOutput(BaseModel):
     strategic_narrative: str
 
 
+class SummaryBullet(BaseModel):
+    """One executive-summary bullet: a bold label + its plain-language text.
+
+    Structured (Sprint 5) so Agent J no longer parses ``•``/``**`` out of a raw
+    string — the bullet count and labels come straight from this model.
+    """
+
+    label: str
+    text: str
+
+
+class ExecutiveSummary(BaseModel):
+    """Agent J's structured executive summary — 3-5 labelled bullets."""
+
+    bullets: list[SummaryBullet] = []
+
+
+# Base expense taxonomy the receipt scanner may assign — kept aligned with the
+# frontend ReceiptScanner form's <select> so the suggested value is always a
+# valid option the user can accept without re-mapping. Operators may *extend*
+# this set at runtime via the ``receipt`` tuning section (S6-6); use
+# ``effective_receipt_categories()`` — not this constant — anywhere the live set
+# matters. This constant remains the safe fallback if tuning is unavailable.
+RECEIPT_CATEGORIES: tuple[str, ...] = (
+    "supplies",
+    "services",
+    "utilities",
+    "travel",
+    "other",
+)
+
+
+def effective_receipt_categories() -> tuple[str, ...]:
+    """The live receipt taxonomy (config override or the base fallback).
+
+    Reads the ``receipt`` tuning section lazily so this central schema module
+    never imports the tuning layer at load time; any failure degrades to the
+    base :data:`RECEIPT_CATEGORIES`.
+    """
+    try:
+        from src.domains.intelligence.tuning import get_receipt_tuning  # noqa: PLC0415
+
+        cats = get_receipt_tuning().categories
+        return cats or RECEIPT_CATEGORIES
+    except Exception:
+        return RECEIPT_CATEGORIES
+
+
 class ReceiptExtraction(BaseModel):
-    """Structured output from Gemini vision OCR of a receipt image."""
+    """Structured output from Gemini vision OCR of a receipt image.
+
+    ``suggested_category`` is produced by the *same* vision call as the OCR
+    fields (Sprint 3: one Gemini call instead of a second classification call);
+    the validator clamps any off-taxonomy value to ``"other"``.
+    """
 
     merchant_name: str | None = None
     date: str | None = None
@@ -361,7 +525,14 @@ class ReceiptExtraction(BaseModel):
     currency: str = "KES"
     kra_pin: str | None = None
     line_items: list[str] = []
+    suggested_category: str = "other"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @field_validator("suggested_category")
+    @classmethod
+    def _clamp_category(cls, v: str) -> str:
+        candidate = (v or "other").strip().lower()
+        return candidate if candidate in effective_receipt_categories() else "other"
 
 
 class TransactionClassification(BaseModel):
@@ -602,3 +773,44 @@ class KnowledgeIngestResponse(BaseModel):
     chunks: int
     inserted: int
     skipped: int
+
+
+# ── Admin: agent tuning + effective-dated tax rates ────────────────────────────
+
+class AgentTuningView(BaseModel):
+    """Effective (env > DB > default) tuning for each agent section — read-only view."""
+
+    reconciler: dict[str, Any]
+    watchdog: dict[str, Any]
+    auditor: dict[str, Any]
+    bankability: dict[str, Any]
+    classifier: dict[str, Any]
+    receipt: dict[str, Any]
+
+
+class AgentTuningSectionUpdate(BaseModel):
+    """Partial override payload for one tuning section (agent_config row)."""
+
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminTuningActionResponse(BaseModel):
+    """Result of an admin tuning / tax-rate mutation."""
+
+    target: str
+    status: str
+
+
+class TaxRateUpsert(BaseModel):
+    """Set/replace an effective-dated tax rate for Agent F."""
+
+    rate: float = Field(..., ge=0.0)
+    effective_from: date
+    note: str | None = Field(default=None, max_length=512)
+
+
+class TaxRateView(BaseModel):
+    rate_key: str
+    rate: float
+    effective_from: date
+    note: str | None = None

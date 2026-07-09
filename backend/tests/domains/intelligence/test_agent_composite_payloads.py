@@ -267,6 +267,21 @@ class TestAgentEWatchdog:
         )
 
     @pytest.mark.asyncio
+    async def test_surfaces_degraded_flag_for_new_customer(self) -> None:
+        """S4-5: a run with no persisted model is flagged as degraded/on-the-fly."""
+        from src.domains.intelligence.agents.e_watchdog import make_e_watchdog_node
+
+        with self._watchdog_patches():
+            result = await make_e_watchdog_node()(_make_state())
+
+        props = result["gen_ui_payloads"][0].props
+        assert props["degraded"] is True
+        assert props["isolation_model"] == "on_the_fly"
+        analysis = result["context"]["watchdog_analysis"]
+        assert analysis["degraded"] is True
+        assert analysis["isolation_model"] == "on_the_fly"
+
+    @pytest.mark.asyncio
     async def test_deterministic_props_independent_of_llm(self) -> None:
         """IsolationForest score and HMM state must live in props regardless of LLM output."""
         from src.domains.intelligence.agents.e_watchdog import make_e_watchdog_node

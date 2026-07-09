@@ -38,21 +38,26 @@ export const ENDPOINTS = {
     PAYABLE_SCHEDULE: (id: string) => `/api/v1/finance/payables/${id}/schedule`,
   },
 
-  // Inventory / stock management
-  INVENTORY: {
-    PRODUCTS: "/api/v1/inventory/products",
-    PRODUCT: (id: string) => `/api/v1/inventory/products/${id}`,
-    PRODUCT_MOVEMENTS: (id: string) => `/api/v1/inventory/products/${id}/movements`,
-    PRODUCT_ADJUST: (id: string) => `/api/v1/inventory/products/${id}/adjust`,
-    LEVELS: "/api/v1/inventory/levels",
-    VALUATION_REPORT: "/api/v1/inventory/reports/valuation",
-    LOW_STOCK_REPORT: "/api/v1/inventory/reports/low-stock",
-  },
-
   // CRM
   CRM: {
     CUSTOMERS: "/api/v1/crm/customers",
     CUSTOMER: (id: string) => `/api/v1/crm/customers/${id}`,
+  },
+
+  // Inventory
+  INVENTORY: {
+    PRODUCTS: "/api/v1/inventory/products",
+    PRODUCT: (id: string) => `/api/v1/inventory/products/${id}`,
+    STOCK: (id: string) => `/api/v1/inventory/products/${id}/stock`,
+    MOVEMENTS: (id: string) => `/api/v1/inventory/products/${id}/movements`,
+    ADJUST: (id: string) => `/api/v1/inventory/products/${id}/adjust`,
+    PRODUCT_MOVEMENTS: (id: string) => `/api/v1/inventory/products/${id}/movements`,
+    PRODUCT_ADJUST: (id: string) => `/api/v1/inventory/products/${id}/adjust`,
+    LEVELS: "/api/v1/inventory/levels",
+    VALUATION: "/api/v1/inventory/reports/valuation",
+    LOW_STOCK: "/api/v1/inventory/reports/low-stock",
+    VALUATION_REPORT: "/api/v1/inventory/reports/valuation",
+    LOW_STOCK_REPORT: "/api/v1/inventory/reports/low-stock",
   },
 
   // Health (unauthenticated; not under /api/v1)
@@ -75,6 +80,10 @@ export const ENDPOINTS = {
     CONVERSATION_STATUS: (sessionId: string) =>
       `/api/v1/intelligence/conversation/${sessionId}/status`,
     GENUI_ERROR: "/api/v1/intelligence/genui/error",
+    // Human-in-the-loop approval queue for value-changing agent actions.
+    PROPOSALS: "/api/v1/intelligence/proposals",
+    PROPOSAL_APPROVE: (id: string) => `/api/v1/intelligence/proposals/${id}/approve`,
+    PROPOSAL_REJECT: (id: string) => `/api/v1/intelligence/proposals/${id}/reject`,
     // Admin: upload a KRA regulatory doc into the Tax RAG knowledge base.
     KB_INGEST: "/api/v1/intelligence/admin/knowledge-base/ingest",
   },

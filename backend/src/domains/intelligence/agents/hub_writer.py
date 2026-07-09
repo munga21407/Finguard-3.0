@@ -1,10 +1,14 @@
 """
 Hub Writer node — MongoDB intelligence_hub upsert.
 
-Reads the agent output from `state["context"]`, wraps it in an
-InsightArtifact, and upserts it into the `intelligence_hub` collection.
-The document key is `"<agent_id>:<intent>"` so repeated invocations
-refresh the cached artifact rather than creating duplicates.
+Reads every agent output present in `state["context"]`, wraps each in an
+InsightArtifact, and upserts them into the `intelligence_hub` collection.
+The document key is `"<agent_id>:<intent>"` so repeated invocations refresh the
+cached artifact rather than creating duplicates.
+
+Which context keys map to which agent/intent/TTL is defined once, declaratively,
+in `agent_registry.AGENT_REGISTRY` — this node just iterates it, so adding an
+agent requires no edit here.
 
 GenUI payloads from `state["gen_ui_payloads"]` are persisted separately
 under the key `"genui:<session_id>:<component_id>"` with a 1-hour TTL.
@@ -12,10 +16,11 @@ under the key `"genui:<session_id>:<component_id>"` with a 1-hour TTL.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from src.core.logging import logger
 from src.core.metrics import HUB_WRITE_ERRORS
+from src.domains.intelligence.agent_registry import make_handoff, resolve_artifacts
 from src.domains.intelligence.schemas import (
     GenUIArtifact,
     GenUIPayload,
@@ -26,101 +31,48 @@ from src.infrastructure.database.mongodb import get_mongo_db
 
 COLLECTION = "intelligence_hub"
 
-# Per-agent TTL mappings (Sprint 3-5 confirmed values)
-_AGENT_TTL_HOURS: dict[str, int] = {
-    "A": 1,    # Invoice Generator
-    "B": 1,    # Transaction Classifier
-    "C": 0,    # Reconciler — 10 min (see _AGENT_TTL_MINUTES)
-    "D": 1,    # Cash-Flow Forecaster
-    "E": 0,    # Budget Watchdog — 30 min (see _AGENT_TTL_MINUTES)
-    "F": 24,   # Tax Auditor
-    "G": 24,   # Credit Strategist
-    "H": 1,    # Financial Advisor
-    "I": 1,    # External Integrator — FX / credit / KRA data stale after 1 h
-    "J": 0,    # Executive Summarizer — 30 min (see _AGENT_TTL_MINUTES)
-}
-_AGENT_TTL_MINUTES: dict[str, int] = {
-    "C": 10,   # Reconciler
-    "E": 30,   # Budget Watchdog
-    "J": 30,   # Executive Summarizer
-}
-
 # GenUI payloads are session-scoped UI state; 1 h matches the shortest agent TTL
 _GENUI_TTL_HOURS = 1
 
 
-def _ttl_delta(agent_id: str) -> timedelta:
-    if agent_id in _AGENT_TTL_MINUTES:
-        return timedelta(minutes=_AGENT_TTL_MINUTES[agent_id])
-    hours = _AGENT_TTL_HOURS.get(agent_id, 1)
-    return timedelta(hours=hours)
+async def _persist_insight(
+    db: Any,
+    agent_id: str,
+    intent: str,
+    payload: dict[str, Any],
+    ttl_expires_at: datetime,
+    now: datetime,
+    session_id: str,
+) -> str | None:
+    """Upsert one InsightArtifact; return its ``_id`` or None on failure."""
+    artifact = InsightArtifact(
+        agent_id=agent_id,
+        intent=intent,
+        payload=payload,
+        ttl_expires_at=ttl_expires_at,
+        created_at=now,
+    )
+    doc: dict[str, Any] = artifact.model_dump()
+    doc["_id"] = f"{agent_id}:{intent}"          # idempotent compound key
+    doc["type"] = "insight"
+    doc["ttl_expires_at"] = doc["ttl_expires_at"].isoformat()
+    doc["created_at"] = doc["created_at"].isoformat()
 
-
-def _extract_payload_and_intent(context: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
-    """
-    Inspect the context dict and return (agent_id, intent, payload).
-    Returns None if no recognisable agent output is found.
-
-    Priority order reflects downstream dependency: most-recently-written
-    agent keys are checked first so the correct artifact is written when
-    hub_writer is called immediately after a specific agent.
-    """
-    # J — Executive Summarizer (final step, always last)
-    if "executive_summary" in context:
-        summary = context["executive_summary"]
-        payload: dict[str, Any] = (
-            {"summary": summary} if isinstance(summary, str) else summary
+    try:
+        await db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    except Exception as exc:
+        HUB_WRITE_ERRORS.inc()
+        logger.error(
+            "hub_writer: MongoDB upsert failed — artifact NOT persisted",
+            artifact_id=doc["_id"],
+            agent_id=agent_id,
+            intent=intent,
+            session_id=session_id,
+            error=str(exc),
+            exc_info=True,
         )
-        return ("J", "EXECUTIVE_SUMMARY", payload)
-
-    # H — Financial Advisor
-    if "advice" in context:
-        return ("H", "ADVISORY_REQUEST", context["advice"])
-
-    # G — Credit Strategist (include PDF/Excel exports when present)
-    if "credit_strategy_result" in context:
-        g_payload = dict(context["credit_strategy_result"])
-        if "credit_report_pdf_b64" in context:
-            g_payload["pdf_export_b64"] = context["credit_report_pdf_b64"]
-        if "credit_forecast_xlsx_b64" in context:
-            g_payload["xlsx_export_b64"] = context["credit_forecast_xlsx_b64"]
-        return ("G", "REPORT_GENERATION", g_payload)
-
-    # F — Tax Auditor
-    if "audit_result" in context:
-        return ("F", "AUDIT_REQUEST", context["audit_result"])
-
-    # D — Cash-Flow Forecaster
-    if "forecast" in context:
-        fc = context["forecast"]
-        return ("D", "CASH_FLOW_FORECAST", fc if isinstance(fc, dict) else {"data": fc})
-
-    # E — Budget Watchdog
-    if "watchdog_analysis" in context:
-        return ("E", "BUDGET_WATCHDOG", context["watchdog_analysis"])
-
-    # C — Reconciler
-    if "reconciliation_report" in context:
-        rr = context["reconciliation_report"]
-        return (
-            "C",
-            "RECONCILIATION",
-            rr if isinstance(rr, dict) else {"report": str(rr)},
-        )
-
-    # I — External Integrator
-    if "external_data" in context:
-        return ("I", "EXTERNAL_SYNC", context["external_data"])
-
-    # A — Invoice Generator
-    if "extracted_invoice" in context:
-        return ("A", "GENERATE_INVOICE", context["extracted_invoice"])
-
-    # B — Transaction Classifier
-    if "classified_transactions" in context:
-        return ("B", "CLASSIFY_TRANSACTIONS", context["classified_transactions"])
-
-    return None
+        return None
+    return str(doc["_id"])
 
 
 async def _persist_gen_ui_payloads(
@@ -193,8 +145,11 @@ def make_hub_writer_node() -> Any:
                 )
 
         # --- Agent insight artifacts ----------------------------------------
-        result = _extract_payload_and_intent(state["context"])
-        if result is None:
+        # Every present agent output is persisted (not just the top-priority one);
+        # the registry yields them highest-priority first, so the first written id
+        # preserves the legacy ``hub_artifact_id`` semantics.
+        artifacts = resolve_artifacts(state["context"])
+        if not artifacts:
             if not gen_ui_payloads:
                 logger.warning(
                     "hub_writer: no recognizable agent key in context and no "
@@ -203,39 +158,36 @@ def make_hub_writer_node() -> Any:
                 )
             return {"context": updated_context}
 
-        agent_id, intent, payload = result
+        # A2A P1 — emit a typed provenance handoff the first time each agent's
+        # output appears (dedup via _handed_off so re-runs of hub_writer across
+        # planner stages don't re-emit). ``degraded`` is inferred from the output
+        # payload (e.g. Agent E's watchdog_analysis.degraded).
+        handed_off: set[str] = set(state["context"].get("_handed_off") or [])
+        new_handoffs: list[dict[str, Any]] = []
 
-        artifact = InsightArtifact(
-            agent_id=agent_id,
-            intent=intent,
-            payload=payload,
-            ttl_expires_at=now + _ttl_delta(agent_id),
-            created_at=now,
-        )
-
-        doc: dict[str, Any] = artifact.model_dump()
-        doc["_id"] = f"{agent_id}:{intent}"          # idempotent compound key
-        doc["type"] = "insight"
-        doc["ttl_expires_at"] = doc["ttl_expires_at"].isoformat()
-        doc["created_at"] = doc["created_at"].isoformat()
-
-        try:
-            await db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
-        except Exception as exc:
-            HUB_WRITE_ERRORS.inc()
-            logger.error(
-                "hub_writer: MongoDB upsert failed — artifact NOT persisted",
-                artifact_id=doc["_id"],
-                agent_id=agent_id,
-                intent=intent,
-                session_id=session_id,
-                error=str(exc),
-                exc_info=True,
+        insight_ids: list[str] = []
+        for art in artifacts:
+            artifact_id = await _persist_insight(
+                db, art.agent_id, art.intent, art.payload,
+                now + art.ttl, now, session_id,
             )
-            # Return whatever context we've accumulated (may include GenUI IDs)
-            return {"context": updated_context}
+            if artifact_id is not None:
+                insight_ids.append(artifact_id)
+            if art.agent_id not in handed_off:
+                status: Literal["ok", "degraded", "empty", "error"] = (
+                    "degraded" if bool(art.payload.get("degraded")) else "ok"
+                )
+                new_handoffs.append(make_handoff(art.agent_id, status=status))
+                handed_off.add(art.agent_id)
 
-        updated_context["hub_artifact_id"] = doc["_id"]
-        return {"context": updated_context}
+        if insight_ids:
+            updated_context["hub_artifact_id"] = insight_ids[0]   # highest priority
+            updated_context["hub_artifact_ids"] = insight_ids
+        updated_context["_handed_off"] = sorted(handed_off)
+
+        result: dict[str, Any] = {"context": updated_context}
+        if new_handoffs:
+            result["handoffs"] = new_handoffs
+        return result
 
     return hub_writer_node

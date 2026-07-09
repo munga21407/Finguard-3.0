@@ -24,6 +24,7 @@ from src.domains.finance.schemas import (
     ExpenseResponse,
     FinancialReport,
     InvoiceCancelRequest,
+    InvoiceCogsResponse,
     InvoiceCreate,
     InvoiceEventResponse,
     InvoiceReconstructionResponse,
@@ -43,12 +44,15 @@ from src.domains.finance.schemas import (
     ReconciliationFlowResponse,
     ReportCatalogResponse,
     ReportType,
+    StockPurchaseCreate,
+    StockPurchaseResponse,
     VaultBalancesResponse,
     VaultTransferCreate,
     VaultTransferResponse,
 )
 from src.domains.finance.service import FinanceService
 from src.domains.identity.dependencies import (
+    RequireFinanceApprove,
     RequireFinanceRead,
     RequireFinanceReconcile,
     RequireFinanceWrite,
@@ -162,6 +166,7 @@ async def verify_mpesa_signature(
 
 # ── Ledger ────────────────────────────────────────────────────────────────────
 
+
 @router.post("/ledger", response_model=LedgerEntryResponse, status_code=201)
 async def post_ledger_entry(
     data: LedgerEntryCreate, db: DBSession, _: RequireFinanceWrite
@@ -171,6 +176,7 @@ async def post_ledger_entry(
 
 
 # ── Invoices ──────────────────────────────────────────────────────────────────
+
 
 @router.get("/invoices", response_model=list[InvoiceResponse])
 async def list_invoices(
@@ -285,9 +291,7 @@ async def cancel_invoice(
 ) -> InvoiceResponse:
     """Void an uncollectable invoice (terminal, event-sourced)."""
     body = data or InvoiceCancelRequest()
-    invoice = await FinanceService(db).cancel_invoice(
-        invoice_id, current_user, reason=body.reason
-    )
+    invoice = await FinanceService(db).cancel_invoice(invoice_id, current_user, reason=body.reason)
     result = InvoiceResponse.model_validate(invoice)
     await AuditService(db).record_user_action_safe(
         current_user,
@@ -345,10 +349,9 @@ async def reconstruct_invoice(
 
 # ── Reconciliation ────────────────────────────────────────────────────────────
 
+
 @router.get("/reconciliation-flow", response_model=ReconciliationFlowResponse)
-async def reconciliation_flow(
-    db: DBSession, _: RequireFinanceRead
-) -> ReconciliationFlowResponse:
+async def reconciliation_flow(db: DBSession, _: RequireFinanceRead) -> ReconciliationFlowResponse:
     """Invoice-lifecycle → settlement-rail Sankey for the Overview dashboard.
 
     Stage 1 (Total Billed) → Stage 2 (current invoice status, the projection of
@@ -451,6 +454,7 @@ async def reject_bank_statement_line(
 
 # ── Vault transfers + balances (treasury) ─────────────────────────────────────
 
+
 @router.get("/vault-balances", response_model=VaultBalancesResponse)
 async def vault_balances(db: DBSession, _: RequireFinanceRead) -> VaultBalancesResponse:
     """Live balance of each vault (M-Pesa / Cash / Bank) and the total cash position.
@@ -486,6 +490,7 @@ async def list_vault_transfers(
 
 
 # ── Expenses ──────────────────────────────────────────────────────────────────
+
 
 @router.post("/expenses", response_model=ExpenseResponse, status_code=201)
 async def create_expense(
@@ -529,7 +534,49 @@ async def create_receipt_expense(
     return ExpenseResponse.model_validate(expense)
 
 
+@router.post("/expenses/stock-purchase", response_model=StockPurchaseResponse, status_code=201)
+async def create_stock_purchase(
+    data: StockPurchaseCreate, db: DBSession, current_user: RequireFinanceWrite
+) -> StockPurchaseResponse:
+    """Book a stock purchase: one expense + one inventory RECEIPT in a single
+    atomic commit (the finance ↔ inventory purchase seam)."""
+    expense, movement = await FinanceService(db).create_stock_purchase(
+        data, actor_id=current_user.id
+    )
+    result = StockPurchaseResponse(
+        expense=ExpenseResponse.model_validate(expense),
+        product_id=data.product_id,
+        movement_id=movement.id,
+        quantity=movement.quantity,
+        balance_after=movement.balance_after,
+    )
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.EXPENSE_CREATED,
+        "expense",
+        resource_id=expense.id,
+        metadata={
+            "category": expense.category,
+            "amount": str(expense.amount),
+            "product_id": str(data.product_id),
+            "stock_movement_id": str(movement.id),
+        },
+    )
+    return result
+
+
+@router.get("/invoices/{invoice_id}/cogs", response_model=InvoiceCogsResponse)
+async def invoice_cogs(
+    invoice_id: uuid.UUID, db: DBSession, _: RequireFinanceRead
+) -> InvoiceCogsResponse:
+    """Cost of goods sold for an invoice's tracked sales — read from inventory's
+    weighted-average cost (finance → inventory read seam)."""
+    cogs = await FinanceService(db).cogs_for_invoice(invoice_id)
+    return InvoiceCogsResponse(invoice_id=invoice_id, cogs=cogs)
+
+
 # ── Accounts payable (approval workflow) ──────────────────────────────────────
+
 
 @router.get("/payables/queue", response_model=PayableQueueResponse)
 async def payable_queue(
@@ -560,7 +607,7 @@ async def create_payable(
 
 @router.post("/payables/{payable_id}/approve", response_model=PayableResponse)
 async def approve_payable(
-    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceApprove
 ) -> PayableResponse:
     """Approve a pending payable (reviewer must differ from submitter)."""
     expense = await FinanceService(db).transition_payable(
@@ -579,7 +626,7 @@ async def approve_payable(
 
 @router.post("/payables/{payable_id}/reject", response_model=PayableResponse)
 async def reject_payable(
-    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceApprove
 ) -> PayableResponse:
     """Reject a pending payable (reviewer must differ from submitter)."""
     expense = await FinanceService(db).transition_payable(
@@ -600,7 +647,7 @@ async def reject_payable(
 async def schedule_payable(
     payable_id: uuid.UUID,
     db: DBSession,
-    current_user: RequireFinanceReconcile,
+    current_user: RequireFinanceApprove,
     data: PayableScheduleRequest | None = None,
 ) -> PayableResponse:
     """Schedule an approved payable for payment."""
@@ -618,9 +665,7 @@ async def schedule_payable(
         "payable",
         resource_id=expense.id,
         metadata={
-            "scheduled_for": expense.scheduled_for.isoformat()
-            if expense.scheduled_for
-            else None
+            "scheduled_for": expense.scheduled_for.isoformat() if expense.scheduled_for else None
         },
     )
     return result
@@ -628,14 +673,13 @@ async def schedule_payable(
 
 # ── M-Pesa ────────────────────────────────────────────────────────────────────
 
+
 @router.post(
     "/mpesa/callback",
     status_code=200,
     dependencies=[Depends(verify_mpesa_signature)],
 )
-async def mpesa_callback(
-    payload: MpesaCallbackPayload, db: DBSession
-) -> dict[str, Any]:
+async def mpesa_callback(payload: MpesaCallbackPayload, db: DBSession) -> dict[str, Any]:
     """
     Daraja STK Push callback endpoint.
     HMAC-SHA256 signature is verified by the verify_mpesa_signature dependency
@@ -654,6 +698,7 @@ async def mpesa_callback(
 
 
 # ── Cash Payments ─────────────────────────────────────────────────────────────
+
 
 @router.post("/payments/cash", response_model=PaymentResponse, status_code=201)
 async def record_cash_payment(
@@ -678,6 +723,7 @@ async def record_cash_payment(
 
 
 # ── Budgets ───────────────────────────────────────────────────────────────────
+
 
 @router.post("/budgets", response_model=BudgetResponse, status_code=201)
 async def create_budget(

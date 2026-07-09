@@ -12,6 +12,7 @@ celery_app = Celery(
         "src.workers.tasks.batch",
         "src.workers.tasks.reporting_tasks",
         "src.workers.tasks.dlq_tasks",
+        "src.workers.tasks.email_tasks",
     ],
 )
 
@@ -29,6 +30,7 @@ celery_app.conf.update(
         "batch.*":     {"queue": "batch_processing"},
         "watchdog.*":  {"queue": "watchdog"},
         "reporting.*": {"queue": "batch_processing"},
+        "email.*":     {"queue": "notifications"},
     },
     beat_schedule={
         "classify-unclassified-ledger-entries": {
@@ -65,6 +67,12 @@ celery_app.conf.update(
             # same low-traffic window.  Re-fits each customer's Agent E
             # IsolationForest from the trailing 90 days of categorized debits.
             "schedule": crontab(hour=3, minute=0, day_of_week="sunday"),
+        },
+        "flush-email-outbox": {
+            "task": "email.flush_outbox",
+            # Drain the transactional email outbox; cadence is operator-tunable via
+            # EMAIL_POLL_INTERVAL (default 60s).
+            "schedule": settings.EMAIL_POLL_INTERVAL,
         },
     },
 )

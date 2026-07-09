@@ -1,0 +1,4 @@
+Pipeline smoke test
+
+Hello {{ name | default("there") }} — this is the Finguard email pipeline
+confirming that rendering and delivery work end to end.

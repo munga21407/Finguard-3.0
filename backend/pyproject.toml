@@ -19,6 +19,9 @@ dependencies = [
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.9",
+    # Transactional email (Gmail SMTP) + templating
+    "aiosmtplib>=3.0.0",
+    "jinja2>=3.1.0",
     # Background tasks
     "celery[redis]>=5.4.0",
     # ML / anomaly detection + forecasting
@@ -125,6 +128,21 @@ filterwarnings = [
     # passlib imports the deprecated `crypt` stdlib module at the module level;
     # the library is unmaintained and has no fix for Python 3.12+.
     "ignore::DeprecationWarning:passlib",
+    # pytest-asyncio runs each test in its own event loop, so async resources
+    # (asyncpg connections, sockets, selector transports) that are GC'd after
+    # their loop has closed emit teardown warnings — "coroutine 'Connection._cancel'
+    # was never awaited", "Exception ignored in <socket.socket ...:5432>",
+    # "_SelectorTransport.__del__", etc. pytest surfaces these as unraisable-
+    # exception warnings, which `error` was escalating into spurious, flaky
+    # (GC-timing dependent) cross-domain failures. They are benign test-teardown
+    # noise, never product issues, so ignore the whole class.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+    # joblib reconstructs pickled sklearn arrays (Agent E IsolationForest) by
+    # assigning to ndarray.shape, which NumPy 2.5 deprecated. The warning is raised
+    # from within joblib's unpickler on a dependency we don't control; message-match
+    # (not module) so it's caught regardless of the emitting frame. Remove when
+    # joblib ships a NumPy-2.5-clean release.
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
 ]
 
 [tool.coverage.run]

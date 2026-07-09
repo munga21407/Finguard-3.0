@@ -23,38 +23,17 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from src.core.logging import logger
-from src.domains.intelligence.llm_client import generate_text_content
-from src.domains.intelligence.schemas import OrchestratorState, ReceiptExtraction
+from src.domains.intelligence.schemas import (
+    RECEIPT_CATEGORIES,
+    OrchestratorState,
+    ReceiptExtraction,
+    effective_receipt_categories,
+)
 from src.domains.intelligence.tools.vision_ocr import extract_receipt
 
-# Expense categories the scanner may assign.  Kept intentionally small and
-# aligned with the frontend ReceiptScanner form's <select> so the suggested
-# value is always a valid option the user can accept without re-mapping.
-RECEIPT_CATEGORIES: tuple[str, ...] = (
-    "supplies",
-    "services",
-    "utilities",
-    "travel",
-    "other",
-)
-
-_CLASSIFIER_PROMPT = """\
-You are categorising a business expense for a Kenyan SME.
-
-Receipt details:
-  merchant: {merchant}
-  line items: {items}
-  total: {total} {currency}
-
-Choose the single best category from this exact list:
-  supplies   — physical goods, stock, hardware, stationery
-  services   — professional/contracted services, software subscriptions, repairs
-  utilities  — electricity, water, internet, airtime, rent
-  travel     — fuel, fares, lodging, per-diem
-  other      — anything that does not clearly fit the above
-
-Respond with ONLY the category word in lowercase.
-"""
+# ``RECEIPT_CATEGORIES`` is re-exported from schemas (single source of truth,
+# also used by the vision prompt) — kept importable here for back-compat.
+__all__ = ["RECEIPT_CATEGORIES", "make_receipt_classifier_node", "make_receipt_ocr_node"]
 
 
 # ── Node 1: OCR ───────────────────────────────────────────────────────────────
@@ -114,30 +93,21 @@ def make_receipt_ocr_node() -> Any:
 # ── Node 2: categorisation ────────────────────────────────────────────────────
 
 def make_receipt_classifier_node() -> Any:
-    """Suggest an expense category from the OCR'd receipt fields."""
+    """Surface the expense category already produced by the OCR vision call.
+
+    Sprint 3: categorisation is now a field of the single ``extract_receipt``
+    vision call, so this node makes **no** LLM call — it just reads
+    ``suggested_category`` off the extraction, clamps it to the allowed set
+    (defence in depth; the schema validator already does this), and publishes it
+    to ``context["suggested_category"]`` for the HTTP layer / form.
+    """
 
     async def receipt_classifier_node(state: OrchestratorState) -> dict[str, Any]:
         context = dict(state["context"])
         raw = context.get("receipt_extraction") or {}
 
-        merchant = raw.get("merchant_name") or "unknown"
-        items = ", ".join(raw.get("line_items") or []) or "n/a"
-        total = raw.get("total_amount") or 0
-        currency = raw.get("currency") or "KES"
-
-        suggested = "other"
-        try:
-            response_text = await generate_text_content(
-                _CLASSIFIER_PROMPT.format(
-                    merchant=merchant, items=items, total=total, currency=currency
-                ),
-                temperature=0.0,
-            )
-            candidate = response_text.strip().lower()
-            # Guard: only accept a value from the allowed set; default otherwise.
-            suggested = candidate if candidate in RECEIPT_CATEGORIES else "other"
-        except Exception as exc:  # noqa: BLE001 — categorisation is best-effort
-            logger.warning("receipt_classifier: classification failed", error=str(exc))
+        candidate = str(raw.get("suggested_category") or "other").strip().lower()
+        suggested = candidate if candidate in effective_receipt_categories() else "other"
 
         context["suggested_category"] = suggested
         return {
