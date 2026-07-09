@@ -19,6 +19,9 @@ dependencies = [
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.9",
+    # Transactional email (Gmail SMTP) + templating
+    "aiosmtplib>=3.0.0",
+    "jinja2>=3.1.0",
     # Background tasks
     "celery[redis]>=5.4.0",
     # ML / anomaly detection + forecasting
@@ -134,6 +137,12 @@ filterwarnings = [
     # (GC-timing dependent) cross-domain failures. They are benign test-teardown
     # noise, never product issues, so ignore the whole class.
     "ignore::pytest.PytestUnraisableExceptionWarning",
+    # joblib reconstructs pickled sklearn arrays (Agent E IsolationForest) by
+    # assigning to ndarray.shape, which NumPy 2.5 deprecated. The warning is raised
+    # from within joblib's unpickler on a dependency we don't control; message-match
+    # (not module) so it's caught regardless of the emitting frame. Remove when
+    # joblib ships a NumPy-2.5-clean release.
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
 ]
 
 [tool.coverage.run]

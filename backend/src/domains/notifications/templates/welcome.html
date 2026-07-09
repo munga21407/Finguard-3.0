@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 style="margin:0 0 12px; font-size:20px; color:#1f2933;">Welcome to Finguard{% if full_name %}, {{ full_name }}{% endif %}</h1>
+{% if is_verified %}
+<p style="margin:0 0 16px; font-size:15px; line-height:1.5;">
+  Your account is active. You can sign in and start managing your finances,
+  invoices, and inventory right away.
+</p>
+{% else %}
+<p style="margin:0 0 16px; font-size:15px; line-height:1.5;">
+  Thanks for registering. Your account has been created and is <strong>pending
+  approval</strong> by an administrator — you'll receive a confirmation email as
+  soon as it's activated.
+</p>
+{% endif %}
+{% endblock %}

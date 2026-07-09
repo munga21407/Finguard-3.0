@@ -675,6 +675,20 @@ finguard.agent_e_models (              -- serialized per-customer IsolationFores
   version         INT DEFAULT 1,     -- bumped on each retrain upsert
   trained_at      TIMESTAMPTZ
 )
+
+agent_action_proposals (              -- human-in-the-loop queue for value-changing agent actions (mig 0020)
+  id              UUID PK,
+  agent_label     VARCHAR(50),       -- the maker (e.g. 'k_stockkeeper')
+  action_type     VARCHAR(40) (indexed), -- '<domain>.<verb>', e.g. 'stock.adjustment' → selects approval permission
+  payload         JSONB,             -- exact tool args to replay the guarded write on approval
+  status          VARCHAR(20) (indexed), -- proposed → applied | rejected (claim-first exactly-once)
+  rationale       TEXT,
+  triggered_by    UUID,              -- the human who ran the agent (requester); strict SoD: cannot self-approve
+  reviewed_by     UUID,              -- the human who released it (the checker)
+  reviewed_at     TIMESTAMPTZ,
+  applied_ref     VARCHAR(100),      -- resulting movement/expense id once applied
+  created_at      TIMESTAMPTZ (indexed)
+)
 ```
 
 ### PostgreSQL — Audit Domain
@@ -736,7 +750,7 @@ Agent E's findings reach this table via the watchdog consumer (`workers/consumer
 
 All agents are LangGraph nodes. They receive `OrchestratorState`, perform their task, update `state["context"]`, and return to the supervisor unconditionally. Every result is written to `intelligence_hub` by `hub_writer_node`.
 
-**Implementation Status**: ✅ Complete — all 10 agents are fully implemented.
+**Implementation Status**: ✅ Complete — all 11 agents (A–K) are fully implemented. Agent K (Stock Steward) operates over the inventory domain and is the first agent whose value-changing writes go through the human-in-the-loop approval queue (see Agent K below and §8 `/proposals`).
 
 ### GenUI Payload Contract
 
@@ -912,6 +926,20 @@ class CompositeGenUIPayload(BaseModel):
 
 ---
 
+### Agent K — Stock Steward ✅
+
+| Field | Value |
+|---|---|
+| File | `agents/k_stockkeeper.py` |
+| Domain | Inventory (products, stock levels, append-only movement ledger) |
+| Trigger | Inventory / stock-health intents |
+| Context key written | `stock_steward` (narrative + `proposed_actions`, `can_act`) |
+| Tools | Typed inventory tools; the **only** write path is `propose_stock_movement`, which routes through `InventoryService` (row lock, non-negative guard, weighted-avg costing, agent-attributed audit) — never LLM-authored SQL |
+| A2A | Soft-consumes Agent D's cash-flow forecast when present (advisory only) |
+| Human-in-the-loop | A stock **ADJUSTMENT** (creates/destroys stock) is never applied inline — it is persisted to `agent_action_proposals` at `proposed` for a second human holding `inventory:adjust` to release via `/proposals/{id}/approve`. Routine receipts/issues keep the inline path. Segregation of duties (requester ≠ approver) + exactly-once apply (claim-first) enforced in `ProposalService` |
+
+---
+
 ### Hub Writer ✅
 
 | Field | Value |
@@ -1052,9 +1080,9 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/receipts` | `finance:write` | Persist a reviewed receipt scan as an expense (budget burn-down + `expenses.created`) |
 | GET | `/payables/queue` | `finance:read` | AP approval queue (pending/scheduled payables) |
 | POST | `/payables` | `finance:write` | Create a payable (maker) |
-| POST | `/payables/{id}/approve` | `finance:reconcile` | Approve a payable (checker; triggers deferred budget burn-down) |
-| POST | `/payables/{id}/reject` | `finance:reconcile` | Reject a payable (checker) |
-| POST | `/payables/{id}/schedule` | `finance:reconcile` | Schedule an approved payable for a payment run |
+| POST | `/payables/{id}/approve` | `finance:approve` | Approve a payable (checker; triggers deferred budget burn-down). Submitter ≠ approver enforced in service |
+| POST | `/payables/{id}/reject` | `finance:approve` | Reject a payable (checker) |
+| POST | `/payables/{id}/schedule` | `finance:approve` | Schedule an approved payable for a payment run |
 | GET | `/reconciliation-flow` | `finance:read` | Reconciliation flow summary (bank-line ↔ ledger state) |
 | POST | `/bank-statements` | `finance:reconcile` | Import bank statement lines (idempotent + provenance) |
 | GET | `/bank-statements` | `finance:read` | List imported bank statement lines |
@@ -1080,6 +1108,9 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | GET | `/conversation/{session_id}/status` | `intelligence:read` | Owner-verified status poll |
 | POST | `/admin/knowledge-base/ingest` | `user:manage` | Upload a `.txt`/`.md` KRA document; chunked + Gemini-embedded into the pgvector KB (idempotent upsert — same code path as `scripts.ingest_kra_docs`) |
 | POST | `/genui/error` | `intelligence:read` | GenUI error-boundary telemetry sink (frontend reports a crashed widget; returns 202) |
+| GET | `/proposals` | `intelligence:read` | Human-in-the-loop queue: value-changing agent actions awaiting release (currently Agent K stock adjustments) |
+| POST | `/proposals/{id}/approve` | `inventory:adjust` | Release a pending agent proposal — applies the write exactly once (claim-first). Requester ≠ approver enforced in service |
+| POST | `/proposals/{id}/reject` | `inventory:adjust` | Reject a pending agent proposal (no write) |
 
 ### Alerts — `/api/v1/alerts`
 
@@ -1133,8 +1164,10 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | `/dashboard/transactions` | Transaction list + ReceiptScanner (upload → OCR → review → create expense). Target of the sidebar "New Transaction" CTA |
 | `/dashboard/receivables` | AR: InvoiceTable (live `useInvoices`/`useCustomers`), AgentStatus |
 | `/dashboard/payables` | AP: DepartmentBudgets (live `useBudgets`), RecentOutgoing (live `useExpenses`), AgentIntegrations |
-| `/dashboard/payables/queue` | AP approval queue — wired to `/finance/payables` maker-checker (create → approve/reject/schedule) |
+| `/dashboard/payables/queue` | AP approval queue — wired to `/finance/payables` maker-checker (create → approve/reject/schedule); `finance:approve` to review |
 | `/dashboard/payables/alerts` | Budget alerts (live `/api/v1/alerts`) |
+| `/dashboard/approvals` | **Unified approvals inbox** — one reviewer surface for both financial approvals (`/finance/payables/queue`) and agent actions (`/intelligence/proposals`). Manager+ to act; server enforces per-domain permission + segregation of duties |
+| `/dashboard/inventory` | Inventory (Agent K domain): products, stock levels, valuation, low-stock — live `useInventory` hooks |
 | `/dashboard/reconciliation` | Bank-statement reconciliation + treasury/vault-transfer panel (live `/finance/bank-statements`, `/finance/vault-*`) |
 | `/dashboard/operations` | Operations control surface — live System Health card (`/health/ready` poll) + an Activity Log card linking to the audit trail + links to queue/alerts |
 | `/dashboard/operations/logs` | Audit / activity-log view (`ActivityLog`): KPI tiles, action/outcome filters, paginated table, detail drawer. Gated by `RequirePermission minRole="MANAGER"` |
@@ -1349,25 +1382,31 @@ class Permission(enum.StrEnum):
     FINANCE_READ      = "finance:read"
     FINANCE_WRITE     = "finance:write"
     FINANCE_RECONCILE = "finance:reconcile"   # import settlements / auto-reconcile — manager+
+    FINANCE_APPROVE   = "finance:approve"      # sign off an AP payable (spend authorization) — manager+
     CRM_READ          = "crm:read"
     CRM_WRITE         = "crm:write"
+    INVENTORY_READ    = "inventory:read"
+    INVENTORY_WRITE   = "inventory:write"
+    INVENTORY_ADJUST  = "inventory:adjust"     # stock write-up/write-off + release agent adjustments — manager+
     INTELLIGENCE_READ = "intelligence:read"
     INTELLIGENCE_ACT  = "intelligence:act"
     USER_MANAGE       = "user:manage"
     AUDIT_READ        = "audit:read"           # read the cross-domain audit trail — manager+
 ```
 
-Permissions accumulate up the role hierarchy (`viewer ⊂ accountant ⊂ manager ⊂ admin ⊂ owner`):
+Permissions accumulate up the role hierarchy (`viewer ⊂ accountant ⊂ manager ⊂ admin ⊂ owner`). The matrix is written out explicitly per role in `permissions.py` (not via inheritance) so each role's exact grant is auditable at a glance:
 
 | Role | Permissions |
 |---|---|
-| `viewer` | `finance:read`, `crm:read`, `intelligence:read` |
-| `accountant` | All read + `finance:write`, `crm:write`, `intelligence:act` |
-| `manager` | All accountant + `finance:reconcile`, `audit:read` (reconciliation authority + audit oversight — separation of duties) |
+| `viewer` | `finance:read`, `crm:read`, `inventory:read`, `intelligence:read` |
+| `accountant` | All read + `finance:write`, `crm:write`, `inventory:write`, `intelligence:act` |
+| `manager` | All accountant + `finance:reconcile`, `finance:approve`, `inventory:adjust`, `audit:read` (higher-trust authorities held back from the accountant — separation of duties) |
 | `admin` | All manager + `user:manage` |
 | `owner` | All permissions |
 
-`require_permission(*required)` in `dependencies.py` returns an async FastAPI dependency that raises `ForbiddenError (403)` if the authenticated user lacks any required permission. Ready-made aliases: `RequireFinanceRead`, `RequireFinanceWrite`, `RequireFinanceReconcile`, `RequireCrmRead`, `RequireCrmWrite`, `RequireIntelligenceRead`, `RequireIntelligenceAct`, `RequireUserManage`, `RequireAuditRead`.
+**Two-layer authorization for approvals.** A permission answers *who may approve* (role authority, enforced at the endpoint). It cannot express *not your own* — that object-level segregation of duties (payable submitter ≠ approver; bank-line importer ≠ approver; agent requester ≠ proposal approver) is enforced in the service layer. Spend approval (`finance:approve`) is deliberately a separate grant from settlement import (`finance:reconcile`) so the matrix stays legible about who can authorize payments.
+
+`require_permission(*required)` in `dependencies.py` returns an async FastAPI dependency that raises `ForbiddenError (403)` if the authenticated user lacks any required permission. Ready-made aliases: `RequireFinanceRead`, `RequireFinanceWrite`, `RequireFinanceReconcile`, `RequireFinanceApprove`, `RequireCrmRead`, `RequireCrmWrite`, `RequireInventoryRead`, `RequireInventoryWrite`, `RequireInventoryAdjust`, `RequireIntelligenceRead`, `RequireIntelligenceAct`, `RequireUserManage`, `RequireAuditRead`.
 
 ### Login Lockout
 

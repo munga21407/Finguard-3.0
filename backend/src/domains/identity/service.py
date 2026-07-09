@@ -23,6 +23,7 @@ from src.core.security import (
 from src.domains.identity.models import User, UserRole
 from src.domains.identity.repository import UserRepository
 from src.domains.identity.schemas import TokenResponse, UserCreate, UserUpdate
+from src.domains.notifications.service import NotificationService
 from src.infrastructure.cache.redis import get_auth_redis
 
 # A fixed, valid bcrypt hash verified against on the "email not found" path so a
@@ -56,6 +57,17 @@ class IdentityService:
             is_verified=claim_owner,
         )
         user = await self._repo.create(user)
+        # Enqueue the welcome email in the same transaction as the account row, so
+        # the two are atomic (the flush worker delivers it). Content adapts to
+        # whether the account is already active or pending admin approval.
+        await NotificationService(self._session).enqueue_email(
+            to_email=user.email,
+            to_name=user.full_name,
+            subject="Welcome to Finguard",
+            template="welcome",
+            context={"full_name": user.full_name, "is_verified": user.is_verified},
+            idempotency_key=f"welcome:{user.id}",
+        )
         await self._session.commit()
         return user
 
@@ -137,9 +149,21 @@ class IdentityService:
 
     async def update_user(self, user_id: uuid.UUID, data: UserUpdate) -> User:
         user = await self.get_user(user_id)
+        was_verified = user.is_verified
         for field, value in data.model_dump(exclude_none=True).items():
             setattr(user, field, value)
         user = await self._repo.save(user)
+        # Email the user only on the actual verification transition (false → true),
+        # not on every profile edit. Idempotency-keyed so re-verifying is a no-op.
+        if not was_verified and user.is_verified:
+            await NotificationService(self._session).enqueue_email(
+                to_email=user.email,
+                to_name=user.full_name,
+                subject="Your Finguard account is ready",
+                template="account_approved",
+                context={"full_name": user.full_name},
+                idempotency_key=f"approved:{user.id}",
+            )
         await self._session.commit()
         return user
 

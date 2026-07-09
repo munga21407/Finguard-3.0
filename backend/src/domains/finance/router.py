@@ -52,6 +52,7 @@ from src.domains.finance.schemas import (
 )
 from src.domains.finance.service import FinanceService
 from src.domains.identity.dependencies import (
+    RequireFinanceApprove,
     RequireFinanceRead,
     RequireFinanceReconcile,
     RequireFinanceWrite,
@@ -606,7 +607,7 @@ async def create_payable(
 
 @router.post("/payables/{payable_id}/approve", response_model=PayableResponse)
 async def approve_payable(
-    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceApprove
 ) -> PayableResponse:
     """Approve a pending payable (reviewer must differ from submitter)."""
     expense = await FinanceService(db).transition_payable(
@@ -625,7 +626,7 @@ async def approve_payable(
 
 @router.post("/payables/{payable_id}/reject", response_model=PayableResponse)
 async def reject_payable(
-    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceApprove
 ) -> PayableResponse:
     """Reject a pending payable (reviewer must differ from submitter)."""
     expense = await FinanceService(db).transition_payable(
@@ -646,7 +647,7 @@ async def reject_payable(
 async def schedule_payable(
     payable_id: uuid.UUID,
     db: DBSession,
-    current_user: RequireFinanceReconcile,
+    current_user: RequireFinanceApprove,
     data: PayableScheduleRequest | None = None,
 ) -> PayableResponse:
     """Schedule an approved payable for payment."""

@@ -34,6 +34,64 @@ class AgentRunStatus(enum.StrEnum):
     FAILED = "failed"
 
 
+class ProposalStatus(enum.StrEnum):
+    """Human-in-the-loop lifecycle for an agent-proposed, value-changing action.
+
+    The agentic twin of :class:`~src.domains.finance.models.ExpenseApprovalStatus`::
+
+        PROPOSED ─approve─▶ APPLIED
+             └────reject──▶ REJECTED
+
+    An agent is always the *maker*: it lands the proposal at PROPOSED with no side
+    effect.  A human holding the action's domain permission is the *checker*;
+    approving fires the deferred write exactly once (see ``ProposalService``).
+    ``native_enum=False`` stores the value as a plain varchar so the column needs
+    no PostgreSQL enum type (idempotent migration).
+    """
+
+    PROPOSED = "proposed"
+    APPLIED = "applied"
+    REJECTED = "rejected"
+
+
+class AgentActionProposal(Base):
+    """A value-changing action an agent proposed, awaiting a human sign-off.
+
+    Persists the ephemeral :class:`ProposedStockAction` so a *second* human (≠ the
+    person who triggered the agent) can release it.  Segregation of duties is
+    enforced in the service layer (``reviewed_by`` ≠ ``triggered_by``); the
+    *authority* to approve is enforced at the endpoint via the action's domain
+    permission (e.g. ``inventory:adjust``).  ``payload`` holds the exact tool
+    arguments so approval can replay the write through the same guarded path.
+    """
+
+    __tablename__ = "agent_action_proposals"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # The maker: which agent proposed this (denormalised label, matches audit).
+    agent_label: Mapped[str] = mapped_column(String(50), nullable=False)
+    # "<domain>.<verb>" e.g. "stock.adjustment" — selects the approval permission.
+    action_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    # Exact tool arguments to replay the guarded write on approval.
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[ProposalStatus] = mapped_column(
+        Enum(ProposalStatus, native_enum=False, length=20),
+        default=ProposalStatus.PROPOSED,
+        nullable=False,
+        index=True,
+    )
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The human who ran the agent (the requester). Strict SoD: cannot self-approve.
+    triggered_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Resulting movement / expense id once applied (audit back-reference).
+    applied_ref: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
 class AgentRun(Base):
     __tablename__ = "agent_runs"
 

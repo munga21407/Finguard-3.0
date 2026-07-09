@@ -13,6 +13,7 @@ from src.core.exceptions import (
     NotFoundError,
     UnprocessableError,
 )
+from src.domains.crm.models import Customer
 from src.domains.finance.events import (
     SNAPSHOT_INTERVAL,
     InvoiceState,
@@ -90,6 +91,7 @@ from src.domains.identity.models import User
 # test): finance composes inventory writes; inventory never imports finance.
 from src.domains.inventory.models import StockMovement
 from src.domains.inventory.service import InventoryService
+from src.domains.notifications.service import NotificationService
 
 logger = structlog.get_logger(__name__)
 
@@ -936,6 +938,11 @@ class FinanceService:
                 },
             )
         )
+
+        # Receipt to the customer. Enqueue-only — the caller (Agent C, inside
+        # session.begin()) owns the commit, so it's atomic with the reconciliation.
+        await self._enqueue_payment_receipt(invoice, payment)
+
         return payment
 
     async def import_bank_statement_lines(
@@ -1172,6 +1179,32 @@ class FinanceService:
 
     # ── Cash Payments ─────────────────────────────────────────────────────────
 
+    async def _enqueue_payment_receipt(self, invoice: Invoice, payment: Payment) -> None:
+        """Queue a "payment received" receipt to the invoice's customer.
+
+        Shared by the manual-cash and agent-reconciled payment paths. Enqueue-only
+        (no commit) so it rides the caller's transaction — the receipt is atomic
+        with the payment. A customer without an email is silently skipped inside
+        ``enqueue_email`` (a receipt must never fail a payment). Call *after*
+        re-projection so ``balance_due`` reflects this payment.
+        """
+        customer = await self._session.get(Customer, invoice.customer_id)
+        await NotificationService(self._session).enqueue_email(
+            to_email=customer.email if customer else None,
+            to_name=customer.name if customer else None,
+            subject=f"Payment received — invoice {invoice.invoice_number}",
+            template="payment_receipt",
+            context={
+                "customer_name": customer.name if customer else None,
+                "invoice_number": invoice.invoice_number,
+                "amount": str(payment.amount),
+                "currency": invoice.currency,
+                "balance_due": str(invoice.balance_due),
+                "vault": payment.vault.value,
+            },
+            idempotency_key=f"receipt:{payment.id}",
+        )
+
     async def record_cash_payment(self, data: PaymentCreate, current_user: User) -> Payment:
         """
         Record a manual cash payment against an invoice.
@@ -1249,6 +1282,9 @@ class FinanceService:
                 },
             )
         )
+
+        # Receipt to the customer, atomic with the payment (flushed on commit).
+        await self._enqueue_payment_receipt(invoice, payment)
 
         await self._session.commit()
         return payment

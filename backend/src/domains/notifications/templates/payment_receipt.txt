@@ -1,0 +1,10 @@
+Payment received
+
+{% if customer_name %}Hi {{ customer_name }} — {% endif %}we've recorded your payment. Thank you.
+
+Invoice:            {{ invoice_number }}
+Amount paid:        {{ currency }} {{ amount }}
+Balance remaining:  {{ currency }} {{ balance_due }}
+Method:             {{ vault }}
+
+This is an automated receipt from Finguard.
