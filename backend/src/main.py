@@ -126,17 +126,6 @@ app.add_middleware(CSRFMiddleware)
 # last so it runs outermost — context is set before any other layer needs it.
 app.add_middleware(RequestContextMiddleware)
 
-Instrumentator(
-    should_group_status_codes=True,
-    should_ignore_untemplated=True,
-    should_respect_env_var=False,
-    should_instrument_requests_inprogress=True,
-    excluded_handlers=["/health", "/metrics"],
-    inprogress_labels=True,
-).instrument(app)
-# .expose() is intentionally omitted — the /metrics route is defined manually
-# below so we can attach the verify_metrics_token authentication dependency.
-
 register_exception_handlers(app)
 
 app.include_router(identity_router, prefix="/api/v1/identity", tags=["identity"])
@@ -214,3 +203,27 @@ async def metrics(
 ) -> Response:
     """Prometheus scrape endpoint — requires Bearer token when METRICS_AUTH_SECRET is set."""
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+def _patch_included_router_paths_for_metrics(app: FastAPI) -> None:
+    """Keep prometheus-fastapi-instrumentator compatible with FastAPI included routers."""
+    for route in app.routes:
+        if type(route).__name__ != "_IncludedRouter" or hasattr(route, "path"):
+            continue
+        include_context = getattr(route, "include_context", None)
+        prefix = getattr(include_context, "prefix", None)
+        if prefix:
+            route.path = prefix
+
+
+_patch_included_router_paths_for_metrics(app)
+Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    should_respect_env_var=False,
+    should_instrument_requests_inprogress=True,
+    excluded_handlers=["/health", "/health/live", "/health/ready", "/metrics"],
+    inprogress_labels=True,
+).instrument(app)
+# .expose() is intentionally omitted — the /metrics route is defined manually
+# above so we can attach the verify_metrics_token authentication dependency.

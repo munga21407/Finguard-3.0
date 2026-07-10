@@ -6,6 +6,10 @@ services:
     build:
       context: ../backend
       target: dev
+    command: /app/.venv/bin/alembic -c alembic/alembic.ini upgrade head
+    volumes:
+      - ../backend:/app
+      - /app/.venv
     environment:
       ENVIRONMENT: development
 
@@ -17,7 +21,7 @@ services:
     # volumes: 
     #   - ./scripts/init-readonly-role.sh:/docker-entrypoint-initdb.d/10-readonly-role.sh:ro
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-15432}:5432"
 
   mongodb:
     ports:
@@ -36,13 +40,14 @@ services:
     build:
       context: ../backend
       target: dev
-    command: uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    command: /app/.venv/bin/uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
     # Expose directly to the host for local debugging (the base file only routes
     # through nginx). Dev runs without the prod config validation.
     ports:
       - "8000:8000"
     volumes:
       - ../backend:/app
+      - /app/.venv
     environment:
       ENVIRONMENT: development
       DEBUG: "true"

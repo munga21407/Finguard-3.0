@@ -102,6 +102,18 @@ export const ENDPOINTS = {
     RESOLVE: (id: string) => `/api/v1/alerts/${id}/resolve`,
   },
 
+  // Email notification preferences + delivery admin
+  NOTIFICATIONS: {
+    PREFERENCES: "/api/v1/notifications/preferences",
+    EMAIL_KPIS: "/api/v1/notifications/admin/email/kpis",
+    EMAIL_OUTBOX: "/api/v1/notifications/admin/email/outbox",
+    EMAIL_DEAD_LETTERS: "/api/v1/notifications/admin/email/dead-letters",
+    EMAIL_REPLAY: (id: string) =>
+      `/api/v1/notifications/admin/email/dead-letters/${id}/replay`,
+    EMAIL_RESEND: (id: string) =>
+      `/api/v1/notifications/admin/email/outbox/${id}/resend`,
+  },
+
   // Audit (append-only system-activity trail; managers+)
   AUDIT: {
     ROOT: "/api/v1/audit",
