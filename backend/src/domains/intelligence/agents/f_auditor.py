@@ -60,9 +60,9 @@ async def _fetch_ledger_totals(period_days: int = 365) -> dict[str, float]:
     """
     sql = text(f"""
         SELECT
-            COALESCE(SUM(CASE WHEN transaction_type = 'credit'
+            COALESCE(SUM(CASE WHEN transaction_type = 'CREDIT'
                              THEN amount ELSE 0 END), 0) AS revenue,
-            COALESCE(SUM(CASE WHEN transaction_type = 'debit'
+            COALESCE(SUM(CASE WHEN transaction_type = 'DEBIT'
                              THEN amount ELSE 0 END), 0) AS opex,
             COUNT(*) AS tx_count,
             MAX(amount) AS max_single_tx

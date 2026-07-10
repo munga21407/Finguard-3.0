@@ -178,9 +178,9 @@ async def _fetch_monthly_cashflows() -> dict[str, Any]:
     sql = text("""
         SELECT
             TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
-            COALESCE(SUM(CASE WHEN transaction_type = 'credit'
+            COALESCE(SUM(CASE WHEN transaction_type = 'CREDIT'
                              THEN amount ELSE 0 END), 0) AS revenue,
-            COALESCE(SUM(CASE WHEN transaction_type = 'debit'
+            COALESCE(SUM(CASE WHEN transaction_type = 'DEBIT'
                              THEN amount ELSE 0 END), 0) AS opex
         FROM ledger_entries
         WHERE created_at >= NOW() - INTERVAL '12 months'

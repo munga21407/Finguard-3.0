@@ -1403,9 +1403,9 @@ class FinanceService:
                 text("""
                     SELECT
                         TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
-                        COALESCE(SUM(CASE WHEN transaction_type = 'credit'
+                        COALESCE(SUM(CASE WHEN transaction_type = 'CREDIT'
                                          THEN amount ELSE 0 END), 0) AS revenue,
-                        COALESCE(SUM(CASE WHEN transaction_type = 'debit'
+                        COALESCE(SUM(CASE WHEN transaction_type = 'DEBIT'
                                          THEN amount ELSE 0 END), 0) AS opex
                     FROM ledger_entries
                     WHERE created_at >= NOW() - make_interval(days => :days)
@@ -1425,7 +1425,7 @@ class FinanceService:
                     SELECT COALESCE(category, 'Uncategorised') AS category,
                            COALESCE(SUM(amount), 0) AS amt
                     FROM ledger_entries
-                    WHERE transaction_type = 'debit'
+                    WHERE transaction_type = 'DEBIT'
                       AND created_at >= NOW() - make_interval(days => :days)
                     GROUP BY 1
                     ORDER BY amt DESC

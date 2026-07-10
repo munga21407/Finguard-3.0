@@ -58,15 +58,15 @@ async def test_admin_upload_surfaces_in_semantic_query(
 
     auth_as(UserRole.ADMIN)
 
-    # Avoid real Gemini calls: deterministic embeddings + a dummy client.
-    async def _fake_embed_batch(_client, texts):
-        return [_fake_embed(t) for t in texts]
+    # Avoid real Gemini calls: patch the neutral facade the admin route embeds
+    # through, returning a deterministic vector per chunk.
+    async def _fake_generate_embedding(text, *, task_type=None, output_dimensionality=None):
+        return _fake_embed(text)
 
     monkeypatch.setattr(settings, "GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr("scripts.ingest_kra_docs._embed_batch", _fake_embed_batch)
     monkeypatch.setattr(
-        "src.domains.intelligence.routers.admin.get_gemini_client",
-        lambda: object(),
+        "src.domains.intelligence.routers.admin.generate_embedding",
+        _fake_generate_embedding,
     )
 
     body = (

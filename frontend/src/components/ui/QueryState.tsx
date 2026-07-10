@@ -19,10 +19,28 @@ interface QueryStateProps {
   loadingLabel?: string;
   errorLabel?: string;
   emptyLabel?: string;
+  /**
+   * The raw query error (e.g. TanStack Query `error`). When the backend returns
+   * a structured `{ detail: { message } }` (or `{ detail: "…" }`) body, that
+   * server-provided message is shown in place of the generic `errorLabel`.
+   */
+  error?: unknown;
   /** Optional custom skeleton shown while loading, in place of the text label. */
   skeleton?: ReactNode;
   /** Rendered once data is present and non-empty. */
   children: ReactNode;
+}
+
+/** Best-effort extraction of a human-readable message from an Axios-style error. */
+function serverErrorMessage(error: unknown): string | null {
+  const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data
+    ?.detail;
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return null;
 }
 
 function Centered({ children }: { children: ReactNode }) {
@@ -41,6 +59,7 @@ export function QueryState({
   loadingLabel = "Loading…",
   errorLabel = "Couldn't load this data.",
   emptyLabel = "Nothing to show yet.",
+  error,
   skeleton,
   children,
 }: QueryStateProps) {
@@ -57,7 +76,7 @@ export function QueryState({
   if (isError) {
     return (
       <Centered>
-        <span className="text-sm text-lf-error">{errorLabel}</span>
+        <span className="text-sm text-lf-error">{serverErrorMessage(error) ?? errorLabel}</span>
         {onRetry && (
           <button
             onClick={onRetry}

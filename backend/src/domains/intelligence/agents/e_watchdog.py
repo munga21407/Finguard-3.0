@@ -267,7 +267,7 @@ async def _fetch_spending_ratios(
                 SUM(le.amount)                   AS spent
             FROM ledger_entries le
             WHERE le.account_id = :account_id
-              AND le.transaction_type = 'debit'
+              AND le.transaction_type = 'DEBIT'
               AND le.created_at >= :since
             GROUP BY 1
             ORDER BY 1
@@ -301,7 +301,7 @@ async def _fetch_recent_amounts(limit: int = 50) -> list[float]:
     rows = await execute_readonly_sql(f"""
         SELECT amount
         FROM ledger_entries
-        WHERE transaction_type = 'debit'
+        WHERE transaction_type = 'DEBIT'
         ORDER BY created_at DESC
         LIMIT {limit}
     """)

@@ -103,7 +103,7 @@ async def _fetch_daily_cashflow(
         SELECT
             date_trunc('day', created_at AT TIME ZONE 'Africa/Nairobi')::date AS day,
             SUM(
-                CASE WHEN transaction_type = 'credit' THEN amount::float
+                CASE WHEN transaction_type = 'CREDIT' THEN amount::float
                      ELSE -amount::float END
             ) AS net_flow
         FROM ledger_entries
@@ -119,7 +119,7 @@ async def _fetch_current_balance(session: AsyncSession) -> float:
     """Sum all ledger credits minus debits to derive the running account balance."""
     sql = text("""
         SELECT COALESCE(
-            SUM(CASE WHEN transaction_type = 'credit' THEN amount::float
+            SUM(CASE WHEN transaction_type = 'CREDIT' THEN amount::float
                      ELSE -amount::float END),
             0.0
         )

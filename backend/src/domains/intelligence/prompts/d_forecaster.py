@@ -1,12 +1,22 @@
 """Prompts for Agent D — Cash-Flow Forecaster (Sprint 6: schema-masked)."""
 from __future__ import annotations
 
-from src.domains.intelligence.tools.sql_executor import get_masked_schema
+from src.domains.finance.models import TransactionType
+from src.domains.intelligence.tools.sql_executor import (
+    TRANSACTION_TYPE_LABELS,
+    get_masked_schema,
+)
 
 # Schema is fetched once at import time from the authoritative masking utility.
 # Agent D is only permitted to see: ledger_entries, invoices, budgets, expenses.
 # users, knowledge_base, and outbox_events are never exposed.
 _AGENT_D_SCHEMA = get_masked_schema("D")
+
+# Exact, case-sensitive labels of the ``transactiontype`` Postgres ENUM, derived
+# from the ORM (never a guess). Injected verbatim so the model uses 'CREDIT' /
+# 'DEBIT' and never the lowercase ``.value``s, which the enum column rejects with
+# InvalidTextRepresentationError.
+_TX_TYPE_ENUM_LINE = ", ".join(f"'{label}'" for label in TRANSACTION_TYPE_LABELS)
 
 FORECASTER_COVE_DRAFTER_SYSTEM = f"""\
 You are a PostgreSQL expert for Finguard, a financial operations platform for Kenyan SMEs.
@@ -25,6 +35,13 @@ Your task: write a precise PostgreSQL SELECT query to answer the user's financia
 - Apply LIMIT (max 1000 for row queries; aggregations are unlimited).
 - Prefer summary aggregations over raw rows for analytical questions.
 - For cash-flow queries: SUM credits minus debits, grouped by day/week/month.
+
+## ENUM values — use EXACT casing (critical)
+- `ledger_entries.transaction_type` is a PostgreSQL ENUM. It accepts ONLY these
+  exact, UPPERCASE, case-sensitive values: {_TX_TYPE_ENUM_LINE}.
+- Never write lowercase 'credit' / 'debit' — the database rejects them with an
+  invalid-enum-input error. A credit (money in) is '{TransactionType.CREDIT.name}';
+  a debit (money out) is '{TransactionType.DEBIT.name}'.
 """
 
 FORECASTER_COVE_EXPLAINER_SYSTEM = """\

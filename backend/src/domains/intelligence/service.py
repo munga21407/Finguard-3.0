@@ -4,14 +4,14 @@ import uuid as _uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from google.genai import types
 from langchain_core.messages import HumanMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.core.logging import logger
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm.base import ChatTurn
+from src.domains.intelligence.llm_client import generate_chat_content
 from src.domains.intelligence.models import AgentRun, AgentRunStatus
 from src.domains.intelligence.schemas import (
     ActionFeedItem,
@@ -91,39 +91,19 @@ class IntelligenceService:
         self._session = session
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
-        # Intentional BaseLLMClient.raw() escape hatch: role-based multi-turn
-        # chat (Content/Part history + system_instruction + max_output_tokens) is
-        # not modelled by the neutral interface. The agent graph uses the
-        # interface; only this standalone chat service touches the SDK directly.
-        client = get_gemini_client()
-
-        # Map messages to Gemini Content objects (role must be "user" or "model")
-        contents = [
-            types.Content(
-                role=m.role,
-                parts=[types.Part(text=m.content)],
-            )
-            for m in request.messages
-        ]
-        config_kwargs: dict[str, Any] = {"max_output_tokens": request.max_tokens}
-        if request.system:
-            config_kwargs["system_instruction"] = request.system
-        config = types.GenerateContentConfig(**config_kwargs)
-
-        response = await client.aio.models.generate_content(
-            model=settings.GEMINI_MODEL,
-            # google-genai stubs type `contents` with an invariant list union,
-            # so a plain list[Content] is rejected though valid at runtime.
-            contents=contents,  # type: ignore[arg-type]
-            config=config,
+        # Role-based multi-turn chat via the neutral LLM interface — the SDK
+        # (Content/Part history + system_instruction + max_output_tokens) is fully
+        # owned by the provider wrapper, so this service touches no vendor types.
+        completion = await generate_chat_content(
+            [ChatTurn(role=m.role, content=m.content) for m in request.messages],
+            system=request.system,
+            max_tokens=request.max_tokens,
         )
-
-        usage = response.usage_metadata
         return ChatResponse(
-            content=response.text or "",
+            content=completion.content,
             model=settings.GEMINI_MODEL,
-            input_tokens=usage.prompt_token_count or 0 if usage else 0,
-            output_tokens=usage.candidates_token_count or 0 if usage else 0,
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
         )
 
     async def run_agent(self, data: AgentRunCreate, triggered_by: str | None = None) -> AgentRun:

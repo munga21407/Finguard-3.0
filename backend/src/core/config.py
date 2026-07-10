@@ -79,7 +79,10 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
-    GEMINI_EMBEDDING_MODEL: str = "text-embedding-004"  # tax-RAG retrieval embeddings
+    # gemini-embedding-001 (text-embedding-004 was deprecated/removed by Google).
+    # Truncated to 768 dims via output_dimensionality + manual L2-normalization
+    # (the model only auto-normalizes at its native 3072 dims). See llm/gemini.py.
+    GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"  # tax-RAG retrieval embeddings
     # Higher-fidelity vision model used to re-scan low-confidence receipts
     # (S6-6). When it equals GEMINI_MODEL the second pass is skipped (no gain).
     GEMINI_VISION_RETRY_MODEL: str = "gemini-2.5-pro"

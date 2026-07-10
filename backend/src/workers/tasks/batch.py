@@ -29,13 +29,12 @@ from typing import Any, cast
 
 import aio_pika
 from aio_pika import ExchangeType
-from google.genai import types
 from sqlalchemy import CursorResult, text
 
 from src.core.config import settings
 from src.core.logging import logger
 from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.ml.model_store import save_model, train_isolation_forest
 from src.domains.intelligence.prompts.b_classifier import CLASSIFIER_SYSTEM, TRANSACTION_TAXONOMY
 from src.domains.intelligence.schemas import BatchClassificationResult, TransactionClassification
@@ -88,17 +87,9 @@ async def _classify_batch_async(
         "Every input entry_id must appear exactly once in the output."
     )
 
-    client = get_gemini_client()
-    response = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=BatchClassificationResult,
-            temperature=0.0,
-        ),
+    result = await generate_structured_content(
+        prompt, BatchClassificationResult, temperature=0.0
     )
-    result = BatchClassificationResult.model_validate_json(response.text or "{}")
 
     returned_ids = {c.entry_id for c in result.classifications}
     for entry in entries:
@@ -573,7 +564,7 @@ async def _fetch_categorized_customer_ids(session: Any) -> list[str]:
         text("""
             SELECT DISTINCT account_id::text
             FROM ledger_entries
-            WHERE transaction_type = 'debit'
+            WHERE transaction_type = 'DEBIT'
               AND category IS NOT NULL
               AND account_id IS NOT NULL
               AND created_at >= NOW() - make_interval(days => :days)
@@ -588,7 +579,7 @@ async def _fetch_customer_debit_amounts(session: Any, customer_id: str) -> list[
         text("""
             SELECT amount::float
             FROM ledger_entries
-            WHERE transaction_type = 'debit'
+            WHERE transaction_type = 'DEBIT'
               AND category IS NOT NULL
               AND account_id = CAST(:cid AS uuid)
               AND created_at >= NOW() - make_interval(days => :days)

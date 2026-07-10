@@ -7,6 +7,7 @@ from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from sqlalchemy.exc import DataError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
@@ -397,6 +398,26 @@ async def reconciliation_flow(db: DBSession, _: RequireFinanceRead) -> Reconcili
     return await FinanceService(db).get_reconciliation_flow()
 
 
+# Reports are backed by raw aggregate SQL over ledger_entries. A malformed enum
+# literal (e.g. a stale lowercase 'credit' against the uppercase transactiontype
+# ENUM) surfaces as asyncpg InvalidTextRepresentationError, wrapped by SQLAlchemy
+# as DataError. Catch it here so a data-layer defect degrades into a clear,
+# structured 422 the dashboard can render — instead of an opaque 500 that the UI
+# can only show as a generic "Couldn't load reports".
+_REPORT_DATA_ERROR = (
+    "This report could not be generated because of a data formatting error. "
+    "Our team has been notified. Please try another report or retry shortly."
+)
+
+
+def _report_data_error(report: str, exc: DataError) -> HTTPException:
+    logger.error("finance.reports.data_error", report=report, error=str(exc.orig))
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={"code": "report_data_error", "message": _REPORT_DATA_ERROR},
+    )
+
+
 @router.get("/reports", response_model=ReportCatalogResponse)
 async def report_catalog(
     db: DBSession,
@@ -404,7 +425,10 @@ async def report_catalog(
     period_days: int = Query(365, ge=1, le=1825),
 ) -> ReportCatalogResponse:
     """List the CoreReports with a live ready/no_data status (drives the menu)."""
-    return await FinanceService(db).get_report_catalog(period_days)
+    try:
+        return await FinanceService(db).get_report_catalog(period_days)
+    except DataError as exc:
+        raise _report_data_error("catalog", exc) from exc
 
 
 @router.get("/reports/{report_type}", response_model=FinancialReport)
@@ -415,7 +439,10 @@ async def generate_report(
     period_days: int = Query(365, ge=1, le=1825),
 ) -> FinancialReport:
     """Generate one financial report (P&L / cash-flow / tax) from live data."""
-    return await FinanceService(db).generate_report(report_type, period_days)
+    try:
+        return await FinanceService(db).generate_report(report_type, period_days)
+    except DataError as exc:
+        raise _report_data_error(report_type.value, exc) from exc
 
 
 @router.post(

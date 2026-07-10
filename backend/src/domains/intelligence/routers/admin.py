@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import settings
 from src.core.logging import logger
 from src.domains.identity.dependencies import RequireUserManage
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import generate_embedding
 from src.domains.intelligence.schemas import KnowledgeIngestResponse
 from src.infrastructure.database.postgres import get_db
 
@@ -30,6 +30,22 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 # Plain-text regulatory configs only; capped well under the nginx body limit.
 _MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 _ALLOWED_SUFFIXES = (".txt", ".md")
+_EMBED_DIM = 768
+
+
+async def _facade_embed_batch(texts: list[str]) -> list[list[float]]:
+    """Embed a batch of chunks through the app's neutral LLM facade.
+
+    Injected into ``ingest_text_buffer`` so the admin route never touches a vendor
+    SDK client — it goes through ``generate_embedding`` (retry/timeout/telemetry +
+    L2-normalization) like every other embedding call.
+    """
+    return [
+        await generate_embedding(
+            t, task_type="RETRIEVAL_DOCUMENT", output_dimensionality=_EMBED_DIM
+        )
+        for t in texts
+    ]
 
 
 @router.post(
@@ -84,7 +100,7 @@ async def ingest_knowledge_base(
     try:
         result = await ingest_text_buffer(
             session=db,
-            client=get_gemini_client(),
+            embed_batch=_facade_embed_batch,
             document_title=document_title,
             raw_text=text,
         )
