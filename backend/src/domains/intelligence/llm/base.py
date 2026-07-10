@@ -1,21 +1,38 @@
-"""Provider-agnostic LLM client interface.
+"""Provider-agnostic LLM interface — the AI capability contract this app owns.
 
-Agents depend on this ABC, not on any vendor SDK, so the provider can be swapped
+Agents, workers, and services depend on this ABC (and the ``llm_client`` facade
+over it), never on any vendor SDK, so the provider can be swapped
 (Gemini → Anthropic → OpenAI) by registering a different implementation in
-``llm_client.get_llm_client``. The interface covers the capabilities the agent
-graph actually uses: structured output, free-form text, multimodal (vision)
-structured output, and embeddings.
+``llm_client.get_llm_client``. The interface covers every capability the app
+uses: structured output, free-form text, multimodal (vision) structured and text
+output, role-based multi-turn chat, and embeddings.
 
-``raw()`` remains a deliberate escape hatch for genuinely vendor-specific paths
-not modelled here (e.g. the multi-turn streaming chat in ``service.py`` with
-roles + system instruction). The LangGraph agents and tools do not use it.
+There is deliberately no ``raw()`` escape hatch: the vendor SDK is confined to a
+single wrapper module (``llm.gemini_sdk``) and never leaks above this contract.
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from dataclasses import dataclass
 
 from pydantic import BaseModel
+
+
+@dataclass(frozen=True)
+class ChatTurn:
+    """One turn of a multi-turn conversation. ``role`` ∈ {"user", "model"}."""
+
+    role: str
+    content: str
+
+
+@dataclass(frozen=True)
+class ChatCompletion:
+    """Provider-neutral result of a chat completion (no vendor types)."""
+
+    content: str
+    input_tokens: int
+    output_tokens: int
 
 
 class BaseLLMClient(ABC):
@@ -51,6 +68,28 @@ class BaseLLMClient(ABC):
         """
 
     @abstractmethod
+    async def generate_vision_text(
+        self,
+        prompt: str,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        temperature: float | None = None,
+        model: str | None = None,
+    ) -> str:
+        """Return a free-form text response over an image + prompt (e.g. OCR)."""
+
+    @abstractmethod
+    async def generate_chat(
+        self,
+        messages: list[ChatTurn],
+        *,
+        system: str | None = None,
+        max_tokens: int,
+    ) -> ChatCompletion:
+        """Return a completion for a role-based multi-turn conversation."""
+
+    @abstractmethod
     async def embed(
         self,
         text: str,
@@ -59,11 +98,3 @@ class BaseLLMClient(ABC):
         output_dimensionality: int | None = None,
     ) -> list[float]:
         """Return the embedding vector for ``text``."""
-
-    @abstractmethod
-    def raw(self) -> Any:
-        """Return the underlying vendor SDK client (escape hatch).
-
-        Used only by genuinely vendor-specific paths not modelled by the methods
-        above (e.g. role-based multi-turn chat). Agents/tools must not use it.
-        """

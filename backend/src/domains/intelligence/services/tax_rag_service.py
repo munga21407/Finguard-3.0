@@ -30,7 +30,9 @@ from src.domains.intelligence.observability import traced_tool
 from src.infrastructure.cache.redis import get_redis
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
-EMBEDDING_MODEL = "text-embedding-004"
+# Embedding model + provider live in settings.GEMINI_EMBEDDING_MODEL and are
+# reached via generate_embedding(); this module only pins the dimensionality it
+# stores/queries against the pgvector column.
 _EXPECTED_DIM = 768
 MAX_L2_DISTANCE = 1.5     # L2 > 1.5 ≈ not semantically relevant
 

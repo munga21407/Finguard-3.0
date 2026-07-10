@@ -26,10 +26,56 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from src.core.config import settings
+from src.domains.finance.models import InvoiceStatus, TransactionType
 from src.domains.intelligence.observability import traced_tool
+from src.domains.inventory.types import MovementType, UnitOfMeasure
 from src.infrastructure.database.postgres import ReadOnlyAsyncSessionLocal
 
 logger = structlog.get_logger(__name__)
+
+# ── Enum ground-truth ────────────────────────────────────────────────────────
+# SQLAlchemy's ``Enum(TransactionType)`` persists the member *NAMES* (DEBIT,
+# CREDIT), not the lowercase ``.value``s — so the Postgres ``transactiontype``
+# type only accepts 'DEBIT'/'CREDIT'. Derive the exact labels from the enum
+# itself (import-safe, no DB round-trip) so the schema we hand the LLM can never
+# drift from what the database will actually accept. See fetch_pg_enum_labels()
+# for the runtime cross-check against pg_enum.
+TRANSACTION_TYPE_LABELS: tuple[str, ...] = tuple(m.name for m in TransactionType)
+_TX_LABELS_SQL = " | ".join(f"'{label}'" for label in TRANSACTION_TYPE_LABELS)
+
+# Same name-vs-value trap applies to invoices.status (invoicestatus ENUM).
+INVOICE_STATUS_LABELS: tuple[str, ...] = tuple(m.name for m in InvoiceStatus)
+_INVOICE_STATUS_SQL = " | ".join(f"'{label}'" for label in INVOICE_STATUS_LABELS)
+
+# Inventory enums are ``native_enum=False`` (stored as VARCHAR), but SQLAlchemy
+# STILL persists the member NAME — so 'sale'/'kg' silently match nothing. Same
+# uppercase-name rule; derive the hints so they cannot drift from the enums.
+_UNIT_SQL = " | ".join(f"'{m.name}'" for m in UnitOfMeasure)
+_MOVEMENT_TYPE_SQL = " | ".join(f"'{m.name}'" for m in MovementType)
+
+
+async def fetch_pg_enum_labels(session: AsyncSession, enum_type: str) -> list[str]:
+    """Return the exact, ordered labels of a Postgres ENUM type.
+
+    Introspects ``pg_type``/``pg_enum`` so callers never hardcode (and mismatch)
+    enum casing. Useful to verify ``TRANSACTION_TYPE_LABELS`` still matches the
+    live database, or to inject real labels into an LLM's context window.
+
+    Returns ``[]`` when the type does not exist.
+    """
+    rows = await session.execute(
+        text(
+            """
+            SELECT e.enumlabel
+            FROM pg_type t
+            JOIN pg_enum e ON e.enumtypid = t.oid
+            WHERE t.typname = :enum_type
+            ORDER BY e.enumsortorder
+            """
+        ),
+        {"enum_type": enum_type},
+    )
+    return [r[0] for r in rows.fetchall()]
 
 # First-pass: fast regex pre-filter catches obvious keyword injection before
 # paying the cost of a full parse.  The AST check below is the authoritative
@@ -57,12 +103,12 @@ _FORBIDDEN_NODE_TYPES = (
 # ---------------------------------------------------------------------------
 
 _TABLE_DDL: dict[str, str] = {
-    "ledger_entries": """\
+    "ledger_entries": f"""\
 ledger_entries(
     id              UUID PRIMARY KEY,
     account_id      UUID,
     customer_id     UUID,
-    transaction_type TEXT,        -- 'debit' | 'credit'
+    transaction_type transactiontype,  -- ENUM, EXACT case-sensitive values: {_TX_LABELS_SQL}
     amount          NUMERIC,
     currency        TEXT,
     description     TEXT,
@@ -70,12 +116,12 @@ ledger_entries(
     reference       TEXT,
     created_at      TIMESTAMPTZ
 )""",
-    "invoices": """\
+    "invoices": f"""\
 invoices(
     id              UUID PRIMARY KEY,
     customer_id     UUID,
     invoice_number  TEXT,
-    status          TEXT,         -- 'draft'|'sent'|'paid'|'partially_paid'|'overdue'|'cancelled'
+    status          invoicestatus,  -- ENUM, EXACT case-sensitive values: {_INVOICE_STATUS_SQL}
     subtotal        NUMERIC,
     tax             NUMERIC,
     total           NUMERIC,
@@ -119,13 +165,13 @@ mpesa_transactions(
     is_reconciled   BOOLEAN,
     created_at      TIMESTAMPTZ
 )""",
-    "products": """\
+    "products": f"""\
 products(
     id                UUID PRIMARY KEY,
     sku               TEXT,
     name              TEXT,
     category          TEXT,
-    unit              TEXT,          -- each|kg|litre|metre|box|pack
+    unit              TEXT,          -- stored as ENUM NAME, EXACT case: {_UNIT_SQL}
     cost_price        NUMERIC,
     selling_price     NUMERIC,
     reorder_level     NUMERIC,
@@ -143,12 +189,12 @@ stock_levels(
     average_cost      NUMERIC,
     updated_at        TIMESTAMPTZ
 )""",
-    "stock_movements": """\
+    "stock_movements": f"""\
 stock_movements(
     id              UUID PRIMARY KEY,
     product_id      UUID,            -- FK products.id
     sequence        INTEGER,
-    movement_type   TEXT,            -- receipt|issue|sale|return_in|adjustment|transfer
+    movement_type   TEXT,            -- stored as ENUM NAME, EXACT case: {_MOVEMENT_TYPE_SQL}
     movement_reason TEXT,
     quantity        NUMERIC,         -- always positive
     unit_cost       NUMERIC,

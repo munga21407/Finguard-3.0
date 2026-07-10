@@ -15,11 +15,11 @@ import base64
 from pathlib import Path
 from typing import Any
 
-from google.genai import types
-
-from src.core.config import settings
 from src.core.logging import logger
-from src.domains.intelligence.llm_client import get_gemini_client
+from src.domains.intelligence.llm_client import (
+    generate_vision_content,
+    generate_vision_text_content,
+)
 from src.domains.intelligence.schemas import ExtractedInvoice, ReceiptExtraction
 from src.domains.intelligence.tools.vision_ocr import extract_receipt
 from src.workers.tasks.celery_app import celery_app
@@ -70,40 +70,26 @@ def _mime_type(path: str) -> str:
 # ── Async Gemini vision helpers ───────────────────────────────────────────────
 
 async def _run_document_text_extraction(image_bytes: bytes, mime_type: str) -> str:
-    client = get_gemini_client()
-    response = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        # google-genai stubs type `contents` with an invariant list union, so a
-        # plain list[Part] is rejected even though it is valid at runtime.
-        contents=[  # type: ignore[arg-type]
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            types.Part.from_text(text=_DOCUMENT_TEXT_PROMPT),
-        ],
-        config=types.GenerateContentConfig(temperature=0.0),
+    text = await generate_vision_text_content(
+        _DOCUMENT_TEXT_PROMPT,
+        image_bytes=image_bytes,
+        mime_type=mime_type,
+        temperature=0.0,
     )
-    return (response.text or "").strip()
+    return text.strip()
 
 
 async def _run_invoice_image_extraction(
     image_bytes: bytes,
     mime_type: str,
 ) -> ExtractedInvoice:
-    client = get_gemini_client()
-    response = await client.aio.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        # google-genai stubs type `contents` with an invariant list union, so a
-        # plain list[Part] is rejected even though it is valid at runtime.
-        contents=[  # type: ignore[arg-type]
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            types.Part.from_text(text=_INVOICE_IMAGE_PROMPT),
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ExtractedInvoice,
-            temperature=0.0,
-        ),
+    return await generate_vision_content(
+        _INVOICE_IMAGE_PROMPT,
+        image_bytes=image_bytes,
+        mime_type=mime_type,
+        response_schema=ExtractedInvoice,
+        temperature=0.0,
     )
-    return ExtractedInvoice.model_validate_json(response.text or "{}")
 
 
 # ── Celery tasks ──────────────────────────────────────────────────────────────

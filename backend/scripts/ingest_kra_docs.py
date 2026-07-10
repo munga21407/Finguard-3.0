@@ -27,9 +27,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import math
 import os
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +66,16 @@ _DATABASE_URL: str = os.getenv(
 )
 _GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 
-EMBEDDING_MODEL = "text-embedding-004"
+# Injected embedder: maps a batch of chunk texts to their embedding vectors. Lets
+# ingest_text_buffer stay agnostic of *how* embeddings are produced (CLI genai
+# client vs the app's neutral generate_embedding facade).
+EmbedBatch = Callable[[list[str]], Awaitable[list[list[float]]]]
+
+# gemini-embedding-001 (text-embedding-004 was deprecated/removed by Google).
+# Requested at 768 dims and manually L2-normalized below — the model only
+# auto-normalizes at its native 3072 dims, and the knowledge_base pgvector index
+# uses vector_l2_ops, so doc vectors must share the query side's normalized space.
+EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIM = 768
 
 # Chunking defaults (overridable via CLI)
@@ -79,6 +90,19 @@ EMBED_WAIT_MAX = 64.0      # seconds (max back-off)
 
 # Separators in priority order — prefer semantic over syntactic splits
 _SEPARATORS = ["\n\n\n", "\n\n", "\n", ". ", "? ", "! ", " ", ""]
+
+
+def _l2_normalize(vec: list[float]) -> list[float]:
+    """Unit-norm a vector (no-op if already unit-length or zero).
+
+    Kept identical to ``llm.gemini.l2_normalize`` — the ingest (doc) side and the
+    retrieval (query) side must normalize the same way so their L2 distances are
+    comparable. Inlined here to preserve this script's standalone, app-free design.
+    """
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm == 0.0:
+        return vec
+    return [v / norm for v in vec]
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +252,7 @@ async def _embed_batch(
             output_dimensionality=EMBEDDING_DIM,
         ),
     )
-    return [list(emb.values) for emb in response.embeddings]
+    return [_l2_normalize(list(emb.values)) for emb in response.embeddings]
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +322,7 @@ async def _upsert_chunks(
 
 async def ingest_text_buffer(
     session: AsyncSession,
-    client: genai.Client,
+    embed_batch: EmbedBatch,
     document_title: str,
     raw_text: str,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
@@ -306,10 +330,12 @@ async def ingest_text_buffer(
 ) -> dict[str, Any]:
     """Chunk, embed, and upsert a raw text buffer into ``finguard.knowledge_base``.
 
-    The reusable core of the per-file pipeline (``_split_text`` → ``_embed_batch``
-    → ``_upsert_chunks``), driven by an in-memory buffer and a caller-supplied
-    session + Gemini client instead of a directory walk. Lets the admin upload
-    endpoint reuse the exact same chunking/embedding/HNSW-storage path as the CLI.
+    The reusable core of the per-file pipeline (``_split_text`` → embed →
+    ``_upsert_chunks``), driven by an in-memory buffer and a caller-supplied
+    session + ``embed_batch`` callable instead of a directory walk. The embedder
+    is *injected* (``list[str] -> list[list[float]]``) so the admin HTTP route can
+    embed through the app's neutral ``generate_embedding`` facade — never a raw
+    vendor client — while the CLI passes its own ``_embed_batch``.
 
     Returns ``{document_title, chunks, inserted, skipped}``.
 
@@ -327,7 +353,7 @@ async def ingest_text_buffer(
     all_embeddings: list[list[float]] = []
     for batch_start in range(0, len(chunks), EMBED_BATCH_SIZE):
         batch = chunks[batch_start : batch_start + EMBED_BATCH_SIZE]
-        all_embeddings.extend(await _embed_batch(client, batch))
+        all_embeddings.extend(await embed_batch(batch))
 
     bad = [(i, len(v)) for i, v in enumerate(all_embeddings) if len(v) != EMBEDDING_DIM]
     if bad:

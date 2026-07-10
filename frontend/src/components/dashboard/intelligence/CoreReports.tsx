@@ -54,6 +54,7 @@ export function CoreReports() {
           isError={catalog.isError}
           isEmpty={(catalog.data?.reports.length ?? 0) === 0}
           onRetry={catalog.refetch}
+          error={catalog.error}
           loadingLabel="Loading reports…"
           errorLabel="Couldn't load reports."
           emptyLabel="No reports available yet."
@@ -137,6 +138,7 @@ function ReportDetail({ type }: { type: ApiReportType }) {
       isError={report.isError}
       isEmpty={report.data?.has_data === false}
       onRetry={report.refetch}
+      error={report.error}
       loadingLabel="Generating report…"
       errorLabel="Couldn't generate this report."
       emptyLabel="No data for this report yet."

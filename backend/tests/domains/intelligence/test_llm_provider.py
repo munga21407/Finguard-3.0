@@ -40,13 +40,16 @@ class _FakeModels:
 
     async def embed_content(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
-        return SimpleNamespace(embeddings=[SimpleNamespace(values=[0.1, 0.2, 0.3])])
+        # Unit-norm fixture so the provider's L2-normalization is a no-op and the
+        # test asserts vector *extraction*, not the normalization arithmetic.
+        return SimpleNamespace(embeddings=[SimpleNamespace(values=[0.6, 0.8, 0.0])])
 
 
 def _client(text: str = '{"answer":"hi"}', *, boom: bool = False) -> tuple[GeminiLLMClient, _FakeModels]:
     models = _FakeModels(text, boom=boom)
     c = GeminiLLMClient()
-    c._client = SimpleNamespace(aio=SimpleNamespace(models=models))  # type: ignore[assignment]
+    # Inject the fake transport into the SDK wrapper the provider delegates to.
+    c._sdk._client = SimpleNamespace(aio=SimpleNamespace(models=models))  # type: ignore[assignment]
     return c, models
 
 
@@ -82,10 +85,34 @@ async def test_vision_assembles_two_parts_and_validates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vision_text_returns_plain_text() -> None:
+    c, models = _client("raw ocr text")
+    out = await c.generate_vision_text(
+        "read", image_bytes=b"img", mime_type="image/png"
+    )
+    assert out == "raw ocr text"
+    assert len(models.calls[0]["contents"]) == 2  # image part + text part
+
+
+@pytest.mark.asyncio
+async def test_chat_maps_turns_and_returns_completion() -> None:
+    from src.domains.intelligence.llm.base import ChatTurn
+
+    c, models = _client("hello there")
+    out = await c.generate_chat(
+        [ChatTurn(role="user", content="hi")], system="be brief", max_tokens=128
+    )
+    assert out.content == "hello there"
+    assert out.input_tokens == 0 and out.output_tokens == 0  # usage_metadata None
+    assert models.calls[0]["config"].system_instruction == "be brief"
+    assert models.calls[0]["config"].max_output_tokens == 128
+
+
+@pytest.mark.asyncio
 async def test_embed_returns_vector() -> None:
     c, models = _client()
     vec = await c.embed("query", task_type="RETRIEVAL_QUERY", output_dimensionality=3)
-    assert vec == [0.1, 0.2, 0.3]
+    assert vec == [0.6, 0.8, 0.0]
     assert models.calls[0]["config"] is not None  # EmbedContentConfig built
 
 

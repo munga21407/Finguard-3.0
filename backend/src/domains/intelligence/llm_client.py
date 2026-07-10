@@ -2,10 +2,11 @@
 
 The Gemini-specific logic now lives in :mod:`src.domains.intelligence.llm`
 (``base`` interface, ``gemini`` implementation, ``telemetry`` + ``pricing``).
-This module preserves the original public surface — ``generate_structured_content``,
-``generate_text_content``, ``get_gemini_client``, ``observe_llm_call``,
+This module is the app's stable AI seam — ``generate_structured_content``,
+``generate_text_content``, ``generate_vision_content``, ``generate_vision_text_content``,
+``generate_chat_content``, ``generate_embedding``, ``observe_llm_call``,
 ``agent_context``, ``LLMUnavailableError``, the re-exported metric collectors —
-so existing agents and tests keep importing from here unchanged.
+so agents/workers/services import from here and never touch a vendor SDK.
 
 To swap providers, register a different :class:`BaseLLMClient` in
 ``get_llm_client`` (or wire it through settings); the agent call sites that use
@@ -15,7 +16,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from google import genai
 from pydantic import BaseModel
 
 # Re-exported metric collectors (referenced as ``llm_client.AGENT_LLM_*`` by the
@@ -38,7 +38,15 @@ from src.core.metrics import (
 from src.core.metrics import (
     GEMINI_TIMEOUT_COUNTER as GEMINI_TIMEOUT_COUNTER,
 )
-from src.domains.intelligence.llm.base import BaseLLMClient
+from src.domains.intelligence.llm.base import (
+    BaseLLMClient,
+)
+from src.domains.intelligence.llm.base import (
+    ChatCompletion as ChatCompletion,  # noqa: F401 — public re-export
+)
+from src.domains.intelligence.llm.base import (
+    ChatTurn as ChatTurn,  # noqa: F401 — public re-export
+)
 from src.domains.intelligence.llm.gemini import (
     GeminiLLMClient,
 )
@@ -73,16 +81,6 @@ def get_llm_client() -> BaseLLMClient:
     if _provider is None:
         _provider = GeminiLLMClient()
     return _provider
-
-
-def get_gemini_client() -> genai.Client:
-    """Return the underlying google-genai SDK client.
-
-    Retained for the agents that still use provider-specific features (vision,
-    embeddings, native ``response_schema``, thinking budgets) directly via
-    ``client.aio.models``.  Prefer the ``generate_*`` helpers in new code.
-    """
-    return get_llm_client().raw()
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +133,41 @@ async def generate_vision_content[T: BaseModel](
         response_schema=response_schema,
         temperature=temperature,
         model=model,
+    )
+
+
+async def generate_vision_text_content(
+    prompt: str,
+    *,
+    image_bytes: bytes,
+    mime_type: str,
+    temperature: float | None = None,
+    model: str | None = None,
+) -> str:
+    """Call the configured LLM with an image + prompt → free-form text (e.g. OCR).
+
+    Raises:
+        LLMUnavailableError — on timeout or exhausted retry budget.
+    """
+    return await get_llm_client().generate_vision_text(
+        prompt,
+        image_bytes=image_bytes,
+        mime_type=mime_type,
+        temperature=temperature,
+        model=model,
+    )
+
+
+async def generate_chat_content(
+    messages: list[ChatTurn], *, system: str | None = None, max_tokens: int
+) -> ChatCompletion:
+    """Call the configured LLM for a role-based multi-turn conversation.
+
+    Raises:
+        LLMUnavailableError — on timeout or exhausted retry budget.
+    """
+    return await get_llm_client().generate_chat(
+        messages, system=system, max_tokens=max_tokens
     )
 
 
