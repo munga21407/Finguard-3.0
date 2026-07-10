@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 style="margin:0 0 12px; font-size:20px; color:#1f2933;">Something needs your review</h1>
+<p style="margin:0 0 16px; font-size:15px; line-height:1.5;">
+  {% if reviewer_name %}Hi {{ reviewer_name }} — {% endif %}{{ summary }}
+</p>
+{% if detail %}
+<p style="margin:0 0 16px; font-size:14px; color:#52606d;">{{ detail }}</p>
+{% endif %}
+<a href="{{ review_url }}" style="display:inline-block; background:#6b38d4; color:#ffffff; text-decoration:none; padding:10px 18px; border-radius:8px; font-size:14px; font-weight:bold;">
+  Open the approvals inbox
+</a>
+{% endblock %}
+{% block footer %}You're receiving this because your role can approve this item.{% if unsubscribe_url %} <a href="{{ unsubscribe_url }}" style="color:#8a94a6;">Unsubscribe from approval emails</a>.{% endif %}{% endblock %}

@@ -1,8 +1,11 @@
 "use client";
 
 // ─── InvoiceGenerator ─────────────────────────────────────────────────────────
-// Agent A UI: user describes an invoice in plain language → 2-second mock
-// extraction → structured, editable React Hook Form preview ready to send.
+// Agent A UI: user describes an invoice in plain language → live Gemini (Agent A)
+// extraction via extractInvoice() → structured, editable React Hook Form preview.
+// Saving calls createInvoice(), which persists a DRAFT invoice (the backend
+// defaults new invoices to InvoiceStatus.DRAFT); there is no send/notify step yet,
+// so the UI must not claim the invoice was delivered to the client.
 //
 // State machine: 'idle' → 'extracting' → 'ready'
 // This prevents impossible states (e.g. loading=true while data is present)
@@ -28,6 +31,7 @@ import {
   type ExtractedInvoice,
 } from "@/lib/api/intelligence";
 import { createInvoice } from "@/lib/api/finance";
+import { useSendInvoice } from "@/lib/hooks/useFinanceData";
 import { CustomerPicker } from "@/components/dashboard/invoices/CustomerPicker";
 
 // ── Schema ────────────────────────────────────────────────────────────────────
@@ -98,7 +102,11 @@ export function InvoiceGenerator() {
   const [prompt, setPrompt] = useState("");
   const [state, setState] = useState<ExtractionState>("idle");
   const [saved, setSaved] = useState(false);
+  const [savedInvoiceId, setSavedInvoiceId] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const sendInvoiceMutation = useSendInvoice();
 
   // Client selection lives outside RHF — it's a real customer id from the picker.
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -159,7 +167,7 @@ export function InvoiceGenerator() {
         (sum, item) => sum + Number(item.quantity) * Number(item.unitPrice),
         0
       );
-      await createInvoice({
+      const created = await createInvoice({
         customer_id: customerId,
         invoice_number: `INV-${Date.now()}`,
         subtotal: subtotalAmount,
@@ -168,6 +176,7 @@ export function InvoiceGenerator() {
         due_date: new Date(values.dueDate).toISOString(),
         notes: values.notes || null,
       });
+      setSavedInvoiceId(created.id);
       setSaved(true);
     } catch {
       setErrorMsg(
@@ -182,10 +191,19 @@ export function InvoiceGenerator() {
     if (id) setCustomerError(null);
   }
 
+  function handleSend() {
+    if (!savedInvoiceId) return;
+    sendInvoiceMutation.mutate(savedInvoiceId, {
+      onSuccess: () => setSent(true),
+    });
+  }
+
   function handleReset() {
     setState("idle");
     setPrompt("");
     setSaved(false);
+    setSavedInvoiceId(null);
+    setSent(false);
     setErrorMsg(null);
     setCustomerId(null);
     setCustomerName("");
@@ -475,7 +493,9 @@ export function InvoiceGenerator() {
             />
           </Field>
 
-          {/* Actions */}
+          {/* Actions — creating an invoice persists it as a DRAFT. There is no
+              separate "send" path yet, so we expose a single honest action rather
+              than a dead "Save as Draft" button that did nothing. */}
           <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-lf-outline-variant/20">
             <button
               type="submit"
@@ -491,14 +511,7 @@ export function InvoiceGenerator() {
               ) : (
                 <Send size={14} />
               )}
-              {isSubmitting ? "Sending…" : "Send Invoice"}
-            </button>
-            <button
-              type="button"
-              className="flex items-center gap-2 px-5 py-2.5 border border-lf-outline-variant text-lf-on-surface-variant rounded-xl text-sm font-semibold hover:bg-lf-surface-container-low transition-all"
-            >
-              <FileText size={14} />
-              Save as Draft
+              {isSubmitting ? "Saving…" : "Save Draft Invoice"}
             </button>
           </div>
         </form>
@@ -507,34 +520,57 @@ export function InvoiceGenerator() {
       {/* ── Success state ─────────────────────────────────────────────────── */}
       {saved && (
         <div className="bg-lf-surface-container-lowest rounded-2xl border border-lf-outline-variant/20 p-8 flex flex-col items-center gap-4 text-center">
-          <div className="w-14 h-14 rounded-full bg-[#dcfce7] flex items-center justify-center">
-            <svg
-              width="28"
-              height="28"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#166534"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
+          <div className="w-14 h-14 rounded-full bg-lf-primary-fixed flex items-center justify-center">
+            {sent ? (
+              <Send size={24} className="text-lf-primary" />
+            ) : (
+              <FileText size={26} className="text-lf-primary" />
+            )}
           </div>
           <div>
             <p className="text-base font-bold text-lf-on-surface">
-              Invoice sent successfully
+              {sent ? "Invoice sent to client" : "Draft invoice saved"}
             </p>
             <p className="text-sm text-lf-on-surface-variant mt-1">
-              The client will receive a notification shortly.
+              {sent
+                ? "It's been emailed to the client and marked as sent."
+                : "Saved as a draft under Receivables. Send it to email the client and mark it sent."}
             </p>
           </div>
-          <button
-            onClick={handleReset}
-            className="text-xs font-semibold text-lf-primary hover:underline"
-          >
-            Create another invoice
-          </button>
+
+          {sendInvoiceMutation.isError && !sent && (
+            <p className="text-xs text-lf-error">
+              Couldn&apos;t send the invoice — check the client&apos;s email and your
+              permissions.
+            </p>
+          )}
+
+          <div className="flex items-center gap-3">
+            {!sent && (
+              <button
+                onClick={handleSend}
+                disabled={sendInvoiceMutation.isPending || !savedInvoiceId}
+                className={cn(
+                  "flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm",
+                  "bg-lf-primary text-lf-on-primary hover:bg-lf-secondary",
+                  "disabled:opacity-60 disabled:cursor-not-allowed"
+                )}
+              >
+                {sendInvoiceMutation.isPending ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Send size={14} />
+                )}
+                {sendInvoiceMutation.isPending ? "Sending…" : "Send to client"}
+              </button>
+            )}
+            <button
+              onClick={handleReset}
+              className="text-xs font-semibold text-lf-primary hover:underline"
+            >
+              Create another invoice
+            </button>
+          </div>
         </div>
       )}
     </div>

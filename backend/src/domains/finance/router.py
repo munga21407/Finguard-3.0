@@ -52,6 +52,7 @@ from src.domains.finance.schemas import (
 )
 from src.domains.finance.service import FinanceService
 from src.domains.identity.dependencies import (
+    RequireFinanceApprove,
     RequireFinanceRead,
     RequireFinanceReconcile,
     RequireFinanceWrite,
@@ -255,6 +256,40 @@ async def mark_invoice_paid(
         "invoice",
         resource_id=invoice.id,
         metadata={"vault": settle.vault.value, "status": invoice.status.value},
+    )
+    return result
+
+
+@router.post("/invoices/{invoice_id}/send", response_model=InvoiceResponse)
+async def send_invoice(
+    invoice_id: uuid.UUID, db: DBSession, current_user: RequireFinanceWrite
+) -> InvoiceResponse:
+    """Issue a draft invoice — flip it to SENT and email it to the customer."""
+    invoice = await FinanceService(db).send_invoice(invoice_id, current_user)
+    result = InvoiceResponse.model_validate(invoice)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.INVOICE_SENT,
+        "invoice",
+        resource_id=invoice.id,
+        metadata={"invoice_number": invoice.invoice_number},
+    )
+    return result
+
+
+@router.post("/invoices/{invoice_id}/resend", response_model=InvoiceResponse)
+async def resend_invoice(
+    invoice_id: uuid.UUID, db: DBSession, current_user: RequireFinanceWrite
+) -> InvoiceResponse:
+    """Re-email an already-issued invoice to the customer (status unchanged)."""
+    invoice = await FinanceService(db).resend_invoice(invoice_id, current_user)
+    result = InvoiceResponse.model_validate(invoice)
+    await AuditService(db).record_user_action_safe(
+        current_user,
+        AuditAction.INVOICE_SENT,
+        "invoice",
+        resource_id=invoice.id,
+        metadata={"invoice_number": invoice.invoice_number, "resend": True},
     )
     return result
 
@@ -606,7 +641,7 @@ async def create_payable(
 
 @router.post("/payables/{payable_id}/approve", response_model=PayableResponse)
 async def approve_payable(
-    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceApprove
 ) -> PayableResponse:
     """Approve a pending payable (reviewer must differ from submitter)."""
     expense = await FinanceService(db).transition_payable(
@@ -625,7 +660,7 @@ async def approve_payable(
 
 @router.post("/payables/{payable_id}/reject", response_model=PayableResponse)
 async def reject_payable(
-    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceReconcile
+    payable_id: uuid.UUID, db: DBSession, current_user: RequireFinanceApprove
 ) -> PayableResponse:
     """Reject a pending payable (reviewer must differ from submitter)."""
     expense = await FinanceService(db).transition_payable(
@@ -646,7 +681,7 @@ async def reject_payable(
 async def schedule_payable(
     payable_id: uuid.UUID,
     db: DBSession,
-    current_user: RequireFinanceReconcile,
+    current_user: RequireFinanceApprove,
     data: PayableScheduleRequest | None = None,
 ) -> PayableResponse:
     """Schedule an approved payable for payment."""

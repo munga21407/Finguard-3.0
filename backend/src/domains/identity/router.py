@@ -17,10 +17,14 @@ from src.domains.audit.service import AuditService
 from src.domains.identity.dependencies import CurrentUser, RequireUserManage
 from src.domains.identity.schemas import (
     AccessTokenResponse,
+    ForgotPasswordRequest,
+    ResendVerificationRequest,
+    ResetPasswordRequest,
     TokenRequest,
     UserCreate,
     UserResponse,
     UserUpdate,
+    VerifyEmailRequest,
 )
 from src.domains.identity.service import IdentityService
 from src.infrastructure.cache.redis import get_auth_redis
@@ -192,6 +196,51 @@ async def login(
         outcome=AuditOutcome.SUCCESS,
     )
     return AccessTokenResponse(access_token=result.access_token)
+
+
+@router.post("/verify-email", status_code=204)
+@limiter.limit("10/minute")
+async def verify_email(
+    request: Request, data: VerifyEmailRequest, db: DBSession
+) -> Response:
+    """Confirm email ownership from the link's token. Idempotent."""
+    await IdentityService(db).verify_email(data.token)
+    return Response(status_code=204)
+
+
+@router.post("/resend-verification", status_code=202)
+@limiter.limit("5/minute")
+async def resend_verification(
+    request: Request, data: ResendVerificationRequest, db: DBSession
+) -> dict[str, str]:
+    """Re-send the verification email. Always 202 (no account enumeration)."""
+    await IdentityService(db).resend_verification(data.email)
+    return {"detail": "If that account needs verification, a new link is on its way."}
+
+
+@router.post("/forgot-password", status_code=202)
+@limiter.limit("5/minute")
+async def forgot_password(
+    request: Request, data: ForgotPasswordRequest, db: DBSession
+) -> dict[str, str]:
+    """Request a password-reset link.
+
+    Always returns 202 with the same body whether or not the email is registered,
+    so this endpoint can't be used to enumerate accounts. Rate-limited per IP to
+    stop it being used to flood a victim's inbox.
+    """
+    await IdentityService(db).request_password_reset(data.email)
+    return {"detail": "If that email is registered, a reset link is on its way."}
+
+
+@router.post("/reset-password", status_code=204)
+@limiter.limit("5/minute")
+async def reset_password(
+    request: Request, data: ResetPasswordRequest, db: DBSession
+) -> Response:
+    """Set a new password from a valid reset token; ends all existing sessions."""
+    await IdentityService(db).reset_password(data.token, data.new_password)
+    return Response(status_code=204)
 
 
 @router.post("/token/refresh", response_model=AccessTokenResponse)

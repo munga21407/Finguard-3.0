@@ -26,7 +26,19 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.VIEWER, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Admin-approval gate: an owner/admin sets this via PATCH /users/{id}.
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Self-service email-ownership gate: set when the user clicks the link in their
+    # verification email. Login requires BOTH is_verified (admin) AND this.
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Set on every password reset. Access/refresh tokens issued (``iat``) before
+    # this instant are rejected, so a reset immediately invalidates existing
+    # sessions — including a stolen 7-day refresh token.
+    password_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

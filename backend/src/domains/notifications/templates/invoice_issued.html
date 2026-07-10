@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 style="margin:0 0 12px; font-size:20px; color:#1f2933;">Invoice {{ invoice_number }}</h1>
+<p style="margin:0 0 16px; font-size:15px; line-height:1.5;">
+  {% if customer_name %}Hi {{ customer_name }} — {% endif %}please find your invoice below.
+</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%; font-size:14px; border-collapse:collapse;">
+  <tr><td style="padding:6px 0; color:#8a94a6;">Invoice</td><td style="padding:6px 0; text-align:right; font-weight:bold;">{{ invoice_number }}</td></tr>
+  <tr><td style="padding:6px 0; color:#8a94a6;">Amount due</td><td style="padding:6px 0; text-align:right; font-weight:bold;">{{ currency }} {{ balance_due }}</td></tr>
+  <tr><td style="padding:6px 0; color:#8a94a6;">Total</td><td style="padding:6px 0; text-align:right;">{{ currency }} {{ total }}</td></tr>
+  {% if due_date %}<tr><td style="padding:6px 0; color:#8a94a6;">Due date</td><td style="padding:6px 0; text-align:right;">{{ due_date }}</td></tr>{% endif %}
+</table>
+{% endblock %}
+{% block footer %}Please settle this invoice by the due date. Thank you for your business.{% endblock %}

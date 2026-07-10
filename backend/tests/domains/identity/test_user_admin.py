@@ -61,11 +61,21 @@ async def test_second_user_is_unverified_viewer_and_cannot_login(client: AsyncCl
 async def test_admin_can_verify_pending_user_who_then_logs_in(
     client: AsyncClient, auth_as: Callable[..., User]
 ) -> None:
+    from src.core.security import create_email_verification_token
+
     await _register(client, f"owner-{uuid.uuid4().hex[:8]}@finguard.io")
     email = f"pending-{uuid.uuid4().hex[:8]}@finguard.io"
     reg = await _register(client, email)
     user_id = reg.json()["id"]
 
+    # Gate 1: the user confirms their email (self-service).
+    verify = await client.post(
+        "/api/v1/identity/verify-email",
+        json={"token": create_email_verification_token(user_id)},
+    )
+    assert verify.status_code == 204
+
+    # Gate 2: an admin approves the account.
     auth_as(UserRole.OWNER)
     patch = await client.patch(
         f"/api/v1/identity/users/{user_id}",
@@ -75,6 +85,7 @@ async def test_admin_can_verify_pending_user_who_then_logs_in(
     assert patch.json()["is_verified"] is True
     assert patch.json()["role"] == "accountant"
 
+    # Both gates satisfied → login succeeds.
     login = await client.post(
         "/api/v1/identity/token", json={"email": email, "password": "secure1234"}
     )

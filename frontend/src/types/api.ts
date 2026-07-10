@@ -155,6 +155,19 @@ export type ApiInsightFeedItem       = S["InsightFeedItem"];
 export type ApiActionFeedItem        = S["ActionFeedItem"];
 export type ApiNotificationItem      = S["NotificationItem"];
 export type ApiAgentTelemetry        = S["AgentTelemetry"];
+// Human-in-the-loop approval queue for value-changing agent actions.
+export type ApiAgentActionProposal   = S["AgentActionProposalResponse"];
+export type ApiProposalStatus        = ApiAgentActionProposal["status"];
+// Email notification preferences.
+export type ApiEmailPreferences      = S["PreferencesResponse"];
+export type ApiCategoryPreference    = S["CategoryPreference"];
+export type ApiPreferenceUpdate      = S["PreferenceUpdate"];
+// Email delivery admin.
+export type ApiEmailKpis             = S["EmailKpis"];
+export type ApiEmailOutboxPage       = S["EmailOutboxPage"];
+export type ApiEmailOutboxItem       = S["EmailOutboxItem"];
+export type ApiEmailDeadLetterPage   = S["EmailDeadLetterPage"];
+export type ApiEmailDeadLetterItem   = S["EmailDeadLetterItem"];
 // Admin: KRA knowledge-base document ingestion result.
 export type ApiKnowledgeIngestResponse = S["KnowledgeIngestResponse"];
 
@@ -165,6 +178,27 @@ export type ApiAlertKpis     = S["AlertKpis"];
 export type ApiAlertType     = S["AlertType"];
 export type ApiAlertSeverity = S["AlertSeverity"];
 export type ApiAlertStatus   = S["AlertStatus"];
+
+// Backwards-compatible inventory names used by the stock management UI.
+export type ApiInventoryProduct = ApiProduct & {
+  stock_level?: ApiStockLevel | ApiStockLevelView | null;
+};
+export type ApiInventoryProductCreate = ApiProductCreate;
+export type ApiInventoryProductUpdate = ApiProductUpdate;
+export interface ApiInventoryProductListParams {
+  limit?: number;
+  offset?: number;
+  category?: string;
+  low_stock?: boolean;
+  q?: string;
+}
+export type ApiStockMovementCreate = ApiMovementCreate & {
+  product_id?: string;
+  location_id?: string | null;
+};
+export type ApiStockMovementType = ApiMovementType;
+export type ApiStockMovementReason = ApiMovementReason;
+export type ApiValuationReportCategory = ApiValuationReport["categories"][number];
 
 // NOTE: Agent structured-output models (ExtractedInvoice, WatchdogAnalysis,
 // CashFlowForecast, AgentF/G outputs, AgentRun*, etc.) are intentionally NOT

@@ -16,7 +16,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import ForbiddenError, UnauthorizedError
-from src.core.security import ACCESS_COOKIE_NAME, decode_token
+from src.core.security import (
+    ACCESS_COOKIE_NAME,
+    decode_token,
+    token_issued_after_password_change,
+)
 from src.domains.identity.models import User
 from src.domains.identity.permissions import Permission, has_permission
 from src.domains.identity.repository import UserRepository
@@ -64,6 +68,12 @@ async def get_current_user(
     user = await UserRepository(db).get_by_id(uuid.UUID(raw_id))
     if not user or not user.is_active:
         raise UnauthorizedError("User not found or inactive")
+
+    # Reject any token minted before the user's last password reset — so a reset
+    # immediately kills existing sessions. Tokens issued before the ``iat`` claim
+    # existed have no ``iat`` and are allowed through (they expire via ``exp``).
+    if not token_issued_after_password_change(payload.get("iat"), user.password_changed_at):
+        raise UnauthorizedError("Session ended — please sign in again")
     return user
 
 
@@ -109,6 +119,9 @@ RequireFinanceRead = Annotated[User, Depends(require_permission(Permission.FINAN
 RequireFinanceWrite = Annotated[User, Depends(require_permission(Permission.FINANCE_WRITE))]
 RequireFinanceReconcile = Annotated[
     User, Depends(require_permission(Permission.FINANCE_RECONCILE))
+]
+RequireFinanceApprove = Annotated[
+    User, Depends(require_permission(Permission.FINANCE_APPROVE))
 ]
 RequireCrmRead = Annotated[User, Depends(require_permission(Permission.CRM_READ))]
 RequireCrmWrite = Annotated[User, Depends(require_permission(Permission.CRM_WRITE))]

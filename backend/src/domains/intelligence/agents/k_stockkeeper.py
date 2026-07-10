@@ -36,6 +36,10 @@ from src.domains.intelligence.prompts.k_stockkeeper import (
     K_STOCKKEEPER_HUMAN,
     K_STOCKKEEPER_SYSTEM,
 )
+from src.domains.intelligence.proposal_service import (
+    ACTION_STOCK_ADJUSTMENT,
+    ProposalService,
+)
 from src.domains.intelligence.schemas import (
     AgentKOutput,
     OrchestratorState,
@@ -48,6 +52,7 @@ from src.domains.intelligence.tools.inventory_tools import (
     reorder_recommendation,
     stock_level_lookup,
 )
+from src.domains.inventory.types import MovementType
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
 # Cap the number of at-risk items we deep-analyse (reorder plans) per run so a
@@ -91,6 +96,56 @@ def _first_query(messages: list[Any]) -> str:
     return "Give me a stock health overview."
 
 
+async def _queue_adjustment_proposal(
+    session: Any,
+    action: dict[str, Any],
+    movement_type: str,
+    actor_id: uuid.UUID | None,
+) -> dict[str, Any]:
+    """Validate an adjustment's figures deterministically, then queue it for a human.
+
+    Runs the guarded tool with ``apply=False`` so the resulting on-hand is computed
+    (and impossible movements are rejected) without any write, then persists a
+    proposal for a second authorised reviewer to release via
+    ``POST /intelligence/proposals/{id}/approve``.  A rejected preview is surfaced
+    as-is and never queued.
+    """
+    preview = await propose_stock_movement(
+        session,
+        product_ref=str(action["product_ref"]),
+        movement_type=movement_type,
+        quantity=float(action.get("quantity", 0)),
+        reason=action.get("reason"),
+        unit_cost=action.get("unit_cost"),
+        note=action.get("note"),
+        apply=False,
+        actor_id=actor_id,
+    )
+    if preview.get("status") != "proposed":
+        return preview  # guard rejected it (bad qty, oversell) — don't queue
+
+    proposal = await ProposalService(session).create_proposal(
+        agent_label="k_stockkeeper",
+        action_type=ACTION_STOCK_ADJUSTMENT,
+        payload={
+            "product_ref": str(action["product_ref"]),
+            "movement_type": movement_type,
+            "quantity": float(action.get("quantity", 0)),
+            "reason": action.get("reason"),
+            "unit_cost": action.get("unit_cost"),
+            "note": action.get("note"),
+        },
+        triggered_by=actor_id,
+        rationale=action.get("reason"),
+    )
+    return {
+        **preview,
+        "status": "pending_approval",
+        "proposal_id": str(proposal.id),
+        "detail": "Queued for release by a second authorised reviewer (inventory:adjust).",
+    }
+
+
 def make_k_stockkeeper_node(llm: Any = None) -> Any:  # llm kept for signature parity
     async def k_stockkeeper_node(state: OrchestratorState) -> dict[str, Any]:
         ctx: dict[str, Any] = state["context"]
@@ -130,23 +185,34 @@ def make_k_stockkeeper_node(llm: Any = None) -> Any:  # llm kept for signature p
             movement_result: dict[str, Any] | None = None
             action = ctx.get("stock_action")
             if isinstance(action, dict) and action.get("product_ref"):
-                apply = can_act and bool(ctx.get("require_stock_confirmation"))
                 actor_id = None
                 try:
                     actor_id = uuid.UUID(user_id) if user_id else None
                 except (ValueError, TypeError):
                     actor_id = None
-                movement_result = await propose_stock_movement(
-                    session,
-                    product_ref=str(action["product_ref"]),
-                    movement_type=str(action.get("movement_type", "adjustment")),
-                    quantity=float(action.get("quantity", 0)),
-                    reason=action.get("reason"),
-                    unit_cost=action.get("unit_cost"),
-                    note=action.get("note"),
-                    apply=apply,
-                    actor_id=actor_id,
-                )
+
+                movement_type = str(action.get("movement_type", "adjustment"))
+                # A stock ADJUSTMENT creates or destroys stock (write-up / write-off),
+                # so it is never applied inline — it goes to the human-in-the-loop
+                # queue for a SECOND authorised reviewer (inventory:adjust) to release.
+                # Routine receipts/issues keep the inline path (Tier-1 authority).
+                if movement_type.lower() == MovementType.ADJUSTMENT.value:
+                    movement_result = await _queue_adjustment_proposal(
+                        session, action, movement_type, actor_id
+                    )
+                else:
+                    apply = can_act and bool(ctx.get("require_stock_confirmation"))
+                    movement_result = await propose_stock_movement(
+                        session,
+                        product_ref=str(action["product_ref"]),
+                        movement_type=movement_type,
+                        quantity=float(action.get("quantity", 0)),
+                        reason=action.get("reason"),
+                        unit_cost=action.get("unit_cost"),
+                        note=action.get("note"),
+                        apply=apply,
+                        actor_id=actor_id,
+                    )
 
         # ── A2A: optional upstream cash-flow context (Agent D) ────────────────
         forecast_ctx: dict[str, Any] = ctx.get("forecast") or {}

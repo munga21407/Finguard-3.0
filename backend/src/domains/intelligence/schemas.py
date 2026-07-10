@@ -141,6 +141,24 @@ class AgentKOutput(BaseModel):
     )
 
 
+class AgentActionProposalResponse(BaseModel):
+    """A pending (or decided) agent-proposed action in the HITL approval queue."""
+
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    agent_label: str
+    action_type: str
+    payload: dict[str, Any]
+    status: Literal["proposed", "applied", "rejected"]
+    rationale: str | None = None
+    triggered_by: uuid.UUID | None = None
+    reviewed_by: uuid.UUID | None = None
+    reviewed_at: datetime | None = None
+    applied_ref: str | None = None
+    created_at: datetime
+
+
 class KeyFinding(BaseModel):
     """A single key metric distilled from agent analysis for GenUI metric badges."""
 

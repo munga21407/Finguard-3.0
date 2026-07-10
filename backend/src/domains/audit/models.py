@@ -41,6 +41,7 @@ class AuditAction(enum.StrEnum):
     # Finance — invoices (receivables)
     INVOICE_CREATED = "invoice.created"
     INVOICE_UPDATED = "invoice.updated"
+    INVOICE_SENT = "invoice.sent"
     INVOICE_PAID = "invoice.paid"
     INVOICE_CANCELLED = "invoice.cancelled"
     CREDIT_NOTE_APPLIED = "credit_note.applied"
@@ -63,6 +64,13 @@ class AuditAction(enum.StrEnum):
     STOCK_ADJUSTED = "stock.adjusted"
     # Intelligence — agent orchestration runs
     AGENT_ACTION_RUN = "agent.action_run"
+    # Intelligence — human-in-the-loop approval of an agent-proposed action
+    AGENT_PROPOSAL_CREATED = "agent.proposal.created"    # actor_type=agent (the maker)
+    AGENT_PROPOSAL_APPROVED = "agent.proposal.approved"  # actor_type=user (the checker)
+    AGENT_PROPOSAL_REJECTED = "agent.proposal.rejected"
+    # Notifications — email delivery operations (admin)
+    EMAIL_REPLAYED = "email.replayed"    # a dead-lettered email re-queued
+    EMAIL_RESENT = "email.resent"        # a delivered email re-sent
 
 
 class AuditLog(Base):

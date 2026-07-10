@@ -437,8 +437,8 @@ All services are defined in `infrastructure/docker-compose.yml`. Background work
 
 | Service | Purpose |
 |---|---|
-| **celery-worker** | Queues: `ocr_processing`, `batch_processing`, `watchdog`. Concurrency: 2. Also runs RabbitMQ consumer and outbox projector when enabled. |
-| **celery-beat** | Periodic tasks; schedule persisted via `celerybeat_schedule` volume |
+| **celery-worker** | Queues: `ocr_processing`, `batch_processing`, `watchdog`, `notifications`. Concurrency: 2. Also runs RabbitMQ consumer and outbox projector when enabled. |
+| **celery-beat** | Periodic tasks; schedule persisted via `celerybeat_schedule` volume. Includes `email.flush_outbox` (60 s) and `email.dispatch_payment_reminders` (daily 08:00 UTC) |
 | **flower** | Celery monitoring UI (port 5555) |
 
 ### Monitoring Services (`--profile monitoring`)
@@ -457,18 +457,24 @@ All services are defined in `infrastructure/docker-compose.yml`. Background work
 
 ```
 finguard.users (
-  id              UUID PK,
-  email           VARCHAR UNIQUE,
-  full_name       VARCHAR,
-  hashed_password VARCHAR,
-  role            UserRole ENUM (owner | admin | manager | accountant | viewer),
-  is_active       BOOLEAN DEFAULT true,
-  is_verified     BOOLEAN DEFAULT false,  -- first-user bootstrap sets true; admin sets for subsequent users
-  created_at      TIMESTAMPTZ
+  id                  UUID PK,
+  email               VARCHAR UNIQUE,
+  full_name           VARCHAR,
+  hashed_password     VARCHAR,
+  role                UserRole ENUM (owner | admin | manager | accountant | viewer),
+  is_active           BOOLEAN DEFAULT true,
+  is_verified         BOOLEAN DEFAULT false,     -- admin-approval login gate
+  email_verified_at   TIMESTAMPTZ NULL,          -- self-service email-ownership gate (mig 0024)
+  password_changed_at TIMESTAMPTZ NULL,          -- reset stamp: invalidates tokens issued before it (mig 0023)
+  created_at          TIMESTAMPTZ
 )
 ```
 
-**Bootstrap behaviour**: The first user registered becomes `role=OWNER, is_verified=true` automatically. All subsequent self-registrations are `role=VIEWER, is_verified=false` and are blocked from login until an admin/owner verifies them. Alternatively, run `scripts.seed_users` (`make seed-users`) to create verified `OWNER` + `ADMIN` accounts from the `SEED_*` env vars without self-registering — idempotent (existing emails skipped) and refuses weak passwords in production.
+**Login = two independent gates** (both required): `email_verified_at IS NOT NULL` (the user clicked the link in their verification email) **and** `is_verified` (an owner/admin approved the account via `PATCH /users/{id}`). The gates are checked email-first (self-actionable) with distinct messages.
+
+**Bootstrap behaviour**: The first user registered becomes `role=OWNER, is_verified=true` with `email_verified_at` auto-set (they held the bootstrap key). All subsequent self-registrations are `role=VIEWER`, unverified on both gates, and blocked from login until they verify their email *and* an admin approves. Alternatively, run `scripts.seed_users` (`make seed-users`) to create fully-verified `OWNER` + `ADMIN` accounts from the `SEED_*` env vars — idempotent and refuses weak passwords in production.
+
+**Password reset / session invalidation**: `password_changed_at` is stamped on every reset; access/refresh tokens carry an `iat` claim and are rejected when issued before it — so a reset immediately evicts existing sessions, including a stolen 7-day refresh token.
 
 ### PostgreSQL — CRM Domain
 
@@ -675,6 +681,20 @@ finguard.agent_e_models (              -- serialized per-customer IsolationFores
   version         INT DEFAULT 1,     -- bumped on each retrain upsert
   trained_at      TIMESTAMPTZ
 )
+
+agent_action_proposals (              -- human-in-the-loop queue for value-changing agent actions (mig 0020)
+  id              UUID PK,
+  agent_label     VARCHAR(50),       -- the maker (e.g. 'k_stockkeeper')
+  action_type     VARCHAR(40) (indexed), -- '<domain>.<verb>', e.g. 'stock.adjustment' → selects approval permission
+  payload         JSONB,             -- exact tool args to replay the guarded write on approval
+  status          VARCHAR(20) (indexed), -- proposed → applied | rejected (claim-first exactly-once)
+  rationale       TEXT,
+  triggered_by    UUID,              -- the human who ran the agent (requester); strict SoD: cannot self-approve
+  reviewed_by     UUID,              -- the human who released it (the checker)
+  reviewed_at     TIMESTAMPTZ,
+  applied_ref     VARCHAR(100),      -- resulting movement/expense id once applied
+  created_at      TIMESTAMPTZ (indexed)
+)
 ```
 
 ### PostgreSQL — Audit Domain
@@ -723,6 +743,44 @@ finguard.alerts (
 
 Agent E's findings reach this table via the watchdog consumer (`workers/consumers/watchdog_consumer.py`), which creates an `Alert` from a watchdog result. Surfaced on `/dashboard/payables/alerts` and exposed via `/api/v1/alerts`.
 
+### PostgreSQL — Notifications Domain
+
+The transactional email pipeline (Gmail SMTP). A business action enqueues an
+`email_outbox` row *in its own transaction*; a Celery-beat worker
+(`email.flush_outbox`, 60 s) renders (Jinja2, HTML+text) and sends it via
+`aiosmtplib`, with at-least-once delivery. `idempotency_key` is unique so nothing
+sends twice; exhausted rows move to `email_dead_letters`. `MAIL_ENABLED=false`
+renders + logs but opens no socket (dev/CI never send).
+
+```
+email_outbox (                        -- mig 0021
+  id              UUID PK,
+  to_email        VARCHAR(320),  to_name VARCHAR(255),
+  subject         VARCHAR(255),
+  template        VARCHAR(100),       -- resolves to {template}.html + {template}.txt
+  context         JSONB,
+  status          EmailStatus (pending | sent | failed) (indexed),
+  attempts        INT,  last_error TEXT,
+  scheduled_for   TIMESTAMPTZ NULL,   -- future-dated (reminders); NULL = next flush
+  sent_at         TIMESTAMPTZ NULL,
+  idempotency_key VARCHAR(120) UNIQUE,  -- e.g. welcome:{user}, receipt:{payment}, reminder:{invoice}:{tier}
+  created_at      TIMESTAMPTZ (indexed)
+)
+email_dead_letters ( … )              -- terminal: moved after EMAIL_MAX_RETRIES
+
+email_opt_outs (                      -- mig 0022 — notification preferences
+  id UUID PK, email VARCHAR(320) (indexed), category VARCHAR(20),
+  created_at TIMESTAMPTZ,
+  UNIQUE (email, category)            -- presence = opted out
+)
+```
+
+**Categories & suppression**: `EmailCategory` = account / receipt / invoice
+(transactional, always sent) + approval / reminder (**suppressible** via
+`email_opt_outs`). `enqueue_email(..., category)` drops a suppressible mail when
+the recipient has opted out. Suppressible mail carries a signed, non-expiring
+one-click **unsubscribe** link (`List-Unsubscribe`-ready).
+
 ### MongoDB — Collections
 
 | Collection | Purpose |
@@ -736,7 +794,7 @@ Agent E's findings reach this table via the watchdog consumer (`workers/consumer
 
 All agents are LangGraph nodes. They receive `OrchestratorState`, perform their task, update `state["context"]`, and return to the supervisor unconditionally. Every result is written to `intelligence_hub` by `hub_writer_node`.
 
-**Implementation Status**: ✅ Complete — all 10 agents are fully implemented.
+**Implementation Status**: ✅ Complete — all 11 agents (A–K) are fully implemented. Agent K (Stock Steward) operates over the inventory domain and is the first agent whose value-changing writes go through the human-in-the-loop approval queue (see Agent K below and §8 `/proposals`).
 
 ### GenUI Payload Contract
 
@@ -912,6 +970,20 @@ class CompositeGenUIPayload(BaseModel):
 
 ---
 
+### Agent K — Stock Steward ✅
+
+| Field | Value |
+|---|---|
+| File | `agents/k_stockkeeper.py` |
+| Domain | Inventory (products, stock levels, append-only movement ledger) |
+| Trigger | Inventory / stock-health intents |
+| Context key written | `stock_steward` (narrative + `proposed_actions`, `can_act`) |
+| Tools | Typed inventory tools; the **only** write path is `propose_stock_movement`, which routes through `InventoryService` (row lock, non-negative guard, weighted-avg costing, agent-attributed audit) — never LLM-authored SQL |
+| A2A | Soft-consumes Agent D's cash-flow forecast when present (advisory only) |
+| Human-in-the-loop | A stock **ADJUSTMENT** (creates/destroys stock) is never applied inline — it is persisted to `agent_action_proposals` at `proposed` for a second human holding `inventory:adjust` to release via `/proposals/{id}/approve`. Routine receipts/issues keep the inline path. Segregation of duties (requester ≠ approver) + exactly-once apply (claim-first) enforced in `ProposalService` |
+
+---
+
 ### Hub Writer ✅
 
 | Field | Value |
@@ -1014,13 +1086,17 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/register` | — | Create user (first → OWNER+verified; subsequent → VIEWER+unverified) |
-| POST | `/token` | — | Login; sets HttpOnly access/refresh + CSRF/session cookies (access also in body); Redis lockout |
-| POST | `/token/refresh` | Refresh cookie + CSRF | Rotate tokens (jti blacklisted on use; reuse detected) |
+| POST | `/register` | — | Create user (first → OWNER+verified; subsequent → VIEWER, must verify email + await admin) |
+| POST | `/token` | — | Login; sets HttpOnly access/refresh + CSRF/session cookies (access also in body); Redis lockout. Requires **both** gates (email_verified + admin-approved) |
+| POST | `/token/refresh` | Refresh cookie + CSRF | Rotate tokens (jti blacklisted on use; reuse detected; rejects tokens issued before a password reset) |
+| POST | `/verify-email` | — (signed token) | Confirm email ownership from the link's token (idempotent); rate-limited 10/min |
+| POST | `/resend-verification` | — | Re-send the verification email; always 202 (no account enumeration); 5/min |
+| POST | `/forgot-password` | — | Request a reset link; always 202 (no enumeration); 5/min |
+| POST | `/reset-password` | — (signed token) | Set a new password from a one-time-use token; ends all existing sessions; 5/min |
 | POST | `/logout` | Cookie/Bearer + CSRF | Revoke access + refresh tokens; clears auth cookies |
 | GET | `/me` | Cookie/Bearer | Return authenticated user profile from backend (authoritative) |
 | GET | `/users` | Cookie/Bearer + `user:manage` | List all users (admin/owner only) |
-| PATCH | `/users/{user_id}` | Cookie/Bearer + `user:manage` | Update user role / verified status |
+| PATCH | `/users/{user_id}` | Cookie/Bearer + `user:manage` | Update user role / verified (admin-approval gate) |
 
 ### CRM — `/api/v1/crm`
 
@@ -1038,8 +1114,9 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/ledger` | `finance:write` | Create ledger entry |
 | GET | `/invoices` | `finance:read` | List invoices |
 | GET | `/invoices/{id}` | `finance:read` | Get invoice |
-| POST | `/invoices` | `finance:write` | Create invoice |
+| POST | `/invoices` | `finance:write` | Create invoice (lands as DRAFT) |
 | PATCH | `/invoices/{id}` | `finance:write` | Update invoice |
+| POST | `/invoices/{id}/send` | `finance:write` | Issue a draft invoice: flip DRAFT→SENT and email it to the customer |
 | POST | `/invoices/{id}/pay` | `finance:write` | Settle invoice (appends a `payment_applied` event for the balance) |
 | POST | `/invoices/{id}/credit-note` | `finance:write` | Apply a credit note (appends `credit_note_applied`; reduces receivable, no cash) |
 | POST | `/invoices/{id}/cancel` | `finance:write` | Cancel invoice (appends `invoice_cancelled`) |
@@ -1052,9 +1129,9 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/receipts` | `finance:write` | Persist a reviewed receipt scan as an expense (budget burn-down + `expenses.created`) |
 | GET | `/payables/queue` | `finance:read` | AP approval queue (pending/scheduled payables) |
 | POST | `/payables` | `finance:write` | Create a payable (maker) |
-| POST | `/payables/{id}/approve` | `finance:reconcile` | Approve a payable (checker; triggers deferred budget burn-down) |
-| POST | `/payables/{id}/reject` | `finance:reconcile` | Reject a payable (checker) |
-| POST | `/payables/{id}/schedule` | `finance:reconcile` | Schedule an approved payable for a payment run |
+| POST | `/payables/{id}/approve` | `finance:approve` | Approve a payable (checker; triggers deferred budget burn-down). Submitter ≠ approver enforced in service |
+| POST | `/payables/{id}/reject` | `finance:approve` | Reject a payable (checker) |
+| POST | `/payables/{id}/schedule` | `finance:approve` | Schedule an approved payable for a payment run |
 | GET | `/reconciliation-flow` | `finance:read` | Reconciliation flow summary (bank-line ↔ ledger state) |
 | POST | `/bank-statements` | `finance:reconcile` | Import bank statement lines (idempotent + provenance) |
 | GET | `/bank-statements` | `finance:read` | List imported bank statement lines |
@@ -1080,6 +1157,9 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | GET | `/conversation/{session_id}/status` | `intelligence:read` | Owner-verified status poll |
 | POST | `/admin/knowledge-base/ingest` | `user:manage` | Upload a `.txt`/`.md` KRA document; chunked + Gemini-embedded into the pgvector KB (idempotent upsert — same code path as `scripts.ingest_kra_docs`) |
 | POST | `/genui/error` | `intelligence:read` | GenUI error-boundary telemetry sink (frontend reports a crashed widget; returns 202) |
+| GET | `/proposals` | `intelligence:read` | Human-in-the-loop queue: value-changing agent actions awaiting release (currently Agent K stock adjustments) |
+| POST | `/proposals/{id}/approve` | `inventory:adjust` | Release a pending agent proposal — applies the write exactly once (claim-first). Requester ≠ approver enforced in service |
+| POST | `/proposals/{id}/reject` | `inventory:adjust` | Reject a pending agent proposal (no write) |
 
 ### Alerts — `/api/v1/alerts`
 
@@ -1101,6 +1181,15 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 
 `audit:read` is a manager+ permission (oversight of who-did-what across domains).
 
+### Notifications — `/api/v1/notifications`
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/preferences` | Cookie/Bearer | The current user's suppressible email categories (approval / reminder) and opt-out state |
+| PUT | `/preferences` | Cookie/Bearer | Turn a suppressible category on/off for the current user |
+| GET | `/unsubscribe?token=` | — (signed token) | Public one-click unsubscribe landing (HTML confirmation) |
+| POST | `/unsubscribe?token=` | — (signed token) | RFC 8058 one-click unsubscribe (mail-client POST) |
+
 ### Special Endpoints
 
 | Method | Path | Auth | Description |
@@ -1120,9 +1209,12 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | Route | Purpose |
 |---|---|
 | `/` | Root redirect → `/dashboard` |
-| `/login` | JWT login form (`(auth)` route group) |
+| `/login` | JWT login form (`(auth)` route group); "Forgot password?" → `/forgot-password` |
 | `/signup` | User registration (`(auth)` route group) |
-| `/settings` | Account profile (name/email/role from `/me`) + server-revoking logout (root-level shell, no sidebar) |
+| `/forgot-password` | Request a reset link (always shows the same confirmation — no enumeration) |
+| `/reset-password` | Set a new password from the `?token=` link; redirects to login on success |
+| `/verify-email` | Auto-confirms the `?token=` from the verification email; shows verified / expired state |
+| `/settings` | Account profile (name/email/role from `/me`) + **Email notifications** toggles (suppressible categories via `/notifications/preferences`) + server-revoking logout |
 | `/support` | Help & contact surface — contact channels + documentation links (root-level shell, mirrors `/settings`) |
 | `/dashboard` | Root dashboard redirect |
 | `/dashboard/overview` | Main KPI overview |
@@ -1133,8 +1225,10 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | `/dashboard/transactions` | Transaction list + ReceiptScanner (upload → OCR → review → create expense). Target of the sidebar "New Transaction" CTA |
 | `/dashboard/receivables` | AR: InvoiceTable (live `useInvoices`/`useCustomers`), AgentStatus |
 | `/dashboard/payables` | AP: DepartmentBudgets (live `useBudgets`), RecentOutgoing (live `useExpenses`), AgentIntegrations |
-| `/dashboard/payables/queue` | AP approval queue — wired to `/finance/payables` maker-checker (create → approve/reject/schedule) |
+| `/dashboard/payables/queue` | AP approval queue — wired to `/finance/payables` maker-checker (create → approve/reject/schedule); `finance:approve` to review |
 | `/dashboard/payables/alerts` | Budget alerts (live `/api/v1/alerts`) |
+| `/dashboard/approvals` | **Unified approvals inbox** — one reviewer surface for both financial approvals (`/finance/payables/queue`) and agent actions (`/intelligence/proposals`). Manager+ to act; server enforces per-domain permission + segregation of duties |
+| `/dashboard/inventory` | Inventory (Agent K domain): products, stock levels, valuation, low-stock — live `useInventory` hooks |
 | `/dashboard/reconciliation` | Bank-statement reconciliation + treasury/vault-transfer panel (live `/finance/bank-statements`, `/finance/vault-*`) |
 | `/dashboard/operations` | Operations control surface — live System Health card (`/health/ready` poll) + an Activity Log card linking to the audit trail + links to queue/alerts |
 | `/dashboard/operations/logs` | Audit / activity-log view (`ActivityLog`): KPI tiles, action/outcome filters, paginated table, detail drawer. Gated by `RequirePermission minRole="MANAGER"` |
@@ -1331,8 +1425,10 @@ Exchange: finguard.events  (type=TOPIC, durable=true)
 
 | Token Type | Algorithm | Default Expiry | Claims |
 |---|---|---|---|
-| Access token | HS256 | 30 minutes | `sub` (user UUID), `role`, `exp`, `jti` |
-| Refresh token | HS256 | 7 days | `sub`, `exp`, `jti` (for revocability) |
+| Access token | HS256 | 30 minutes | `sub` (user UUID), `role`, `exp`, `jti`, `iat` |
+| Refresh token | HS256 | 7 days | `sub`, `exp`, `jti`, `iat` (for revocability) |
+
+The `iat` (issued-at) claim backs password-reset session invalidation: a token minted before the user's `password_changed_at` is rejected by both `get_current_user` and the refresh path.
 
 Both tokens are signed with `JWT_SECRET_KEY` (which defaults to `SECRET_KEY` when unset, so a single-secret deployment still works but the auth key can be rotated independently).
 
@@ -1349,25 +1445,31 @@ class Permission(enum.StrEnum):
     FINANCE_READ      = "finance:read"
     FINANCE_WRITE     = "finance:write"
     FINANCE_RECONCILE = "finance:reconcile"   # import settlements / auto-reconcile — manager+
+    FINANCE_APPROVE   = "finance:approve"      # sign off an AP payable (spend authorization) — manager+
     CRM_READ          = "crm:read"
     CRM_WRITE         = "crm:write"
+    INVENTORY_READ    = "inventory:read"
+    INVENTORY_WRITE   = "inventory:write"
+    INVENTORY_ADJUST  = "inventory:adjust"     # stock write-up/write-off + release agent adjustments — manager+
     INTELLIGENCE_READ = "intelligence:read"
     INTELLIGENCE_ACT  = "intelligence:act"
     USER_MANAGE       = "user:manage"
     AUDIT_READ        = "audit:read"           # read the cross-domain audit trail — manager+
 ```
 
-Permissions accumulate up the role hierarchy (`viewer ⊂ accountant ⊂ manager ⊂ admin ⊂ owner`):
+Permissions accumulate up the role hierarchy (`viewer ⊂ accountant ⊂ manager ⊂ admin ⊂ owner`). The matrix is written out explicitly per role in `permissions.py` (not via inheritance) so each role's exact grant is auditable at a glance:
 
 | Role | Permissions |
 |---|---|
-| `viewer` | `finance:read`, `crm:read`, `intelligence:read` |
-| `accountant` | All read + `finance:write`, `crm:write`, `intelligence:act` |
-| `manager` | All accountant + `finance:reconcile`, `audit:read` (reconciliation authority + audit oversight — separation of duties) |
+| `viewer` | `finance:read`, `crm:read`, `inventory:read`, `intelligence:read` |
+| `accountant` | All read + `finance:write`, `crm:write`, `inventory:write`, `intelligence:act` |
+| `manager` | All accountant + `finance:reconcile`, `finance:approve`, `inventory:adjust`, `audit:read` (higher-trust authorities held back from the accountant — separation of duties) |
 | `admin` | All manager + `user:manage` |
 | `owner` | All permissions |
 
-`require_permission(*required)` in `dependencies.py` returns an async FastAPI dependency that raises `ForbiddenError (403)` if the authenticated user lacks any required permission. Ready-made aliases: `RequireFinanceRead`, `RequireFinanceWrite`, `RequireFinanceReconcile`, `RequireCrmRead`, `RequireCrmWrite`, `RequireIntelligenceRead`, `RequireIntelligenceAct`, `RequireUserManage`, `RequireAuditRead`.
+**Two-layer authorization for approvals.** A permission answers *who may approve* (role authority, enforced at the endpoint). It cannot express *not your own* — that object-level segregation of duties (payable submitter ≠ approver; bank-line importer ≠ approver; agent requester ≠ proposal approver) is enforced in the service layer. Spend approval (`finance:approve`) is deliberately a separate grant from settlement import (`finance:reconcile`) so the matrix stays legible about who can authorize payments.
+
+`require_permission(*required)` in `dependencies.py` returns an async FastAPI dependency that raises `ForbiddenError (403)` if the authenticated user lacks any required permission. Ready-made aliases: `RequireFinanceRead`, `RequireFinanceWrite`, `RequireFinanceReconcile`, `RequireFinanceApprove`, `RequireCrmRead`, `RequireCrmWrite`, `RequireInventoryRead`, `RequireInventoryWrite`, `RequireInventoryAdjust`, `RequireIntelligenceRead`, `RequireIntelligenceAct`, `RequireUserManage`, `RequireAuditRead`.
 
 ### Login Lockout
 
@@ -1377,9 +1479,10 @@ After `MAX_LOGIN_ATTEMPTS` (default 5) consecutive failures, `TooManyRequestsErr
 
 ### User Lifecycle
 
-1. **First registration** → `role=OWNER, is_verified=true` — avoids chicken-and-egg admin creation.
-2. **Subsequent registrations** → `role=VIEWER, is_verified=false` — login returns `403 Forbidden` until an owner/admin calls `PATCH /users/{id}` to verify.
-3. **User management** — `GET /users` and `PATCH /users/{id}` require `user:manage` permission (ADMIN/OWNER only).
+1. **First registration** → `role=OWNER`, `is_verified=true`, email auto-verified — avoids chicken-and-egg admin creation.
+2. **Subsequent registrations** → `role=VIEWER`; a verification email is sent. Login stays `403` until **both** gates clear: the user verifies their email (`POST /verify-email`, self-service) **and** an owner/admin approves (`PATCH /users/{id}`). `/resend-verification` re-sends the link.
+3. **Password reset** — `POST /forgot-password` → emailed one-time link → `POST /reset-password`; the reset stamps `password_changed_at`, invalidating all existing sessions.
+4. **User management** — `GET /users` and `PATCH /users/{id}` require `user:manage` permission (ADMIN/OWNER only).
 
 ### Security Features
 

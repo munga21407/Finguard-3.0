@@ -50,3 +50,14 @@ def test_reconcile_is_a_separate_grant_above_finance_write() -> None:
         assert not has_permission(role, Permission.FINANCE_RECONCILE)
     # The Accountant keeps ordinary finance write authority.
     assert has_permission(UserRole.ACCOUNTANT, Permission.FINANCE_WRITE)
+
+
+def test_approve_is_a_separate_grant_above_finance_write() -> None:
+    """Signing off an AP payable (finance:approve) is spend authorization held by
+    manager+, distinct from ordinary finance write. An Accountant can submit a
+    payable but cannot approve it — maker-checker separation of duties.
+    """
+    for role in (UserRole.MANAGER, UserRole.ADMIN, UserRole.OWNER):
+        assert has_permission(role, Permission.FINANCE_APPROVE)
+    for role in (UserRole.ACCOUNTANT, UserRole.VIEWER):
+        assert not has_permission(role, Permission.FINANCE_APPROVE)

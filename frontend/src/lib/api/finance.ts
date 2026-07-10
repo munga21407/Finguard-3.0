@@ -185,6 +185,22 @@ export async function createInvoice(
   return data;
 }
 
+/** Issue a draft invoice: flips it to SENT and emails it to the customer. */
+export async function sendInvoice(id: string): Promise<ApiInvoice> {
+  const { data } = await httpClient.post<ApiInvoice>(
+    ENDPOINTS.FINANCE.INVOICE_SEND(id)
+  );
+  return data;
+}
+
+/** Re-email an already-issued invoice (status unchanged). */
+export async function resendInvoice(id: string): Promise<ApiInvoice> {
+  const { data } = await httpClient.post<ApiInvoice>(
+    ENDPOINTS.FINANCE.INVOICE_RESEND(id)
+  );
+  return data;
+}
+
 /**
  * Persist a reviewed receipt scan as an expense.  The OCR + categorisation
  * happens in the intelligence domain (scanReceipt); this writes the

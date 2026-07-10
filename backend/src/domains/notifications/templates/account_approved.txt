@@ -1,0 +1,4 @@
+Your account is ready{% if full_name %}, {{ full_name }}{% endif %}
+
+Good news — an administrator has approved your Finguard account. You can now
+sign in and get started.

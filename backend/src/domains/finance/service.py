@@ -7,12 +7,14 @@ from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import settings
 from src.core.exceptions import (
     ConflictError,
     ForbiddenError,
     NotFoundError,
     UnprocessableError,
 )
+from src.domains.crm.models import Customer
 from src.domains.finance.events import (
     SNAPSHOT_INTERVAL,
     InvoiceState,
@@ -85,11 +87,15 @@ from src.domains.finance.schemas import (
 )
 from src.domains.finance.types import VaultType
 from src.domains.identity.models import User
+from src.domains.identity.permissions import Permission
 
 # finance → inventory is a permitted one-way dependency (see the domain-boundary
 # test): finance composes inventory writes; inventory never imports finance.
 from src.domains.inventory.models import StockMovement
 from src.domains.inventory.service import InventoryService
+from src.domains.notifications.models import EmailCategory
+from src.domains.notifications.reviewers import notify_reviewers
+from src.domains.notifications.service import NotificationService
 
 logger = structlog.get_logger(__name__)
 
@@ -147,6 +153,81 @@ class FinanceService:
                 routing_key="finance.invoice.created",
                 payload={"invoice_id": str(invoice.id), "customer_id": str(invoice.customer_id)},
             )
+        )
+        await self._session.commit()
+        return invoice
+
+    async def send_invoice(self, invoice_id: uuid.UUID, current_user: User) -> Invoice:
+        """Issue a draft invoice: flip DRAFT → SENT and email it to the customer.
+
+        Only a DRAFT invoice can be sent — a partially-paid, paid, or cancelled
+        invoice has already progressed past issuance. ``SENT`` is a manual status
+        the event fold leaves intact. The email is enqueued in the same
+        transaction (idempotent on the invoice), so the status flip and delivery
+        are atomic; a customer without an email still flips status (skip send).
+        """
+        invoice = await self._invoice_repo.get_by_id_for_update(invoice_id)
+        if not invoice:
+            raise NotFoundError("Invoice not found")
+        if invoice.status != InvoiceStatus.DRAFT:
+            raise UnprocessableError(
+                f"Only a draft invoice can be sent (this one is {invoice.status})"
+            )
+
+        invoice.status = InvoiceStatus.SENT
+        invoice = await self._invoice_repo.save(invoice)
+
+        customer = await self._session.get(Customer, invoice.customer_id)
+        await NotificationService(self._session).enqueue_email(
+            to_email=customer.email if customer else None,
+            to_name=customer.name if customer else None,
+            subject=f"Invoice {invoice.invoice_number}",
+            template="invoice_issued",
+            context={
+                "customer_name": customer.name if customer else None,
+                "invoice_number": invoice.invoice_number,
+                "currency": invoice.currency,
+                "total": str(invoice.total),
+                "balance_due": str(invoice.balance_due),
+                "due_date": invoice.due_date.date().isoformat() if invoice.due_date else None,
+            },
+            idempotency_key=f"invoice_sent:{invoice.id}",
+            category=EmailCategory.INVOICE,
+        )
+        await self._session.commit()
+        return invoice
+
+    async def resend_invoice(self, invoice_id: uuid.UUID, current_user: User) -> Invoice:
+        """Re-email an already-issued invoice (fresh idempotency key, always sends).
+
+        Unlike :meth:`send_invoice` this does not change status — it's for an
+        invoice the customer says they never received. A draft (not yet sent) or a
+        cancelled invoice cannot be resent.
+        """
+        invoice = await self._invoice_repo.get_by_id(invoice_id)
+        if not invoice:
+            raise NotFoundError("Invoice not found")
+        if invoice.status in (InvoiceStatus.DRAFT, InvoiceStatus.CANCELLED):
+            raise UnprocessableError(
+                f"Only an issued invoice can be resent (this one is {invoice.status})"
+            )
+        customer = await self._session.get(Customer, invoice.customer_id)
+        await NotificationService(self._session).enqueue_email(
+            to_email=customer.email if customer else None,
+            to_name=customer.name if customer else None,
+            subject=f"Invoice {invoice.invoice_number}",
+            template="invoice_issued",
+            context={
+                "customer_name": customer.name if customer else None,
+                "invoice_number": invoice.invoice_number,
+                "currency": invoice.currency,
+                "total": str(invoice.total),
+                "balance_due": str(invoice.balance_due),
+                "due_date": invoice.due_date.date().isoformat() if invoice.due_date else None,
+            },
+            # Fresh key every resend so it always delivers (not deduped).
+            idempotency_key=f"invoice_resent:{invoice.id}:{uuid.uuid4()}",
+            category=EmailCategory.INVOICE,
         )
         await self._session.commit()
         return invoice
@@ -503,6 +584,23 @@ class FinanceService:
             submitted_by=current_user.id,
         )
         expense = await self._expense_repo.create(expense)
+        # Notify everyone who can sign this off (finance:approve), except the
+        # submitter — they can't review their own bill. Enqueue-only (atomic with
+        # the payable).
+        await notify_reviewers(
+            self._session,
+            permission=Permission.FINANCE_APPROVE,
+            subject="A payable needs your approval",
+            template="approval_needed",
+            context={
+                "summary": f"A bill of {expense.amount} ({expense.category}) is awaiting approval.",
+                "detail": expense.description or expense.merchant_name or "",
+                "review_url": f"{settings.APP_BASE_URL}/dashboard/approvals",
+            },
+            resource_id=expense.id,
+            key_prefix="payable_review",
+            exclude_user_id=current_user.id,
+        )
         await self._session.commit()
         return expense
 
@@ -936,6 +1034,11 @@ class FinanceService:
                 },
             )
         )
+
+        # Receipt to the customer. Enqueue-only — the caller (Agent C, inside
+        # session.begin()) owns the commit, so it's atomic with the reconciliation.
+        await self._enqueue_payment_receipt(invoice, payment)
+
         return payment
 
     async def import_bank_statement_lines(
@@ -1172,6 +1275,33 @@ class FinanceService:
 
     # ── Cash Payments ─────────────────────────────────────────────────────────
 
+    async def _enqueue_payment_receipt(self, invoice: Invoice, payment: Payment) -> None:
+        """Queue a "payment received" receipt to the invoice's customer.
+
+        Shared by the manual-cash and agent-reconciled payment paths. Enqueue-only
+        (no commit) so it rides the caller's transaction — the receipt is atomic
+        with the payment. A customer without an email is silently skipped inside
+        ``enqueue_email`` (a receipt must never fail a payment). Call *after*
+        re-projection so ``balance_due`` reflects this payment.
+        """
+        customer = await self._session.get(Customer, invoice.customer_id)
+        await NotificationService(self._session).enqueue_email(
+            to_email=customer.email if customer else None,
+            to_name=customer.name if customer else None,
+            subject=f"Payment received — invoice {invoice.invoice_number}",
+            template="payment_receipt",
+            context={
+                "customer_name": customer.name if customer else None,
+                "invoice_number": invoice.invoice_number,
+                "amount": str(payment.amount),
+                "currency": invoice.currency,
+                "balance_due": str(invoice.balance_due),
+                "vault": payment.vault.value,
+            },
+            idempotency_key=f"receipt:{payment.id}",
+            category=EmailCategory.RECEIPT,
+        )
+
     async def record_cash_payment(self, data: PaymentCreate, current_user: User) -> Payment:
         """
         Record a manual cash payment against an invoice.
@@ -1249,6 +1379,9 @@ class FinanceService:
                 },
             )
         )
+
+        # Receipt to the customer, atomic with the payment (flushed on commit).
+        await self._enqueue_payment_receipt(invoice, payment)
 
         await self._session.commit()
         return payment

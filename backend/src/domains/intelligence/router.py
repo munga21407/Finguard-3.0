@@ -24,6 +24,7 @@ from src.domains.intelligence.routers.admin import router as admin_router
 from src.domains.intelligence.routers.admin_tuning import router as admin_tuning_router
 from src.domains.intelligence.routers.conversations import router as conversations_router
 from src.domains.intelligence.routers.insights import router as insights_router
+from src.domains.intelligence.routers.proposals import router as proposals_router
 from src.domains.intelligence.routers.receipts import router as receipts_router
 from src.domains.intelligence.routers.telemetry import router as telemetry_router
 
@@ -34,3 +35,4 @@ router.include_router(conversations_router)
 router.include_router(telemetry_router)
 router.include_router(admin_router)
 router.include_router(admin_tuning_router)
+router.include_router(proposals_router)
