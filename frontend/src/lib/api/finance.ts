@@ -11,6 +11,7 @@ import type {
   ApiBudget,
   ApiCustomer,
   ApiCustomerCreate,
+  ApiCustomerUpdate,
   ApiExpense,
   ApiFinancialReport,
   ApiInvoice,
@@ -27,8 +28,15 @@ import type {
   ApiVaultTransferCreate,
 } from "@/types/api";
 
-export async function listCustomers(): Promise<ApiCustomer[]> {
-  const { data } = await httpClient.get<ApiCustomer[]>(ENDPOINTS.CRM.CUSTOMERS);
+export async function listCustomers(limit = 200): Promise<ApiCustomer[]> {
+  const { data } = await httpClient.get<ApiCustomer[]>(ENDPOINTS.CRM.CUSTOMERS, {
+    params: { limit },
+  });
+  return data;
+}
+
+export async function getCustomer(id: string): Promise<ApiCustomer> {
+  const { data } = await httpClient.get<ApiCustomer>(ENDPOINTS.CRM.CUSTOMER(id));
   return data;
 }
 
@@ -150,6 +158,18 @@ export async function createCustomer(
 ): Promise<ApiCustomer> {
   const { data } = await httpClient.post<ApiCustomer>(
     ENDPOINTS.CRM.CUSTOMERS,
+    body
+  );
+  return data;
+}
+
+/** Update an existing customer's mutable fields (name, phone, status, notes, locale). */
+export async function updateCustomer(
+  id: string,
+  body: ApiCustomerUpdate
+): Promise<ApiCustomer> {
+  const { data } = await httpClient.patch<ApiCustomer>(
+    ENDPOINTS.CRM.CUSTOMER(id),
     body
   );
   return data;

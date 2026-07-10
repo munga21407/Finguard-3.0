@@ -8,8 +8,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   approveBankStatement,
   approvePayable,
+  createCustomer,
   createPayable,
   createVaultTransfer,
+  getCustomer,
   getPayableQueue,
   getReconciliationFlow,
   getReport,
@@ -25,12 +27,15 @@ import {
   rejectBankStatement,
   rejectPayable,
   schedulePayable,
+  updateCustomer,
 } from "@/lib/api/finance";
 import type {
   ApiBankStatementImport,
   ApiBankStatementLine,
   ApiBudget,
   ApiCustomer,
+  ApiCustomerCreate,
+  ApiCustomerUpdate,
   ApiExpense,
   ApiFinancialReport,
   ApiInvoice,
@@ -47,6 +52,7 @@ export const financeKeys = {
   expenses: ["finance", "expenses"] as const,
   budgets: ["finance", "budgets"] as const,
   customers: ["crm", "customers"] as const,
+  customer: (id: string) => ["crm", "customer", id] as const,
   reconciliationFlow: ["finance", "reconciliation-flow"] as const,
   vaultBalances: ["finance", "vault-balances"] as const,
   vaultTransfers: ["finance", "vault-transfers"] as const,
@@ -81,7 +87,40 @@ export function useBudgets() {
 export function useCustomers() {
   return useQuery<ApiCustomer[]>({
     queryKey: financeKeys.customers,
-    queryFn: listCustomers,
+    queryFn: () => listCustomers(),
+  });
+}
+
+/** Fetch one customer fresh from GET /crm/customers/{id} (detail panel). */
+export function useCustomer(id: string | null) {
+  return useQuery<ApiCustomer>({
+    queryKey: financeKeys.customer(id ?? "none"),
+    queryFn: () => getCustomer(id as string),
+    enabled: id !== null,
+  });
+}
+
+/** Create a customer; refresh the list so the picker + table see it immediately. */
+export function useCreateCustomer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ApiCustomerCreate) => createCustomer(body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: financeKeys.customers });
+    },
+  });
+}
+
+/** Update a customer; refresh both the list and the affected detail query. */
+export function useUpdateCustomer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: ApiCustomerUpdate }) =>
+      updateCustomer(id, body),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: financeKeys.customers });
+      queryClient.invalidateQueries({ queryKey: financeKeys.customer(updated.id) });
+    },
   });
 }
 
