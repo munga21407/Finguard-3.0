@@ -359,6 +359,48 @@ def _validate(query: str, allowed_tables: frozenset[str] | None = None) -> None:
 _MAX_ROWS = 100
 
 
+def _normalize_known_enum_literals(query: str) -> str:
+    """Canonicalize LLM-generated literals for known case-sensitive DB enums.
+
+    Pydantic exposes ``TransactionType`` values as lowercase API strings, while
+    SQLAlchemy persists the enum member names (``CREDIT``/``DEBIT``). Models can
+    still copy the API casing despite the schema prompt, so normalize only
+    literals structurally compared with ``transaction_type``. Other string
+    literals and columns are left unchanged.
+    """
+    try:
+        tree = sqlglot.parse_one(query, dialect="postgres")
+    except ParseError:
+        return query
+
+    if tree is None:
+        return query
+
+    labels = {label.lower(): label for label in TRANSACTION_TYPE_LABELS}
+
+    def normalize_literal(node: exp.Expression) -> None:
+        if not isinstance(node, exp.Literal) or not node.is_string:
+            return
+        canonical = labels.get(node.this.lower())
+        if canonical is not None:
+            node.replace(exp.Literal.string(canonical))
+
+    for comparison in tree.find_all(exp.EQ):
+        left, right = comparison.this, comparison.expression
+        if isinstance(left, exp.Column) and left.name.lower() == "transaction_type":
+            normalize_literal(right)
+        elif isinstance(right, exp.Column) and right.name.lower() == "transaction_type":
+            normalize_literal(left)
+
+    for predicate in tree.find_all(exp.In):
+        column = predicate.this
+        if isinstance(column, exp.Column) and column.name.lower() == "transaction_type":
+            for value in predicate.expressions:
+                normalize_literal(value)
+
+    return tree.sql(dialect="postgres")
+
+
 def _enforce_limit(query: str) -> str:
     """
     Parse a validated SELECT and clamp its LIMIT to at most _MAX_ROWS.
@@ -431,8 +473,9 @@ async def execute_readonly_sql(query: str) -> list[dict[str, Any]]:
     fall back to the privileged engine when DATABASE_READONLY_URL is unset in
     production.
     """
-    _validate(query, allowed_tables=_READONLY_ALLOWED_TABLES)
-    safe_query = _enforce_limit(query)
+    normalized_query = _normalize_known_enum_literals(query)
+    _validate(normalized_query, allowed_tables=_READONLY_ALLOWED_TABLES)
+    safe_query = _enforce_limit(normalized_query)
 
     if not settings.DATABASE_READONLY_URL:
         logger.warning(

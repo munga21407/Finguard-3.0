@@ -12,6 +12,7 @@ import pytest
 from src.domains.intelligence.tools.sql_executor import (
     _READONLY_ALLOWED_TABLES,
     _enforce_limit,
+    _normalize_known_enum_literals,
     _validate,
 )
 
@@ -65,6 +66,30 @@ def test_cte_limit_enforced() -> None:
         "WITH x AS (SELECT total FROM invoices) SELECT * FROM x LIMIT 5000"
     )
     assert "LIMIT 100" in out.upper()
+
+
+def test_lowercase_transaction_type_literal_is_normalized() -> None:
+    query = _normalize_known_enum_literals(
+        "SELECT * FROM ledger_entries WHERE transaction_type = 'credit'"
+    )
+    assert "transaction_type = 'CREDIT'" in query
+
+
+def test_transaction_type_in_literals_are_normalized() -> None:
+    query = _normalize_known_enum_literals(
+        "SELECT * FROM ledger_entries "
+        "WHERE transaction_type IN ('credit', 'DEBIT')"
+    )
+    assert "transaction_type IN ('CREDIT', 'DEBIT')" in query
+
+
+def test_enum_normalization_does_not_change_unrelated_literals() -> None:
+    query = _normalize_known_enum_literals(
+        "SELECT * FROM ledger_entries "
+        "WHERE description = 'credit' AND transaction_type = 'debit'"
+    )
+    assert "description = 'credit'" in query
+    assert "transaction_type = 'DEBIT'" in query
 
 
 # ── Table allowlist (structural schema masking) ─────────────────────────────────
