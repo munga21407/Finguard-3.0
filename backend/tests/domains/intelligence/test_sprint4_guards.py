@@ -64,7 +64,7 @@ async def test_classifier_guards_coverage_and_taxonomy(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(b, "generate_structured_content", fake_gen)
 
-    result = await b._classify_via_gemini([_entry("1"), _entry("2"), _entry("3")])
+    result = await b._classify_via_llm([_entry("1"), _entry("2"), _entry("3")])
     by_id = {c.entry_id: c for c in result}
 
     assert set(by_id) == {"1", "2", "3"}                 # every input covered

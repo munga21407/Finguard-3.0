@@ -31,7 +31,7 @@ class AgentCard:
     version: str
     capabilities: tuple[str, ...]
     did: str                                   # W3C DID (did:web:…)
-    model: str = "gemini-2.5-flash"
+    model: str = "gemma-4-31b-it"
     issuer: str = "finguard-system"
     card_signature: bytes = field(           # Ed25519 sig over canonical JSON
         default=b"",

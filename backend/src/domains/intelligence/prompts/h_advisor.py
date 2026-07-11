@@ -1,7 +1,7 @@
 """
 Agent H — Financial Advisor: Generative UI component catalog.
 
-This module supplies the prompt extension that teaches Gemini 2.5 Flash to emit
+This module supplies the prompt extension that teaches Gemma 4 to emit
 structured ``ui_widgets`` (see ``AgentHOutput``) alongside its narrative advice.
 The catalog documents exactly the widgets the frontend ``GenUiRegistry`` can
 render, so the model never invents a ``component_id`` the client can't mount.

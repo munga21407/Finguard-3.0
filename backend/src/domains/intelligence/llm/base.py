@@ -2,13 +2,14 @@
 
 Agents, workers, and services depend on this ABC (and the ``llm_client`` facade
 over it), never on any vendor SDK, so the provider can be swapped
-(Gemini → Anthropic → OpenAI) by registering a different implementation in
+(e.g. Fireworks/Gemma → any OpenAI-compatible provider) by registering a
+different implementation in
 ``llm_client.get_llm_client``. The interface covers every capability the app
 uses: structured output, free-form text, multimodal (vision) structured and text
 output, role-based multi-turn chat, and embeddings.
 
 There is deliberately no ``raw()`` escape hatch: the vendor SDK is confined to a
-single wrapper module (``llm.gemini_sdk``) and never leaks above this contract.
+single wrapper module (``llm.openai_compat``) and never leaks above this contract.
 """
 from __future__ import annotations
 

@@ -8,7 +8,7 @@ two-pass algorithm:
       reference substring — no LLM required.
 
   Pass 2 (Semantic): For residual unmatched transactions, rapidfuzz pre-filters
-      candidates (token-sort ratio ≥ 65) which are then scored by Gemini to
+      candidates (token-sort ratio ≥ 65) which are then scored by the model to
       confirm or reject each pairing based on reference semantics, amounts, and
       phone-number identity signals.
 
@@ -23,7 +23,7 @@ Performance (Sprint 3):
   * Pass 1 buckets invoices by floored balance so each transaction only scans
     near-amount candidates — O(txn + invoice) instead of the old O(txn × invoice)
     nested loop.
-  * The Gemini candidate cap is configurable (``ReconcilerTuning.pass2_candidate_cap``).
+  * The the model candidate cap is configurable (``ReconcilerTuning.pass2_candidate_cap``).
   * Migration ``0016`` adds the fetch-supporting indexes:
     ``(mpesa_transactions is_reconciled, created_at)``,
     ``(invoices status, balance_due, due_date)``,
@@ -96,11 +96,11 @@ _rc = get_reconciler_tuning()
 _TXN_BATCH = _rc.txn_batch              # M-Pesa transactions per reconciliation run
 _INV_LIMIT = _rc.inv_limit              # Max open invoices to load
 _FUZZY_THRESHOLD = _rc.fuzzy_threshold  # rapidfuzz token_sort_ratio min for Pass 2 candidacy
-_SEMANTIC_THRESHOLD = _rc.semantic_threshold  # Gemini match_score min to confirm a match
+_SEMANTIC_THRESHOLD = _rc.semantic_threshold  # the model match_score min to confirm a match
 _FUZZY_MATCH_BOUNDARY = _rc.fuzzy_match_boundary  # >= this -> "fuzzy", below -> "semantic"
 _AMOUNT_TOLERANCE = _rc.amount_tolerance_kes  # Pass 1 exact-amount tolerance (KES)
 _DATE_WINDOW_DAYS = _rc.date_window_days  # Pass 1 date-proximity window (days)
-_PASS2_CANDIDATE_CAP = _rc.pass2_candidate_cap  # max fuzzy candidates sent to Gemini
+_PASS2_CANDIDATE_CAP = _rc.pass2_candidate_cap  # max fuzzy candidates sent to the model
 
 
 def _apply_reconciler_tuning() -> None:
@@ -238,7 +238,7 @@ def _pass1_exact(
 
 
 # ---------------------------------------------------------------------------
-# Pass 2 — rapidfuzz + Gemini semantic matching
+# Pass 2 — rapidfuzz + the model semantic matching
 # ---------------------------------------------------------------------------
 
 def _build_fuzzy_candidates(
@@ -274,7 +274,7 @@ def _build_fuzzy_candidates(
     return candidates
 
 
-async def _gemini_score_candidates(
+async def _llm_score_candidates(
     candidates: list[dict[str, Any]],
 ) -> ReconciliationScoringResult:
     prompt = (
@@ -302,9 +302,9 @@ async def _pass2_semantic(
         return []
 
     try:
-        scored = await _gemini_score_candidates(candidates)
+        scored = await _llm_score_candidates(candidates)
     except Exception as exc:
-        logger.error("c_reconciler: Gemini Pass 2 scoring failed", error=str(exc))
+        logger.error("c_reconciler: the model Pass 2 scoring failed", error=str(exc))
         return []
 
     matches: list[ReconciliationMatch] = []
@@ -331,7 +331,7 @@ async def _pass2_semantic(
         status = (
             "paid" if txn["amount"] >= inv["balance_due"] - 0.01 else "partially_paid"
         )
-        # rapidfuzz-only matches score ≥ boundary; Gemini-confirmed lower scores are "semantic"
+        # rapidfuzz-only matches score ≥ boundary; model-confirmed lower scores are "semantic"
         match_type = "fuzzy" if cand.match_score >= _FUZZY_MATCH_BOUNDARY else "semantic"
         matches.append(
             ReconciliationMatch(
@@ -453,9 +453,9 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
                 transactions, invoices
             )
 
-            # ── Pass 2 — rapidfuzz + Gemini ───────────────────────────────────
-            # _pass2_semantic catches Gemini errors internally and returns []
-            # on failure, so a Gemini outage never aborts the whole transaction.
+            # ── Pass 2 — rapidfuzz + the model ───────────────────────────────────
+            # _pass2_semantic catches the model errors internally and returns []
+            # on failure, so a model outage never aborts the whole transaction.
             semantic_matches = await _pass2_semantic(
                 transactions, invoices, matched_txn_ids, matched_inv_ids
             )

@@ -68,7 +68,7 @@ async def ai_insights(
     -----------
     Supply a unique ``Idempotency-Key`` header (UUID recommended).  If a
     completed response for this key already exists in Redis it is returned
-    immediately — no Gemini call is made.  A 409 is returned if a concurrent
+    immediately — no the model call is made.  A 409 is returned if a concurrent
     request with the same key is still being processed.
     """
     # ── 1. Cache read ──────────────────────────────────────────────────────

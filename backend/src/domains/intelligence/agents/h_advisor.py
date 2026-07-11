@@ -7,7 +7,7 @@ Pipeline:
      outputs from context.
   3. Fetch CRM customer profile from PostgreSQL using customer_id / user_id.
   4. Build an evidence-grounded prompt (incl. the GenUI component catalog).
-  5. Gemini structured output (temperature 0.0) → AgentHOutput.
+  5. the model structured output (temperature 0.0) → AgentHOutput.
   6. RBAC clip: viewer/accountant → high-level summary; manager/admin/owner → actionable.
   7. Guardrail (S6-5): actionable advice gets a standing liability disclaimer; when
      the human-review gate is on it is flagged `requires_review` / pending sign-off.
@@ -229,7 +229,7 @@ Return JSON with fields: narrative_response (string), ui_widgets (array — may 
                 prompt, AgentHOutput, temperature=0.0
             )
         except Exception as exc:
-            logger.warning("Agent H: Gemini advisory failed", error=str(exc))
+            logger.warning("Agent H: the model advisory failed", error=str(exc))
             advisor_out = AgentHOutput(
                 narrative_response=(
                     "Full advisory is temporarily unavailable. As a starting point, "

@@ -1,16 +1,17 @@
 """Back-compat facade over the provider-agnostic ``llm`` package.
 
-The Gemini-specific logic now lives in :mod:`src.domains.intelligence.llm`
-(``base`` interface, ``gemini`` implementation, ``telemetry`` + ``pricing``).
-This module is the app's stable AI seam — ``generate_structured_content``,
+The provider logic lives in :mod:`src.domains.intelligence.llm`: ``base``
+(interface), ``openai_compat`` (the sole ``openai`` importer), ``provider``
+(resilience/telemetry policy), ``failover`` (primary + backup), ``telemetry`` +
+``pricing``. This module is the app's stable AI seam — ``generate_structured_content``,
 ``generate_text_content``, ``generate_vision_content``, ``generate_vision_text_content``,
 ``generate_chat_content``, ``generate_embedding``, ``observe_llm_call``,
 ``agent_context``, ``LLMUnavailableError``, the re-exported metric collectors —
 so agents/workers/services import from here and never touch a vendor SDK.
 
-To swap providers, register a different :class:`BaseLLMClient` in
-``get_llm_client`` (or wire it through settings); the agent call sites that use
-the ``generate_*`` helpers need no edits.
+``get_llm_client`` assembles a Fireworks (Gemma 4) primary with an always-warm
+Featherless backup; the agent call sites that use the ``generate_*`` helpers need
+no edits when the provider set changes.
 """
 from __future__ import annotations
 
@@ -35,8 +36,9 @@ from src.core.metrics import (
 from src.core.metrics import (
     AGENT_LLM_TOKENS as AGENT_LLM_TOKENS,
 )
+from src.core.config import settings
 from src.core.metrics import (
-    GEMINI_TIMEOUT_COUNTER as GEMINI_TIMEOUT_COUNTER,
+    LLM_TIMEOUT_COUNTER as LLM_TIMEOUT_COUNTER,
 )
 from src.domains.intelligence.llm.base import (
     BaseLLMClient,
@@ -47,11 +49,17 @@ from src.domains.intelligence.llm.base import (
 from src.domains.intelligence.llm.base import (
     ChatTurn as ChatTurn,  # noqa: F401 — public re-export
 )
-from src.domains.intelligence.llm.gemini import (
-    GeminiLLMClient,
+from src.domains.intelligence.llm.failover import (
+    FailoverLLMClient,
 )
-from src.domains.intelligence.llm.gemini import (
+from src.domains.intelligence.llm.openai_compat import (
+    ProviderSpec,
+)
+from src.domains.intelligence.llm.provider import (
     LLMUnavailableError as LLMUnavailableError,  # noqa: F401 — public re-export
+)
+from src.domains.intelligence.llm.provider import (
+    OpenAICompatLLMClient,
 )
 
 # Telemetry helpers — re-exported for back-compat.
@@ -72,14 +80,46 @@ from src.domains.intelligence.llm.telemetry import (
 _provider: BaseLLMClient | None = None
 
 
-def get_llm_client() -> BaseLLMClient:
-    """Return the configured LLM client (module-level singleton).
+def _build_client() -> BaseLLMClient:
+    """Assemble the failover client: Fireworks primary + optional Featherless backup.
 
-    Swap the provider here (or behind a settings flag) to migrate off Gemini.
+    The primary runs Gemma 4 on a dedicated (scale-to-zero) Fireworks deployment
+    using strict ``json_schema`` structured output. When ``FEATHERLESS_API_KEY`` is
+    set, an always-warm Featherless backup of the same Gemma 4 family is attached;
+    it uses ``json_object`` structured output (Featherless does not enforce
+    ``json_schema``). Leave the key blank for a Fireworks-only (no-failover) setup.
     """
+    primary = OpenAICompatLLMClient(
+        ProviderSpec(
+            name="fireworks",
+            api_key=settings.FIREWORKS_API_KEY,
+            base_url=settings.LLM_API_BASE,
+            model=settings.LLM_MODEL,
+            structured_mode="json_schema",
+            embedding_model=settings.EMBEDDING_MODEL,
+            embedding_dimensions=settings.EMBEDDING_DIMENSIONS,
+        )
+    )
+    backup: BaseLLMClient | None = None
+    if settings.FEATHERLESS_API_KEY:
+        backup = OpenAICompatLLMClient(
+            ProviderSpec(
+                name="featherless",
+                api_key=settings.FEATHERLESS_API_KEY,
+                base_url=settings.FEATHERLESS_API_BASE,
+                model=settings.FEATHERLESS_MODEL,
+                structured_mode="json_object",
+                embedding_model=None,
+            )
+        )
+    return FailoverLLMClient(primary, backup)
+
+
+def get_llm_client() -> BaseLLMClient:
+    """Return the configured LLM client (module-level singleton)."""
     global _provider
     if _provider is None:
-        _provider = GeminiLLMClient()
+        _provider = _build_client()
     return _provider
 
 

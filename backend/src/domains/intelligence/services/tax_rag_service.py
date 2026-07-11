@@ -4,7 +4,7 @@ Tax RAG Service — pgvector semantic search against the KRA knowledge base.
 Workflow:
   1. Hash the sanitized query with SHA-256 and check Redis for a cached
      embedding (key: ``rag:embed:{sha256}``).  Return the cached float array
-     on a hit; call Gemini text-embedding-004 on a miss and cache the result
+     on a hit; call the model text-embedding-004 on a miss and cache the result
      for 1 hour (TTL=3600 s).
   2. Execute a pgvector L2-distance nearest-neighbour query via fully
      parameterised SQLAlchemy Core (no f-strings; `Vector` bindparam handles
@@ -30,7 +30,7 @@ from src.domains.intelligence.observability import traced_tool
 from src.infrastructure.cache.redis import get_redis
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
-# Embedding model + provider live in settings.GEMINI_EMBEDDING_MODEL and are
+# Embedding model + provider live in settings.EMBEDDING_MODEL and are
 # reached via generate_embedding(); this module only pins the dimensionality it
 # stores/queries against the pgvector column.
 _EXPECTED_DIM = 768
@@ -56,7 +56,7 @@ async def _get_embedding(query: str) -> list[float] | None:
     """
     Return a 768-dim embedding for `query`.
 
-    Checks Redis first (TTL=1h).  On a miss, calls Gemini and caches the
+    Checks Redis first (TTL=1h).  On a miss, calls the model and caches the
     result before returning it.  Returns None on any failure so the caller
     can degrade gracefully.
     """
@@ -73,7 +73,7 @@ async def _get_embedding(query: str) -> list[float] | None:
                 logger.debug("Tax RAG: embedding cache hit", key=cache_key)
                 return values
         except (json.JSONDecodeError, TypeError):
-            pass  # stale / corrupt entry — fall through to Gemini
+            pass  # stale / corrupt entry — fall through to the model
 
     # ── Embedding call (provider-agnostic) ───────────────────────────────────
     try:

@@ -236,7 +236,7 @@ class KnowledgeBase(Base):
     """
     KRA knowledge-base chunks used by the Tax RAG service (Agent F).
 
-    Each row is one document section with a pre-computed Gemini
+    Each row is one document section with a pre-computed the model
     text-embedding-004 vector (768 dims) stored via pgvector.
     The pgvector `<->` (L2) operator in tax_rag_service.py queries this table.
     """

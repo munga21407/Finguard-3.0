@@ -7,7 +7,7 @@ Agentic Hybrid Strategy for African SME volatility and data sparsity:
      fitted on up to 12 months of daily net cash-flow, projected 30 days forward.
      Invoice due-date amounts are overlaid as known future outflows.
 
-  2. Semantic Regime Detector — Gemini evaluates the HW baseline, recent variance,
+  2. Semantic Regime Detector — the model evaluates the HW baseline, recent variance,
      and upcoming liabilities to classify the business into one of five financial
      regimes (Boom / Normal / Stress / Liquidity Crunch / Recovery) and generates
      actionable advisory warnings calibrated for Kenyan SMEs.

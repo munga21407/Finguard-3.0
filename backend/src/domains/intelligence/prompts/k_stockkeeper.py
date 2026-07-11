@@ -1,6 +1,6 @@
 """Prompt for Agent K — Stock Steward.
 
-The node hands Gemini a fully-computed, deterministic stock snapshot (on-hand,
+The node hands the model a fully-computed, deterministic stock snapshot (on-hand,
 valuation, low-stock list, reorder points, and — when the A2A planner ran Agent D
 first — the cash-flow regime). The model's job is to *narrate and prioritise*,
 never to invent figures (same contract as Agent H's "do NOT alter any numbers").

@@ -284,7 +284,7 @@ async def test_bank_reconciliation_pass2_semantic_match(
             ]
         )
 
-    monkeypatch.setattr(c_reconciler, "_gemini_score_candidates", _fake_score)
+    monkeypatch.setattr(c_reconciler, "_llm_score_candidates", _fake_score)
 
     async with TestingSessionLocal() as session:
         report = await c_reconciler.run_bank_reconciliation(session)

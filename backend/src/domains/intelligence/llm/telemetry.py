@@ -52,6 +52,7 @@ def observe_llm_call(
     elapsed: float | None = None,
     agent_id: str | None = None,
     status: str = "success",
+    model: str | None = None,
 ) -> None:
     """Record per-agent LLM telemetry for one model call.
 
@@ -59,10 +60,12 @@ def observe_llm_call(
     so every agent is covered uniformly.  ``elapsed`` is optional because callers
     that already record latency themselves (Agent E) can pass ``None`` to log
     only tokens/cost/calls and avoid double-counting the latency histogram.
+    ``model`` labels the metric with the provider's actual model (the failover
+    backup differs from the primary); it defaults to the configured primary.
     Tolerant of a missing ``usage_metadata`` (older responses / mocks).
     """
     aid = agent_id if agent_id is not None else current_agent_id()
-    model = settings.GEMINI_MODEL
+    model = model if model is not None else settings.LLM_MODEL
 
     if elapsed is not None:
         AGENT_LLM_LATENCY.labels(agent=aid, model=model).observe(elapsed)

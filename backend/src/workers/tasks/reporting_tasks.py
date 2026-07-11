@@ -12,7 +12,7 @@ Bridge strategy:
     singleton is fresh per worker process and compatible with the
     loop created by asyncio.run().
   - Agent nodes are called directly (not via the compiled StateGraph) to
-    avoid the overhead of the Gemini-based supervisor routing LLM call.
+    avoid the overhead of the LLM-based supervisor routing LLM call.
     hub_writer_node is invoked once per agent, with the previous agent's
     context key cleared first so the hub always writes the correct slot.
 

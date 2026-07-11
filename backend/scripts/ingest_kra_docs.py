@@ -3,7 +3,7 @@ KRA Document Ingestion Pipeline — Sprint 4.
 
 Reads KRA tax regulation documents from scripts/kra_docs/ (or a custom
 directory), chunks them into semantic sections, generates 768-dimensional
-Gemini text-embedding-004 vectors, and bulk-inserts them into the
+nomic embedding vectors, and bulk-inserts them into the
 finguard.knowledge_base table.
 
 Design decisions:
@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import math
 import os
 import sys
 import time
@@ -36,8 +35,6 @@ from pathlib import Path
 from typing import Any
 
 import asyncpg  # noqa: F401 — imported to validate asyncpg is present at startup
-from google import genai
-from google.genai import types as genai_types
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from tenacity import (
@@ -46,6 +43,11 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+
+# Embeddings go through the app's neutral facade (Fireworks nomic), the same path
+# the admin KB-ingest route uses — this script no longer talks to any vendor SDK.
+from src.core.config import settings
+from src.domains.intelligence.llm_client import generate_embedding
 
 # ---------------------------------------------------------------------------
 # Minimal logging (before app settings are available)
@@ -64,25 +66,21 @@ _DATABASE_URL: str = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://finguard:finguard@localhost:5432/finguard",
 )
-_GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-
 # Injected embedder: maps a batch of chunk texts to their embedding vectors. Lets
-# ingest_text_buffer stay agnostic of *how* embeddings are produced (CLI genai
-# client vs the app's neutral generate_embedding facade).
+# ingest_text_buffer stay agnostic of *how* embeddings are produced (the CLI and
+# the admin route both pass a facade-backed batcher).
 EmbedBatch = Callable[[list[str]], Awaitable[list[list[float]]]]
 
-# gemini-embedding-001 (text-embedding-004 was deprecated/removed by Google).
-# Requested at 768 dims and manually L2-normalized below — the model only
-# auto-normalizes at its native 3072 dims, and the knowledge_base pgvector index
-# uses vector_l2_ops, so doc vectors must share the query side's normalized space.
-EMBEDDING_MODEL = "gemini-embedding-001"
+# nomic-embed-text-v1.5 returns unit-norm 768-dim vectors natively; the facade
+# applies the normalization and the knowledge_base pgvector index uses
+# vector_l2_ops, so doc vectors share the query side's normalized space.
 EMBEDDING_DIM = 768
 
 # Chunking defaults (overridable via CLI)
 DEFAULT_CHUNK_SIZE = 800   # characters per chunk
 DEFAULT_OVERLAP = 120      # overlap between consecutive chunks
 
-# Gemini API batching — conservative default for rate limits
+# Embedding batching — conservative default for rate limits
 EMBED_BATCH_SIZE = 5       # texts per embed_content call
 MAX_EMBED_RETRIES = 6
 EMBED_WAIT_MIN = 2.0       # seconds (first retry)
@@ -90,19 +88,6 @@ EMBED_WAIT_MAX = 64.0      # seconds (max back-off)
 
 # Separators in priority order — prefer semantic over syntactic splits
 _SEPARATORS = ["\n\n\n", "\n\n", "\n", ". ", "? ", "! ", " ", ""]
-
-
-def _l2_normalize(vec: list[float]) -> list[float]:
-    """Unit-norm a vector (no-op if already unit-length or zero).
-
-    Kept identical to ``llm.gemini.l2_normalize`` — the ingest (doc) side and the
-    retrieval (query) side must normalize the same way so their L2 distances are
-    comparable. Inlined here to preserve this script's standalone, app-free design.
-    """
-    norm = math.sqrt(sum(v * v for v in vec))
-    if norm == 0.0:
-        return vec
-    return [v / norm for v in vec]
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +211,7 @@ def _infer_section_key(chunk: str, chunk_index: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Gemini embedding with exponential backoff
+# Embedding with exponential backoff
 # ---------------------------------------------------------------------------
 
 @retry(
@@ -235,24 +220,18 @@ def _infer_section_key(chunk: str, chunk_index: int) -> str:
     stop=stop_after_attempt(MAX_EMBED_RETRIES),
     reraise=True,
 )
-async def _embed_batch(
-    client: genai.Client,
-    texts: list[str],
-) -> list[list[float]]:
+async def _embed_batch(texts: list[str]) -> list[list[float]]:
     """
-    Embed a batch of texts using Gemini text-embedding-004 (768 dims).
-    Retried up to MAX_EMBED_RETRIES times with exponential back-off to handle
-    Google API rate limits and transient network errors.
+    Embed a batch of chunk texts (768 dims) through the app's neutral facade
+    (Fireworks nomic — returns unit-norm vectors). Retried up to
+    MAX_EMBED_RETRIES times with exponential back-off for transient errors.
     """
-    response = await client.aio.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=texts,
-        config=genai_types.EmbedContentConfig(
-            task_type="RETRIEVAL_DOCUMENT",
-            output_dimensionality=EMBEDDING_DIM,
-        ),
-    )
-    return [_l2_normalize(list(emb.values)) for emb in response.embeddings]
+    return [
+        await generate_embedding(
+            t, task_type="RETRIEVAL_DOCUMENT", output_dimensionality=EMBEDDING_DIM
+        )
+        for t in texts
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +362,6 @@ async def ingest_text_buffer(
 
 async def _process_document(
     path: Path,
-    client: genai.Client | None,
     session: AsyncSession,
     chunk_size: int,
     chunk_overlap: int,
@@ -405,8 +383,8 @@ async def _process_document(
             log.info("  [dry-run] chunk %d: %s…", i, chunk[:120].replace("\n", " "))
         return {"file": path.name, "chunks": len(chunks), "inserted": 0, "skipped": 0}
 
-    if not _GEMINI_API_KEY:
-        log.error("  GEMINI_API_KEY not set — cannot generate embeddings")
+    if not settings.FIREWORKS_API_KEY:
+        log.error("  FIREWORKS_API_KEY not set — cannot generate embeddings")
         return {"file": path.name, "chunks": len(chunks), "inserted": 0, "skipped": 0, "error": "no_api_key"}
 
     # Embed in batches
@@ -417,7 +395,7 @@ async def _process_document(
         batch = chunks[batch_start : batch_start + EMBED_BATCH_SIZE]
         t0 = time.monotonic()
         try:
-            batch_vecs = await _embed_batch(client, batch)
+            batch_vecs = await _embed_batch(batch)
         except Exception as exc:
             log.error("  Embedding failed after retries: %s", exc)
             return {"file": path.name, "chunks": len(chunks), "inserted": 0, "skipped": 0, "error": str(exc)}
@@ -468,8 +446,6 @@ async def _run(
 
     log.info("Found %d document(s) in %s", len(source_files), docs_dir)
 
-    client = genai.Client(api_key=_GEMINI_API_KEY) if not dry_run else None
-
     engine = create_async_engine(_DATABASE_URL, pool_pre_ping=True, pool_size=3)
     SessionFactory = async_sessionmaker(
         bind=engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
@@ -480,7 +456,7 @@ async def _run(
     async with SessionFactory() as session:
         for path in source_files:
             result = await _process_document(
-                path, client, session, chunk_size, chunk_overlap, dry_run
+                path, session, chunk_size, chunk_overlap, dry_run
             )
             totals["chunks"] += result.get("chunks", 0)
             totals["inserted"] += result.get("inserted", 0)
@@ -543,9 +519,9 @@ def main() -> None:
 
 
 def dry_run_check(args: argparse.Namespace) -> bool:
-    if not args.dry_run and not _GEMINI_API_KEY:
+    if not args.dry_run and not settings.FIREWORKS_API_KEY:
         log.error(
-            "GEMINI_API_KEY environment variable is not set.\n"
+            "FIREWORKS_API_KEY environment variable is not set.\n"
             "Either set it or run with --dry-run to validate chunking without API calls."
         )
         return False

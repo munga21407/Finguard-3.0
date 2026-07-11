@@ -26,7 +26,7 @@ pytestmark = [
     pytest.mark.llm_judge,
     pytest.mark.skipif(
         not os.getenv("RUN_LLM_EVALS"),
-        reason="Routing accuracy eval is nightly/opt-in — set RUN_LLM_EVALS=1 (needs GEMINI_API_KEY)",
+        reason="Routing accuracy eval is nightly/opt-in — set RUN_LLM_EVALS=1 (needs FIREWORKS_API_KEY)",
     ),
 ]
 

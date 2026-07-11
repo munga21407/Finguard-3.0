@@ -77,15 +77,37 @@ class Settings(BaseSettings):
     RABBITMQ_CONSUMER_RETRY_SECONDS: int = 5
     WATCHDOG_CONSUMER_INTERVAL_SECONDS: int = 30
 
-    GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash"
-    # gemini-embedding-001 (text-embedding-004 was deprecated/removed by Google).
-    # Truncated to 768 dims via output_dimensionality + manual L2-normalization
-    # (the model only auto-normalizes at its native 3072 dims). See llm/gemini.py.
-    GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"  # tax-RAG retrieval embeddings
-    # Higher-fidelity vision model used to re-scan low-confidence receipts
-    # (S6-6). When it equals GEMINI_MODEL the second pass is skipped (no gain).
-    GEMINI_VISION_RETRY_MODEL: str = "gemini-2.5-pro"
+    # ── Fireworks AI (LLM provider) ────────────────────────────────────────────
+    # OpenAI-compatible API. Gemma 4 runs as a dedicated Fireworks deployment
+    # (auto-scales to zero: a cold start is ~3 min, so the provider treats a
+    # 503 DEPLOYMENT_SCALING_UP as a long-backoff retry — see llm/fireworks.py).
+    FIREWORKS_API_KEY: str = ""
+    LLM_API_BASE: str = "https://api.fireworks.ai/inference/v1"
+    # Full deployment path: accounts/<account>/deployments/<id>. This one
+    # multimodal model serves BOTH the text/structured and the vision
+    # (receipt OCR) paths, so there is no separate vision model.
+    LLM_MODEL: str = "accounts/elmakobiero-6aueml6p/deployments/o8jewup6"
+    # nomic-embed-text-v1.5 returns unit-norm 768-d vectors natively, matching
+    # the pgvector column dimension (no schema change on migration). Task-type is
+    # translated to nomic's required "search_document:"/"search_query:" prefixes.
+    EMBEDDING_MODEL: str = "nomic-ai/nomic-embed-text-v1.5"
+    EMBEDDING_DIMENSIONS: int = 768
+    # Optional higher-fidelity vision model for re-scanning a low-confidence
+    # receipt (S6-6). Empty = single-pass only (the default: Gemma 4 already
+    # covers OCR and there is no larger dense Gemma to escalate to). Set to a
+    # distinct model id to re-enable the second pass.
+    VISION_RETRY_MODEL: str = ""
+
+    # ── Featherless AI — always-warm failover provider ─────────────────────────
+    # The Fireworks Gemma deployment scales to zero (~3 min cold start). On a cold
+    # start (503 DEPLOYMENT_SCALING_UP) or timeout, the failover LLM client routes
+    # to Featherless (serverless, same Gemma 4 model family) so users never wait.
+    # Leave FEATHERLESS_API_KEY blank to disable failover (Fireworks-only).
+    # Featherless does NOT enforce json_schema, so structured output there uses
+    # json_object mode + schema-in-prompt + fence-stripping (degraded but working).
+    FEATHERLESS_API_KEY: str = ""
+    FEATHERLESS_API_BASE: str = "https://api.featherless.ai/v1"
+    FEATHERLESS_MODEL: str = "google/gemma-4-31B-it"
 
     # Agent H (Financial Advisor) — when true, actionable-tier advice is flagged
     # `requires_review` so a human signs off before concrete recommendations are
@@ -106,7 +128,7 @@ class Settings(BaseSettings):
     # Per-agent LLM cost attribution is now model-keyed and externally
     # configurable via the LLM_PRICING_JSON env var — see
     # src/domains/intelligence/llm/pricing.py. The old hardcoded single-rate
-    # GEMINI_*_USD_PER_MTOK settings were removed to stop cost metrics drifting
+    # The old single per-token rate settings were removed to stop cost metrics drifting
     # as list prices change or a second model is introduced.
 
     # Observability — Bearer token protecting the /metrics endpoint.

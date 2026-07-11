@@ -11,7 +11,7 @@ Pipeline:
   6. Run rapidfuzz to detect duplicate invoices / receipt scans.
   7. Issue a Verifiable Credential (VC) to trust_log before resolving.
   8. Publish an anomaly event to RabbitMQ when state is CRITICAL.
-  9. Ask Gemini for a human-readable summary.
+  9. Ask the model for a human-readable summary.
 """
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ def _apply_watchdog_tuning() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Gemini structured output schema (local — mirrors KeyFinding for Gemini compat)
+# the model structured output schema (local — mirrors KeyFinding for the model compat)
 # ---------------------------------------------------------------------------
 
 class _WatchdogFinding(BaseModel):
@@ -497,7 +497,7 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
             except Exception as exc:
                 logger.warning("Watchdog event publish failed", error=str(exc))
 
-        # ── Gemini structured narrative + findings ────────────────────────
+        # ── the model structured narrative + findings ────────────────────────
         prompt_data = json.dumps({
             "spending_ratios": ratios[-14:],
             "hidden_states": state_labels[-14:],
@@ -516,7 +516,7 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
             # agent_context contextvar set by orchestrator._tracked.
             llm_output = await generate_structured_content(full_prompt, _WatchdogLLMOutput)
         except Exception as exc:
-            logger.warning("Agent E: Gemini structured output failed", error=str(exc))
+            logger.warning("Agent E: the model structured output failed", error=str(exc))
 
         summary: str
         llm_findings: list[_WatchdogFinding]

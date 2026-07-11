@@ -155,5 +155,5 @@ async def test_classify_injects_fewshot_block(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(b, "generate_structured_content", fake_gen)
     entries = [{"entry_id": "1", "narrative": "n", "amount": 1.0, "transaction_type": "debit"}]
-    await b._classify_via_gemini(entries, fewshot_block="## Learned corrections\n- \"x\" → payroll\n")
+    await b._classify_via_llm(entries, fewshot_block="## Learned corrections\n- \"x\" → payroll\n")
     assert "Learned corrections" in captured["prompt"]

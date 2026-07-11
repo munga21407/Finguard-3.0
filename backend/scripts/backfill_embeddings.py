@@ -1,19 +1,18 @@
-"""Re-embed stored pgvector rows after the text-embedding-004 → gemini-embedding-001 migration.
+"""Re-embed stored pgvector rows after the Gemini → Fireworks (nomic) migration.
 
-``text-embedding-004`` was deprecated/removed by Google, so every embedding
-written before the swap lives in a *different* vector space than the new
-``gemini-embedding-001`` (768-dim, L2-normalized) query vectors. L2 distances
-across the two spaces are meaningless, which silently poisons:
+Embeddings written by the old Gemini provider live in a *different* vector space
+than the new ``nomic-embed-text-v1.5`` (768-dim, unit-norm) query vectors. L2
+distances across the two spaces are meaningless, which silently poisons:
 
   - ``finguard.knowledge_base``        — Agent F Tax RAG retrieval
   - ``finguard.classification_feedback`` — Agent B few-shot corrections
 
 This script re-embeds both tables in place using the *same* code path the live
-query side uses (``llm_client.generate_embedding`` → gemini-embedding-001 →
+query side uses (``llm_client.generate_embedding`` → nomic via Fireworks →
 ``l2_normalize``), so old rows rejoin the new normalized space.
 
-Idempotent: re-running simply recomputes identical vectors. Safe to run against
-production once ``GEMINI_EMBEDDING_MODEL`` is set to gemini-embedding-001.
+Idempotent: re-running simply recomputes identical vectors. Run against every
+environment (dev/staging/prod) once ``EMBEDDING_MODEL`` points at nomic.
 
 Usage (from backend/):
     python -m scripts.backfill_embeddings
@@ -132,8 +131,8 @@ async def _backfill_table(spec: TableSpec, *, batch_size: int, dry_run: bool) ->
 
 
 async def _run(tables: list[TableSpec], *, batch_size: int, dry_run: bool) -> None:
-    if not dry_run and not settings.GEMINI_API_KEY:
-        log.error("GEMINI_API_KEY is not set — cannot re-embed. Use --dry-run to count rows.")
+    if not dry_run and not settings.FIREWORKS_API_KEY:
+        log.error("FIREWORKS_API_KEY is not set — cannot re-embed. Use --dry-run to count rows.")
         raise SystemExit(1)
 
     grand_updated = 0
@@ -145,7 +144,7 @@ async def _run(tables: list[TableSpec], *, batch_size: int, dry_run: bool) -> No
 
     log.info(
         "Backfill complete — model=%s | %d updated | %d failed%s",
-        settings.GEMINI_EMBEDDING_MODEL,
+        settings.EMBEDDING_MODEL,
         grand_updated,
         grand_failed,
         " (dry-run — nothing written)" if dry_run else "",
@@ -154,7 +153,7 @@ async def _run(tables: list[TableSpec], *, batch_size: int, dry_run: bool) -> No
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Re-embed pgvector rows after the gemini-embedding-001 migration."
+        description="Re-embed pgvector rows after the Fireworks/nomic migration."
     )
     parser.add_argument(
         "--table",
@@ -171,7 +170,7 @@ def main() -> None:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Count affected rows without calling Gemini or writing.",
+        help="Count affected rows without calling the embedding API or writing.",
     )
     args = parser.parse_args()
 

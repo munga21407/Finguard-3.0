@@ -7,7 +7,7 @@ covers the part a unit test can't: whether the LLM-written `audit_summary` is
 figure the calculation engine computed, rather than contradicting it.
 
 This is intentionally separate and **non-blocking**:
-  * it costs tokens and needs `GEMINI_API_KEY`, so it is skipped unless
+  * it costs tokens and needs `FIREWORKS_API_KEY`, so it is skipped unless
     `RUN_LLM_EVALS=1`;
   * LLM-as-judge is non-deterministic, so it must never gate a PR — it runs
     nightly (see the `llm-evals` job in `.github/workflows/ci.yml`).
@@ -34,7 +34,7 @@ pytestmark = [
     pytest.mark.llm_judge,
     pytest.mark.skipif(
         not os.getenv("RUN_LLM_EVALS"),
-        reason="LLM-judge evals are nightly/opt-in — set RUN_LLM_EVALS=1 (needs GEMINI_API_KEY)",
+        reason="LLM-judge evals are nightly/opt-in — set RUN_LLM_EVALS=1 (needs FIREWORKS_API_KEY)",
     ),
 ]
 

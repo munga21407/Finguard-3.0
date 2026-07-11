@@ -54,7 +54,7 @@ def _tracked(name: str, node: Any) -> Any:
     """Wrap a graph node so every LLM call inside it attributes to ``name``.
 
     Sets the ``current_agent_id`` contextvar for the node's execution, which the
-    Gemini client reads to label per-agent latency/token/cost metrics — central
+    the model client reads to label per-agent latency/token/cost metrics — central
     attribution with no per-agent edits.  Pure pass-through for non-LLM nodes.
     """
 
@@ -88,7 +88,7 @@ def build_invoice_graph() -> Any:
 
     Topology: START → a_generator → hub_writer → END
 
-    Agent A uses the Gemini client internally; the `llm` arg is not needed.
+    Agent A uses the the model client internally; the `llm` arg is not needed.
     Hub writer upserts the extracted invoice into `intelligence_hub`.
     """
     workflow = StateGraph(OrchestratorState)
@@ -107,9 +107,9 @@ def build_receipt_graph() -> Any:
 
     Topology: START → receipt_ocr → receipt_classifier → END
 
-    receipt_ocr runs Gemini vision over the uploaded image; receipt_classifier
+    receipt_ocr runs the model vision over the uploaded image; receipt_classifier
     suggests an expense category from the extracted fields.  Each node degrades
-    gracefully so a Gemini hiccup yields an empty/low-confidence form for the
+    gracefully so a model hiccup yields an empty/low-confidence form for the
     user to complete rather than an HTTP 500.
     """
     workflow = StateGraph(OrchestratorState)
@@ -145,7 +145,7 @@ def build_graph() -> Any:
     """Compile and return the full supervisor-based LangGraph StateGraph."""
     workflow = StateGraph(OrchestratorState)
 
-    # Register nodes — all agents use Gemini internally; no llm arg needed.
+    # Register nodes — all agents use the model internally; no llm arg needed.
     # _tracked wraps each so its LLM calls attribute to the agent on /metrics.
     workflow.add_node("supervisor",    _tracked("supervisor",   make_supervisor_node()))
     workflow.add_node("a_generator",   _tracked("a_generator",  make_a_generator_node()))

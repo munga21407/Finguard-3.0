@@ -43,7 +43,7 @@ async def scan_receipt(
     ``POST /api/v1/finance/receipts`` to create the expense.
 
     Validation: the upload must be an allowed image/PDF MIME type and under
-    10 MB.  On a Gemini failure the graph degrades to an empty extraction plus
+    10 MB.  On a model failure the graph degrades to an empty extraction plus
     an ``error`` message so the user can still fill the form by hand.
     """
     if file.content_type not in _RECEIPT_ALLOWED_TYPES:

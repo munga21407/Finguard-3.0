@@ -48,11 +48,11 @@ class ReconcilerTuning:
     txn_batch: int = 100          # M-Pesa / bank lines per reconciliation run
     inv_limit: int = 500          # max open invoices loaded per run
     fuzzy_threshold: float = 65.0  # rapidfuzz token_sort_ratio min for Pass 2 candidacy
-    semantic_threshold: float = 0.60   # Gemini match_score min to confirm a match
+    semantic_threshold: float = 0.60   # the model match_score min to confirm a match
     fuzzy_match_boundary: float = 0.90  # >= this scores as "fuzzy", below as "semantic"
     amount_tolerance_kes: float = 1.0   # Pass 1 exact-amount tolerance
     date_window_days: int = 2           # Pass 1 date-proximity window
-    pass2_candidate_cap: int = 50       # max fuzzy candidates sent to Gemini per run
+    pass2_candidate_cap: int = 50       # max fuzzy candidates sent to the model per run
 
 
 # ---------------------------------------------------------------------------

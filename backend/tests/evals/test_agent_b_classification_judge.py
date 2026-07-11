@@ -1,6 +1,6 @@
 """Agent B — real-model classification accuracy over the golden set.
 
-Non-blocking / nightly (needs ``RUN_LLM_EVALS=1`` + ``GEMINI_API_KEY``): Agent B's
+Non-blocking / nightly (needs ``RUN_LLM_EVALS=1`` + ``FIREWORKS_API_KEY``): Agent B's
 category is produced by Gemini, so this measures accuracy against the immutable
 ``CLASSIFICATION_CASES`` baseline rather than gating a PR. The deterministic
 *guards* (every entry covered, taxonomy-clamped) are pinned separately and DO
@@ -12,14 +12,14 @@ import os
 
 import pytest
 
-from src.domains.intelligence.agents.b_classifier import _classify_via_gemini
+from src.domains.intelligence.agents.b_classifier import _classify_via_llm
 from tests.evals.datasets import CLASSIFICATION_CASES
 
 pytestmark = [
     pytest.mark.llm_judge,
     pytest.mark.skipif(
         not os.getenv("RUN_LLM_EVALS"),
-        reason="LLM-judge evals are nightly/opt-in — set RUN_LLM_EVALS=1 (needs GEMINI_API_KEY)",
+        reason="LLM-judge evals are nightly/opt-in — set RUN_LLM_EVALS=1 (needs FIREWORKS_API_KEY)",
     ),
 ]
 
@@ -41,7 +41,7 @@ async def test_classification_accuracy_over_golden_set() -> None:
     ]
     expected = {case.id: case.expected_category for case in CLASSIFICATION_CASES}
 
-    results = await _classify_via_gemini(entries)
+    results = await _classify_via_llm(entries)
     predicted = {c.entry_id: c.category for c in results}
 
     correct = sum(1 for eid, exp in expected.items() if predicted.get(eid) == exp)

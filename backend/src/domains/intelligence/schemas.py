@@ -73,7 +73,7 @@ class GenUIPayload(BaseModel):
 
 
 class AgentHOutput(BaseModel):
-    """Structured output for Agent H (Financial Advisor), used as the Gemini 2.5
+    """Structured output for Agent H (Financial Advisor), used as the the model 2.5
     Flash ``response_schema`` for native structured-output generation.
 
     The advisor returns a conversational ``narrative_response`` and, when a
@@ -512,10 +512,10 @@ def effective_receipt_categories() -> tuple[str, ...]:
 
 
 class ReceiptExtraction(BaseModel):
-    """Structured output from Gemini vision OCR of a receipt image.
+    """Structured output from the model vision OCR of a receipt image.
 
     ``suggested_category`` is produced by the *same* vision call as the OCR
-    fields (Sprint 3: one Gemini call instead of a second classification call);
+    fields (Sprint 3: one the model call instead of a second classification call);
     the validator clamps any off-taxonomy value to ``"other"``.
     """
 
@@ -536,7 +536,7 @@ class ReceiptExtraction(BaseModel):
 
 
 class TransactionClassification(BaseModel):
-    """A single ledger entry annotated with its Gemini-assigned category."""
+    """A single ledger entry annotated with its model-assigned category."""
 
     entry_id: str
     category: str
@@ -544,7 +544,7 @@ class TransactionClassification(BaseModel):
 
 
 class BatchClassificationResult(BaseModel):
-    """Gemini-structured output for a batch of transaction classifications."""
+    """structured output for a batch of transaction classifications."""
 
     classifications: list[TransactionClassification]
 
@@ -554,7 +554,7 @@ class BatchClassificationResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ReconciliationCandidate(BaseModel):
-    """Single candidate match scored by Gemini in Pass 2."""
+    """Single candidate match scored by the model in Pass 2."""
 
     transaction_id: str
     invoice_id: str
@@ -563,7 +563,7 @@ class ReconciliationCandidate(BaseModel):
 
 
 class ReconciliationScoringResult(BaseModel):
-    """Gemini structured output for the Pass 2 semantic scoring step."""
+    """the model structured output for the Pass 2 semantic scoring step."""
 
     candidates: list[ReconciliationCandidate]
 
@@ -610,7 +610,7 @@ class ForecastDataPoint(BaseModel):
 
 
 class RegimeAnalysis(BaseModel):
-    """Gemini Semantic Regime Detector output."""
+    """the model Semantic Regime Detector output."""
 
     regime: Literal["Boom", "Normal", "Stress", "Liquidity Crunch", "Recovery"]
     confidence: float = Field(..., ge=0.0, le=1.0)

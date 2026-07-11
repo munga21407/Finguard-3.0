@@ -10,7 +10,7 @@ Pipeline:
         Effective Tax Rate  = (vat_due + cit_due) / gross_revenue × 100.
   4. Call the Tax RAG service to retrieve the top-3 KRA knowledge-base
      sections most relevant to the detected tax_regime.
-  5. Send ledger summary + RAG context to Gemini structured output to
+  5. Send ledger summary + RAG context to the model structured output to
      produce compliance_flags and kra_references.
   6. Assemble the final AgentFOutput and write to state["context"]["audit_result"].
 
@@ -42,10 +42,10 @@ from src.domains.intelligence.services.tax_rag_service import get_relevant_tax_r
 from src.domains.intelligence.tuning import AuditorTuning
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
-# ── Gemini helper schema (compliance flags only) ──────────────────────────────
+# ── the model helper schema (compliance flags only) ──────────────────────────────
 
 class _ComplianceAnalysis(BaseModel):
-    """Gemini extracts compliance issues from the supplied ledger + KRA context."""
+    """the model extracts compliance issues from the supplied ledger + KRA context."""
     compliance_flags: list[str]
     kra_references: list[str]
     audit_summary: str
@@ -141,7 +141,7 @@ def _inject_deterministic_flags(
 ) -> list[str]:
     """Return ``flags`` with the machine-verified compliance flags guaranteed present.
 
-    Gemini may or may not surface these in its free-text output; we enforce them
+    the model may or may not surface these in its free-text output; we enforce them
     from the deterministic figures so they can never be silently absent — the LLM
     verdict is never the only gate:
       * AML_REPORTING_REQUIRED  — a single transaction ≥ the AML threshold.
@@ -228,7 +228,7 @@ def make_f_auditor_node(llm: Any = None) -> Any:  # llm kept for signature compa
         )
 
         # Extract citation labels from the formatted excerpts ("KRA Ref: X — Y")
-        # so Gemini can echo them back precisely in kra_references
+        # so the model can echo them back precisely in kra_references
         rag_citations = [
             line.strip("[]")
             for exc in kra_excerpts
@@ -236,7 +236,7 @@ def make_f_auditor_node(llm: Any = None) -> Any:  # llm kept for signature compa
             if line.startswith("[KRA Ref:")
         ]
 
-        # ── 4. Gemini compliance analysis ─────────────────────────────────
+        # ── 4. the model compliance analysis ─────────────────────────────────
         ledger_summary = json.dumps({
             "tax_regime": tax_regime,
             "period_days": period_days,
@@ -294,7 +294,7 @@ Return a JSON object with exactly these fields:
         try:
             analysis = await generate_structured_content(compliance_prompt, _ComplianceAnalysis)
         except Exception as exc:
-            logger.warning("Agent F: Gemini compliance analysis failed", error=str(exc))
+            logger.warning("Agent F: the model compliance analysis failed", error=str(exc))
             aml_flag = max_single_tx >= aml_threshold
             fallback_flags = []
             if aml_flag:

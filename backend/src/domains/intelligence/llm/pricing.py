@@ -1,7 +1,7 @@
 """Model-keyed LLM pricing (USD per 1M tokens), externally configurable.
 
 Previously the cost-attribution rate lived as a single hardcoded pair of
-``GEMINI_*_USD_PER_MTOK`` settings.  That drifts the moment a provider changes
+per-token settings.  That drifts the moment a provider changes
 list prices or a second model is used, silently skewing the ``/metrics`` cost
 counter.  Pricing is now keyed by model id with a built-in default table that
 can be overridden **wholesale** via the ``LLM_PRICING_JSON`` env var — a JSON
@@ -29,12 +29,13 @@ class ModelPrice:
     output_usd_per_mtok: float
 
 
-# Approximate published list prices — overridable via LLM_PRICING_JSON.
+# The Fireworks Gemma 4 deployment is GPU-hour billed (not per-token) and the
+# Featherless backup is subscription-priced, so per-token cost attribution
+# defaults to zero. Set an effective per-token rate via LLM_PRICING_JSON keyed by
+# the exact model id (the Fireworks deployment path or the Featherless model id)
+# if you want the /metrics cost counter populated.
 _DEFAULTS: dict[str, ModelPrice] = {
-    "gemini-2.5-flash": ModelPrice(0.30, 2.50),
-    "gemini-2.5-pro": ModelPrice(1.25, 10.00),
-    "gemini-1.5-flash": ModelPrice(0.075, 0.30),
-    "gemini-1.5-pro": ModelPrice(1.25, 5.00),
+    "google/gemma-4-31B-it": ModelPrice(0.0, 0.0),
 }
 
 _ZERO = ModelPrice(0.0, 0.0)

@@ -51,7 +51,7 @@ def test_agent_context_sets_and_resets() -> None:
 
 
 def test_tokens_cost_and_calls_attributed_to_agent() -> None:
-    model = settings.GEMINI_MODEL
+    model = settings.LLM_MODEL
     labels_prompt = dict(agent_id="d_forecaster", model=model, kind="prompt")
     labels_completion = dict(agent_id="d_forecaster", model=model, kind="completion")
     cost_labels = dict(agent_id="d_forecaster", model=model)
@@ -75,7 +75,7 @@ def test_tokens_cost_and_calls_attributed_to_agent() -> None:
 
 def test_elapsed_none_records_no_latency() -> None:
     """Agent E times its own call and passes elapsed=None — no double latency."""
-    model = settings.GEMINI_MODEL
+    model = settings.LLM_MODEL
     before = _hist_count(llm_client.AGENT_LLM_PROCESSING, agent_id="e_watchdog", model=model)
 
     observe_llm_call(_resp(10, 5), elapsed=None, agent_id="e_watchdog")
@@ -85,7 +85,7 @@ def test_elapsed_none_records_no_latency() -> None:
 
 
 def test_missing_usage_metadata_is_tolerated() -> None:
-    model = settings.GEMINI_MODEL
+    model = settings.LLM_MODEL
     call_labels = dict(agent_id="j_summarizer", model=model, status="success")
     calls0 = _sample(llm_client.AGENT_LLM_CALLS, **call_labels)
 

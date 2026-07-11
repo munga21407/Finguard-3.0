@@ -1,6 +1,6 @@
 """Unit tests for Agent B (Transaction Classifier) Gemini scoring + guards.
 
-``_classify_via_gemini`` has two correctness guards worth pinning: every input
+``_classify_via_llm`` has two correctness guards worth pinning: every input
 entry_id must appear in the output (missing ones backfilled as ``other``), and
 any category outside the taxonomy is coerced to ``other``. The Gemini client is
 mocked, so the test is deterministic.
@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from src.domains.intelligence.agents import b_classifier
-from src.domains.intelligence.agents.b_classifier import _classify_via_gemini
+from src.domains.intelligence.agents.b_classifier import _classify_via_llm
 from src.domains.intelligence.prompts.b_classifier import TRANSACTION_TAXONOMY
 from src.domains.intelligence.schemas import (
     BatchClassificationResult,
@@ -37,7 +37,7 @@ def _patch_llm(monkeypatch: pytest.MonkeyPatch, result: BatchClassificationResul
 @pytest.mark.asyncio
 async def test_empty_entries_short_circuits() -> None:
     # No entries → no LLM call, empty result.
-    assert await _classify_via_gemini([]) == []
+    assert await _classify_via_llm([]) == []
 
 
 @pytest.mark.asyncio
@@ -51,7 +51,7 @@ async def test_missing_entry_id_backfilled_as_other(monkeypatch: pytest.MonkeyPa
             ]
         ),
     )
-    out = await _classify_via_gemini([_entry("e1"), _entry("e2")])
+    out = await _classify_via_llm([_entry("e1"), _entry("e2")])
     by_id = {c.entry_id: c for c in out}
     assert set(by_id) == {"e1", "e2"}
     assert by_id["e2"].category == "other" and by_id["e2"].confidence == 0.0
@@ -67,5 +67,5 @@ async def test_out_of_taxonomy_category_coerced(monkeypatch: pytest.MonkeyPatch)
             ]
         ),
     )
-    out = await _classify_via_gemini([_entry("e1")])
+    out = await _classify_via_llm([_entry("e1")])
     assert out[0].category == "other" and out[0].confidence == 0.0

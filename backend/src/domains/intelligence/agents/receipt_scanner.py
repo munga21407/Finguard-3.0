@@ -10,7 +10,7 @@ Graph topology (see orchestrator.build_receipt_graph):
 
     START → receipt_ocr → receipt_classifier → END
 
-Each node is defensive: a Gemini failure degrades to a low-confidence result
+Each node is defensive: a model failure degrades to a low-confidence result
 plus an entry in ``error_messages`` rather than crashing the graph, so the HTTP
 layer can still return a (possibly empty) form for the user to complete by hand
 — the human-in-the-loop fallback.
@@ -39,7 +39,7 @@ __all__ = ["RECEIPT_CATEGORIES", "make_receipt_classifier_node", "make_receipt_o
 # ── Node 1: OCR ───────────────────────────────────────────────────────────────
 
 def make_receipt_ocr_node() -> Any:
-    """Decode the uploaded image from context and run Gemini vision OCR."""
+    """Decode the uploaded image from context and run the model vision OCR."""
 
     async def receipt_ocr_node(state: OrchestratorState) -> dict[str, Any]:
         context = dict(state["context"])

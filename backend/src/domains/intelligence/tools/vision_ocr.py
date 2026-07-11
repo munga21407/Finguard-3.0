@@ -1,18 +1,18 @@
 """
-Reusable Gemini-vision OCR for receipt images.
+Reusable vision OCR for receipt images.
 
 This is the single source of truth for receipt vision extraction.  Both the
 interactive Receipt Scanner graph (``agents/receipt_scanner.py``) and the
 batch Celery task (``workers/tasks/ocr.py``) call ``extract_receipt`` so the
-prompt and Gemini configuration never drift between the sync and async paths.
+prompt and the model configuration never drift between the sync and async paths.
 
 Sprint 6 (S6-6):
   - The expense taxonomy in the prompt is built from the ``receipt`` tuning
     section (``get_receipt_tuning().categories``) so operators can extend it
     without a deploy.
   - A low-confidence scan (below ``receipt.ocr_min_confidence``) is re-run once
-    with a higher-fidelity vision model (``GEMINI_VISION_RETRY_MODEL``); the
-    higher-confidence of the two reads is returned.
+    with a higher-fidelity vision model (``VISION_RETRY_MODEL``, disabled by
+    default); the higher-confidence of the two reads is returned.
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def build_receipt_prompt(categories: tuple[str, ...] | None = None) -> str:
 # Back-compat: the default-taxonomy rendered prompt (was a module constant).
 RECEIPT_OCR_PROMPT = build_receipt_prompt()
 
-# Magic-byte → MIME map for the formats Gemini vision accepts.
+# Magic-byte → MIME map for the formats the model vision accepts.
 _JPEG_MAGIC = b"\xff\xd8"
 _PNG_MAGIC = b"\x89PNG"
 _PDF_MAGIC = b"%PDF"
@@ -84,7 +84,7 @@ def detect_image_mime(image_bytes: bytes) -> str:
     """Best-effort MIME sniff from a file's leading bytes.
 
     Defaults to image/jpeg (the most common phone-camera receipt format) when
-    the signature is unrecognised, since Gemini tolerates a slightly wrong hint
+    the signature is unrecognised, since the model tolerates a slightly wrong hint
     far better than a missing one.
     """
     if image_bytes[:2] == _JPEG_MAGIC:
@@ -102,7 +102,7 @@ async def extract_receipt(
     image_bytes: bytes,
     mime_type: str | None = None,
 ) -> ReceiptExtraction:
-    """Run Gemini multimodal OCR over a receipt image and return structured data.
+    """Run the model multimodal OCR over a receipt image and return structured data.
 
     A first pass runs on the default vision model.  If the read is low-confidence
     (below ``receipt.ocr_min_confidence``) and a distinct higher-fidelity model
@@ -129,12 +129,12 @@ async def extract_receipt(
         temperature=0.0,
     )
 
-    retry_model = settings.GEMINI_VISION_RETRY_MODEL
+    retry_model = settings.VISION_RETRY_MODEL
     needs_retry = (
         tuning.hifi_retry_enabled
         and result.confidence < tuning.ocr_min_confidence
         and bool(retry_model)
-        and retry_model != settings.GEMINI_MODEL
+        and retry_model != settings.LLM_MODEL
     )
     if not needs_retry:
         return result

@@ -4,8 +4,8 @@ OCR processing Celery tasks.
 All tasks route to the `ocr_processing` queue.  Each task is bound (self)
 so it can retry itself with exponential back-off on transient failures.
 
-Vision extraction is powered by Gemini 2.5 Flash multimodal capabilities.
-Celery workers are synchronous; the async Gemini API is bridged with
+Vision extraction is powered by Gemma 4 multimodal capabilities.
+Celery workers are synchronous; the async the model API is bridged with
 asyncio.run() — the same pattern used by reporting_tasks.py.
 """
 from __future__ import annotations
@@ -67,7 +67,7 @@ def _mime_type(path: str) -> str:
     return _MIME_MAP.get(Path(path).suffix.lower(), "image/jpeg")
 
 
-# ── Async Gemini vision helpers ───────────────────────────────────────────────
+# ── Async the model vision helpers ───────────────────────────────────────────────
 
 async def _run_document_text_extraction(image_bytes: bytes, mime_type: str) -> str:
     text = await generate_vision_text_content(
@@ -103,7 +103,7 @@ async def _run_invoice_image_extraction(
 )
 def process_document_ocr(self: Any, document_id: str, storage_path: str) -> dict[str, Any]:
     """
-    Extract text from an uploaded document via Gemini multimodal.
+    Extract text from an uploaded document via model multimodal.
 
     Args:
         document_id:   UUID of the document record.
@@ -158,11 +158,11 @@ def process_document_ocr(self: Any, document_id: str, storage_path: str) -> dict
 )
 def process_receipt_ocr(self: Any, receipt_id: str, image_bytes_b64: str) -> dict[str, Any]:
     """
-    Extract structured transaction data from a receipt image via Gemini vision.
+    Extract structured transaction data from a receipt image via model vision.
 
     Args:
         receipt_id:       UUID of the receipt record.
-        image_bytes_b64:  Base64-encoded image bytes (any Gemini-supported format).
+        image_bytes_b64:  Base64-encoded image bytes (any model-supported format).
 
     Returns:
         dict with keys: receipt_id, status, extracted_fields (ReceiptExtraction dict).
@@ -203,7 +203,7 @@ def process_receipt_ocr(self: Any, receipt_id: str, image_bytes_b64: str) -> dic
 )
 def process_invoice_image(self: Any, invoice_id: str, storage_path: str) -> dict[str, Any]:
     """
-    OCR-extract structured invoice data from a scanned invoice image via Gemini vision.
+    OCR-extract structured invoice data from a scanned invoice image via model vision.
 
     Args:
         invoice_id:    UUID of the pending invoice record.
@@ -213,7 +213,7 @@ def process_invoice_image(self: Any, invoice_id: str, storage_path: str) -> dict
         dict with keys: invoice_id, status, extracted_fields (ExtractedInvoice dict).
         The extracted_fields dict is compatible with Agent A's OCR fast-path:
         set context["ocr_extracted_fields"] = result["extracted_fields"] before
-        invoking the a_generator_node to skip the second Gemini call.
+        invoking the a_generator_node to skip the second the model call.
     """
     try:
         path = Path(storage_path)

@@ -354,7 +354,7 @@ class BankStatementLine(Base):
     Raw bank statement line imported for Agent C (Reconciler) to match to invoices.
 
     Two-pass reconciliation checks this table for exact (amount + date ±2 days +
-    reference substring) and fuzzy (Gemini) matches against open invoices, then
+    reference substring) and fuzzy (the model) matches against open invoices, then
     records a Payment(vault=BANK).  ``external_ref`` is the bank's own line/
     transaction reference; it is the required, unique import idempotency key, so
     re-importing the same statement cannot create duplicate lines (and therefore

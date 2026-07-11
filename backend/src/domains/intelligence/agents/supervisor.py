@@ -1,7 +1,7 @@
 """
 Supervisor node — the ReAct loop controller.
 
-Uses Gemini structured output to inspect the current conversation state
+Uses the model structured output to inspect the current conversation state
 and decide which agent node to invoke next, or whether the task is complete.
 
 Loop-escape strategy
@@ -22,7 +22,7 @@ Failure handling
 ----------------
 Every failure path logs the error with full context and routes to FINISH
 rather than crashing the backend.  Pydantic ``ValidationError`` on the
-Gemini response is caught explicitly and also routes to FINISH.
+the model response is caught explicitly and also routes to FINISH.
 """
 from __future__ import annotations
 
@@ -51,10 +51,10 @@ VALID_NEXT = frozenset({
 })
 
 # ── Deterministic keyword router (Sprint 3 — cut per-hop LLM routing cost) ─────
-# A clear single-agent intent skips the Gemini routing call entirely. Each entry
+# A clear single-agent intent skips the the model routing call entirely. Each entry
 # is (agent_node, keyword/phrase set); the initial user message is scored against
 # every set and a *strict* single winner (score ≥ 1, no tie) short-circuits the
-# LLM. Ambiguous / multi-agent intents fall through to Gemini as before.
+# LLM. Ambiguous / multi-agent intents fall through to the model as before.
 _KEYWORD_ROUTES: tuple[tuple[str, frozenset[str]], ...] = (
     ("a_generator", frozenset({"extract invoice", "parse invoice", "generate invoice",
                                "invoice from", "scan invoice"})),
@@ -82,7 +82,7 @@ _KEYWORD_ROUTES: tuple[tuple[str, frozenset[str]], ...] = (
 )
 
 # Bounded cache of the initial routing decision, keyed by normalised intent text,
-# so repeated identical intents skip even the Gemini call. Process-global; only
+# so repeated identical intents skip even the the model call. Process-global; only
 # the first hop is cached (later hops depend on accumulated state).
 _ROUTE_CACHE_MAX = 256
 _INITIAL_ROUTE_CACHE: OrderedDict[str, str] = OrderedDict()
@@ -112,7 +112,7 @@ def _heuristic_route(intent_text: str) -> str | None:
         return None
     scored.sort(reverse=True)
     if len(scored) > 1 and scored[0][0] == scored[1][0]:
-        return None  # tie — let Gemini decide
+        return None  # tie — let the model decide
     return scored[0][1]
 
 
@@ -225,7 +225,7 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
 
         # ── requested_agent short-circuit (initial routing only) ──────────────
         # Honours context["requested_agent"] set by the HTTP router or a test
-        # fixture to bypass the Gemini routing call when the first target is
+        # fixture to bypass the the model routing call when the first target is
         # already known.  Detects "initial call" by the absence of any prior
         # agent AIMessages — this is resilient to context overwrites unlike the
         # removed manual hop counter.
@@ -286,7 +286,7 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
 
         intent_text = _first_intent_text(state["messages"])
 
-        # ── Deterministic short-circuits (no Gemini) ──────────────────────────
+        # ── Deterministic short-circuits (no the model) ──────────────────────────
         if is_initial_call:
             cached = _cache_get(intent_text)
             if cached is not None and cached in VALID_NEXT:
@@ -297,7 +297,7 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
                 return _route(heuristic, f"Keyword route → {heuristic}", "heuristic")
         else:
             # Single-agent flow: the heuristically/requested-routed agent has run,
-            # so terminate without spending a Gemini call to (re)decide FINISH.
+            # so terminate without spending a model call to (re)decide FINISH.
             origin = context.get("_route_origin")
             if (
                 isinstance(origin, str)
@@ -379,6 +379,6 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
         if is_initial_call and next_node in VALID_NEXT and next_node != "FINISH":
             _cache_put(intent_text, next_node)
 
-        return _route(next_node, reason, "gemini")
+        return _route(next_node, reason, "llm")
 
     return supervisor_node

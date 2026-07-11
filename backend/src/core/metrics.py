@@ -19,8 +19,8 @@ Sprint 6 additions:
   • time_llm_call(agent, model) — async context manager that times an LLM
     call and records the result in both AGENT_LLM_LATENCY and AGENT_LLM_PROCESSING.
     Usage:
-        async with time_llm_call("e_watchdog", settings.GEMINI_MODEL):
-            resp = await client.aio.models.generate_content(...)
+        async with time_llm_call("e_watchdog", settings.LLM_MODEL):
+            resp = await client.chat.completions.create(...)
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from prometheus_client import Counter, Gauge, Histogram
 
 # ── Agent E — HMM + LLM ───────────────────────────────────────────────────────
 
-# End-to-end latency of each Gemini API call, broken down by agent and model.
+# End-to-end latency of each the model API call, broken down by agent and model.
 # Use histogram_quantile(0.95, ...) in Grafana for P95 SLO tracking.
 AGENT_LLM_LATENCY = Histogram(
     "finguard_agent_llm_duration_seconds",
@@ -70,7 +70,7 @@ GENUI_RENDER_ERRORS = Counter(
     labelnames=["component_id"],
 )
 
-# Estimated per-agent LLM spend (tokens × configured Gemini list price). USD.
+# Estimated per-agent LLM spend (tokens × configured the model list price). USD.
 AGENT_LLM_COST_USD = Counter(
     "agent_llm_cost_usd_total",
     "Estimated LLM cost in USD per agent and model (list-price approximation)",
@@ -172,20 +172,30 @@ HUB_WRITE_ERRORS = Counter(
 
 # ── LLM circuit-breaker observability ────────────────────────────────────────
 
-# Incremented each time a Gemini call exceeds the 30-second hard timeout.
-# Alert rule: rate(finguard_gemini_timeouts_total[5m]) > 0.1
-GEMINI_TIMEOUT_COUNTER = Counter(
-    "finguard_gemini_timeouts_total",
-    "Total Gemini API calls that exceeded the 30-second hard timeout and "
+# Incremented each time an LLM call exceeds the 30-second hard timeout.
+# Alert rule: rate(finguard_llm_timeouts_total[5m]) > 0.1
+LLM_TIMEOUT_COUNTER = Counter(
+    "finguard_llm_timeouts_total",
+    "Total LLM API calls that exceeded the 30-second hard timeout and "
     "tripped the circuit breaker",
+)
+
+# Incremented each time the primary LLM provider fails and the failover client
+# routes a call to the backup provider. label ``result`` ∈ {backup_ok, backup_failed}.
+# Alert rule: a sustained rate signals the primary (e.g. a scaled-to-zero
+# deployment) is unhealthy: rate(finguard_llm_failover_total[5m]) > 0.
+LLM_FAILOVER_COUNTER = Counter(
+    "finguard_llm_failover_total",
+    "Times the primary LLM provider failed and the call was routed to the backup",
+    ["capability", "result"],
 )
 
 # ── Supervisor routing cost ───────────────────────────────────────────────────
 
 # How each supervisor routing decision was made. method ∈
-# {gemini, heuristic, cache, requested, single_agent_finish}. Every non-"gemini"
+# {llm, heuristic, cache, requested, single_agent_finish}. Every non-"llm"
 # outcome is a saved LLM routing call — track the ratio to size the Sprint-3 win:
-#   sum(rate(agent_supervisor_routes_total{method!="gemini"}[5m]))
+#   sum(rate(agent_supervisor_routes_total{method!="llm"}[5m]))
 #     / sum(rate(agent_supervisor_routes_total[5m]))
 SUPERVISOR_ROUTES = Counter(
     "agent_supervisor_routes_total",
@@ -202,8 +212,8 @@ async def time_llm_call(agent: str, model: str) -> AsyncGenerator[None, None]:
     Async context manager that records LLM wall-clock time in both histograms.
 
     Usage:
-        async with time_llm_call("e_watchdog", settings.GEMINI_MODEL):
-            resp = await gemini_client.aio.models.generate_content(...)
+        async with time_llm_call("e_watchdog", settings.LLM_MODEL):
+            resp = await client.chat.completions.create(...)
     """
     t0 = time.monotonic()
     try:

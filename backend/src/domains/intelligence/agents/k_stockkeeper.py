@@ -11,7 +11,7 @@ Pipeline (mirrors Agent H):
      valuation, low-stock list, and reorder plans for the at-risk items.
   3. A2A: if the planner ran Agent D first, fold its cash-flow regime in as
      *optional* context (soft ``consumes`` — single-agent flows are unaffected).
-  4. Gemini structured output (temperature 0.0) → AgentKOutput narrative.
+  4. the model structured output (temperature 0.0) → AgentKOutput narrative.
   5. Attach deterministic ``proposed_actions`` (advisory reorders) — figures come
      from the tools, never the model.
   6. If the request carries an explicit ``stock_action``, route it through the
@@ -225,7 +225,7 @@ def make_k_stockkeeper_node(llm: Any = None) -> Any:  # llm kept for signature p
                 "advisory_warnings": regime.get("advisory_warnings", []),
             }
 
-        # ── 3/4. Evidence + Gemini narrative ──────────────────────────────────
+        # ── 3/4. Evidence + the model narrative ──────────────────────────────────
         evidence = json.dumps(
             {
                 "valuation": valuation.model_dump(mode="json"),
@@ -250,7 +250,7 @@ def make_k_stockkeeper_node(llm: Any = None) -> Any:  # llm kept for signature p
             )
             narrative = steward_out.narrative_response
         except Exception as exc:  # noqa: BLE001 — degrade, never 500 the graph
-            logger.warning("Agent K: Gemini narrative failed", error=str(exc))
+            logger.warning("Agent K: the model narrative failed", error=str(exc))
             n = len(low_stock)
             narrative = (
                 f"Stock overview: {n} item(s) at or below reorder level; total "

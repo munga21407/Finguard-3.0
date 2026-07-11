@@ -63,7 +63,7 @@ async def test_admin_upload_surfaces_in_semantic_query(
     async def _fake_generate_embedding(text, *, task_type=None, output_dimensionality=None):
         return _fake_embed(text)
 
-    monkeypatch.setattr(settings, "GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "FIREWORKS_API_KEY", "test-key")
     monkeypatch.setattr(
         "src.domains.intelligence.routers.admin.generate_embedding",
         _fake_generate_embedding,

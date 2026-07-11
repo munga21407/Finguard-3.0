@@ -86,26 +86,31 @@ async def test_high_confidence_skips_retry(monkeypatch: pytest.MonkeyPatch) -> N
 
 @pytest.mark.asyncio
 async def test_low_confidence_triggers_hifi_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The second pass only runs when a distinct retry model is configured
+    # (VISION_RETRY_MODEL is empty/disabled by default).
+    monkeypatch.setattr(vision_ocr.settings, "VISION_RETRY_MODEL", "hifi-model")
     calls: list[str | None] = []
 
     async def _fake(*_a, **kw):
         calls.append(kw.get("model"))
-        # First pass (default model) low; retry (pro model) high.
+        # First pass (default model) low; retry (hifi model) high.
         return _extraction(0.9, "pro") if kw.get("model") else _extraction(0.3, "flash")
 
     monkeypatch.setattr(vision_ocr, "generate_vision_content", _fake)
     out = await vision_ocr.extract_receipt(_PNG)
     assert len(calls) == 2
     assert calls[0] is None  # first pass = default model
-    assert calls[1] == vision_ocr.settings.GEMINI_VISION_RETRY_MODEL
+    assert calls[1] == vision_ocr.settings.VISION_RETRY_MODEL
     assert out.merchant_name == "pro"  # higher-confidence read wins
 
 
 @pytest.mark.asyncio
 async def test_retry_failure_keeps_first_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vision_ocr.settings, "VISION_RETRY_MODEL", "hifi-model")
+
     async def _fake(*_a, **kw):
         if kw.get("model"):
-            raise RuntimeError("pro model down")
+            raise RuntimeError("hifi model down")
         return _extraction(0.3, "flash")
 
     monkeypatch.setattr(vision_ocr, "generate_vision_content", _fake)

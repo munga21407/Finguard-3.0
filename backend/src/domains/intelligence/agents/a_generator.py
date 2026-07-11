@@ -2,12 +2,12 @@
 Agent A — Invoice Generator / Extractor.
 
 Parses raw document text (OCR output, email body, pasted text) and returns a
-structured ExtractedInvoice using Gemini's native response_schema mode —
+structured ExtractedInvoice using the model's native response_schema mode —
 no JSON prompt hacking, no fallback parsing.
 
 Fast-path: if context["ocr_extracted_fields"] is already populated (set by the
 process_invoice_image Celery task), the node validates the dict against
-ExtractedInvoice and returns immediately — skipping the second Gemini call.
+ExtractedInvoice and returns immediately — skipping the second the model call.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from src.domains.intelligence.prompts.a_generator import GENERATOR_HUMAN, GENERA
 from src.domains.intelligence.schemas import ExtractedInvoice, OrchestratorState
 
 # OCR fast-path acceptance floor (Sprint 4): a pre-parsed OCR dict is only trusted
-# without a second Gemini pass when its self-reported confidence clears this bar;
+# without a second the model pass when its self-reported confidence clears this bar;
 # below it we fall through to full text extraction rather than accept a shaky read.
 _OCR_FASTPATH_MIN_CONFIDENCE = 0.6
 
@@ -54,12 +54,12 @@ def make_a_generator_node(llm: Any = None) -> Any:  # llm kept for signature com
             if invoice is not None:
                 logger.info(
                     "a_generator: OCR confidence below fast-path floor — "
-                    "re-extracting via Gemini",
+                    "re-extracting via model",
                     ocr_confidence=invoice.confidence,
                     floor=_OCR_FASTPATH_MIN_CONFIDENCE,
                 )
 
-        # ── Standard path: Gemini extraction from raw document text ──────────
+        # ── Standard path: the model extraction from raw document text ──────────
         raw_text: str = state["context"].get("document_text", "")
         if not raw_text:
             for msg in reversed(state["messages"]):
@@ -75,7 +75,7 @@ def make_a_generator_node(llm: Any = None) -> Any:  # llm kept for signature com
         try:
             invoice = await generate_structured_content(prompt, ExtractedInvoice)
         except Exception as exc:
-            error_msg = f"[a_generator] Gemini extraction failed: {exc}"
+            error_msg = f"[a_generator] the model extraction failed: {exc}"
             return {
                 "messages": [AIMessage(content=error_msg, name="a_generator")],
             }

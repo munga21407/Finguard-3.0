@@ -101,7 +101,7 @@ class IntelligenceService:
         )
         return ChatResponse(
             content=completion.content,
-            model=settings.GEMINI_MODEL,
+            model=settings.LLM_MODEL,
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
         )

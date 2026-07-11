@@ -1,17 +1,19 @@
-"""Gemini provider — the resilience/telemetry *policy* over :class:`BaseLLMClient`.
+"""OpenAI-compatible provider — the resilience/telemetry *policy* over
+:class:`BaseLLMClient`, shared by every provider (Fireworks, Featherless).
 
-Owns the contract shared by every Gemini call, but not the calls themselves:
+Owns the contract shared by every model call, but not the calls themselves:
   - 30-second hard timeout per attempt via ``asyncio.wait_for``;
   - HTTP 429 / 5xx retried up to 4 times with exponential back-off (tenacity);
+    a 503 ``DEPLOYMENT_SCALING_UP`` is *not* retried — it surfaces immediately so
+    the failover client can route to the always-warm backup instead of blocking;
   - timeout / exhausted-budget / non-retryable errors surface as the
-    provider-neutral :class:`LLMUnavailableError` so LangGraph nodes degrade
-    instead of crashing;
+    provider-neutral :class:`LLMUnavailableError` (which the failover client
+    catches to try the backup, and LangGraph nodes catch to degrade);
   - per-call token/latency telemetry via ``observe_llm_call``.
 
-The actual vendor SDK requests live in :class:`GeminiSdkClient`
-(``llm.gemini_sdk``) — this module never imports ``google.genai``. It builds no
-requests; it wraps the wrapper's calls with the cross-cutting concerns above and
-parses the responses into the neutral return types of the interface.
+It never imports ``openai``: it wraps an :class:`OpenAICompatSdkClient` with the
+cross-cutting concerns above and parses the neutral response into the interface's
+return types.
 """
 from __future__ import annotations
 
@@ -31,15 +33,15 @@ from tenacity import (
     wait_exponential,
 )
 
-from src.core.config import settings
-from src.core.metrics import GEMINI_TIMEOUT_COUNTER
+from src.core.metrics import LLM_TIMEOUT_COUNTER
 from src.domains.intelligence.llm.base import (
     BaseLLMClient,
     ChatCompletion,
     ChatTurn,
 )
-from src.domains.intelligence.llm.gemini_sdk import (
-    GeminiSdkClient,
+from src.domains.intelligence.llm.openai_compat import (
+    OpenAICompatSdkClient,
+    ProviderSpec,
     SdkApiError,
     is_retryable_error,
 )
@@ -51,26 +53,31 @@ _LLM_TIMEOUT: float = 30.0
 
 
 class LLMUnavailableError(RuntimeError):
-    """Raised when the model is unreachable after the full retry budget / timeout."""
+    """Raised when a provider is unreachable after its full retry budget / timeout."""
 
 
-async def _guard[R](label: str, call: Callable[[], Awaitable[R]]) -> R:
-    """Run a Gemini call, mapping timeout / exhausted-retry / API errors to
-    the provider-neutral :class:`LLMUnavailableError`."""
+async def _guard[R](provider: str, label: str, call: Callable[[], Awaitable[R]]) -> R:
+    """Run a model call, mapping timeout / exhausted-retry / API errors to the
+    provider-neutral :class:`LLMUnavailableError`."""
+    # A single provider failing is logged at WARNING (no traceback): it is an
+    # expected, recoverable event — the failover client escalates to the backup,
+    # and only raises (→ node degradation) when that also fails. Otherwise a
+    # scaled-to-zero primary would spam ERROR tracebacks on every cold-start call.
     try:
         return await call()
     except TimeoutError as exc:
-        GEMINI_TIMEOUT_COUNTER.inc()
-        logger.error(
-            "Gemini %s timed out — circuit breaker tripped",
+        LLM_TIMEOUT_COUNTER.inc()
+        logger.warning(
+            "%s %s timed out after %ss",
+            provider,
             label,
-            extra={"timeout_seconds": _LLM_TIMEOUT},
+            _LLM_TIMEOUT,
         )
-        raise LLMUnavailableError(f"Gemini timeout after {_LLM_TIMEOUT}s: {exc}") from exc
+        raise LLMUnavailableError(f"{provider} timeout after {_LLM_TIMEOUT}s: {exc}") from exc
     except (RetryError, SdkApiError) as exc:
-        logger.error("Gemini %s failed after retries", label, exc_info=True)
+        logger.warning("%s %s failed: %s", provider, label, exc)
         raise LLMUnavailableError(
-            f"Gemini unavailable ({type(exc).__name__}): {exc}"
+            f"{provider} unavailable ({type(exc).__name__}): {exc}"
         ) from exc
 
 
@@ -85,12 +92,10 @@ def _retrying[R](fn: Callable[..., Awaitable[R]]) -> Callable[..., Awaitable[R]]
 def l2_normalize(vec: list[float]) -> list[float]:
     """Return the L2 (unit-norm) normalization of ``vec``.
 
-    ``gemini-embedding-001`` only auto-normalizes at its native 3072 dims; when a
-    smaller ``output_dimensionality`` is requested the returned vector is *not*
-    unit-norm. Our pgvector indexes use ``vector_l2_ops`` with a fixed distance
-    cutoff, so every embedding — doc side and query side — must live in the same
-    normalized space or L2 distances become meaningless. Normalizing is a no-op
-    for already-unit vectors, so this is safe to apply unconditionally.
+    nomic-embed-text-v1.5 already returns unit-norm vectors at 768 dims, so this
+    is a no-op safety net: our pgvector indexes use ``vector_l2_ops`` with a fixed
+    distance cutoff, so every embedding — doc and query side — must share the same
+    normalized space or L2 distances become meaningless.
     """
     norm = math.sqrt(sum(v * v for v in vec))
     if norm == 0.0:
@@ -106,36 +111,35 @@ def l2_normalize(vec: list[float]) -> list[float]:
 
 @_retrying
 async def _call_structured[T: BaseModel](
-    sdk: GeminiSdkClient, prompt: str, response_schema: type[T], temperature: float | None
+    sdk: OpenAICompatSdkClient, prompt: str, response_schema: type[T], temperature: float | None
 ) -> T:
     _t0 = time.monotonic()
     response = await asyncio.wait_for(
         sdk.generate_structured(
-            model=settings.GEMINI_MODEL,
-            prompt=prompt,
-            response_schema=response_schema,
-            temperature=temperature,
+            model=None, prompt=prompt, response_schema=response_schema, temperature=temperature
         ),
         timeout=_LLM_TIMEOUT,
     )
-    observe_llm_call(response, elapsed=time.monotonic() - _t0)
+    observe_llm_call(response, elapsed=time.monotonic() - _t0, model=sdk.spec.model)
     return response_schema.model_validate_json(response.text or "")
 
 
 @_retrying
-async def _call_text(sdk: GeminiSdkClient, prompt: str, temperature: float | None) -> str:
+async def _call_text(
+    sdk: OpenAICompatSdkClient, prompt: str, temperature: float | None
+) -> str:
     _t0 = time.monotonic()
     response = await asyncio.wait_for(
-        sdk.generate_text(model=settings.GEMINI_MODEL, prompt=prompt, temperature=temperature),
+        sdk.generate_text(model=None, prompt=prompt, temperature=temperature),
         timeout=_LLM_TIMEOUT,
     )
-    observe_llm_call(response, elapsed=time.monotonic() - _t0)
+    observe_llm_call(response, elapsed=time.monotonic() - _t0, model=sdk.spec.model)
     return response.text or ""
 
 
 @_retrying
 async def _call_vision_structured[T: BaseModel](
-    sdk: GeminiSdkClient,
+    sdk: OpenAICompatSdkClient,
     prompt: str,
     image_bytes: bytes,
     mime_type: str,
@@ -146,7 +150,7 @@ async def _call_vision_structured[T: BaseModel](
     _t0 = time.monotonic()
     response = await asyncio.wait_for(
         sdk.generate_vision(
-            model=model or settings.GEMINI_MODEL,
+            model=model,
             prompt=prompt,
             image_bytes=image_bytes,
             mime_type=mime_type,
@@ -155,13 +159,13 @@ async def _call_vision_structured[T: BaseModel](
         ),
         timeout=_LLM_TIMEOUT,
     )
-    observe_llm_call(response, elapsed=time.monotonic() - _t0)
+    observe_llm_call(response, elapsed=time.monotonic() - _t0, model=model or sdk.spec.model)
     return response_schema.model_validate_json(response.text or "")
 
 
 @_retrying
 async def _call_vision_text(
-    sdk: GeminiSdkClient,
+    sdk: OpenAICompatSdkClient,
     prompt: str,
     image_bytes: bytes,
     mime_type: str,
@@ -171,7 +175,7 @@ async def _call_vision_text(
     _t0 = time.monotonic()
     response = await asyncio.wait_for(
         sdk.generate_vision(
-            model=model or settings.GEMINI_MODEL,
+            model=model,
             prompt=prompt,
             image_bytes=image_bytes,
             mime_type=mime_type,
@@ -180,70 +184,72 @@ async def _call_vision_text(
         ),
         timeout=_LLM_TIMEOUT,
     )
-    observe_llm_call(response, elapsed=time.monotonic() - _t0)
+    observe_llm_call(response, elapsed=time.monotonic() - _t0, model=model or sdk.spec.model)
     return response.text or ""
 
 
 @_retrying
 async def _call_chat(
-    sdk: GeminiSdkClient, messages: list[ChatTurn], system: str | None, max_tokens: int
+    sdk: OpenAICompatSdkClient, messages: list[ChatTurn], system: str | None, max_tokens: int
 ) -> ChatCompletion:
     _t0 = time.monotonic()
     response = await asyncio.wait_for(
         sdk.generate_chat(
-            model=settings.GEMINI_MODEL,
+            model=None,
             messages=[(m.role, m.content) for m in messages],
             system=system,
             max_tokens=max_tokens,
         ),
         timeout=_LLM_TIMEOUT,
     )
-    observe_llm_call(response, elapsed=time.monotonic() - _t0)
-    usage = getattr(response, "usage_metadata", None)
+    observe_llm_call(response, elapsed=time.monotonic() - _t0, model=sdk.spec.model)
+    usage = response.usage_metadata
     return ChatCompletion(
         content=response.text or "",
-        input_tokens=(getattr(usage, "prompt_token_count", 0) or 0) if usage else 0,
-        output_tokens=(getattr(usage, "candidates_token_count", 0) or 0) if usage else 0,
+        input_tokens=usage.prompt_token_count,
+        output_tokens=usage.candidates_token_count,
     )
 
 
 @_retrying
 async def _call_embed(
-    sdk: GeminiSdkClient,
+    sdk: OpenAICompatSdkClient,
     text: str,
     task_type: str | None,
     output_dimensionality: int | None,
 ) -> list[float]:
     """Single embedding attempt with a hard timeout. Returns the unit-norm vector."""
-    response = await asyncio.wait_for(
-        sdk.embed(
-            model=settings.GEMINI_EMBEDDING_MODEL,
-            text=text,
-            task_type=task_type,
-            output_dimensionality=output_dimensionality,
-        ),
+    values = await asyncio.wait_for(
+        sdk.embed(model=None, text=text, task_type=task_type, output_dimensionality=output_dimensionality),
         timeout=_LLM_TIMEOUT,
     )
-    embeddings: Any = response.embeddings
-    return l2_normalize(list(embeddings[0].values))
+    return l2_normalize(values)
 
 
-class GeminiLLMClient(BaseLLMClient):
-    """google-genai-backed provider (module-level singleton via get_llm_client)."""
+class OpenAICompatLLMClient(BaseLLMClient):
+    """One OpenAI-compatible provider (Fireworks or Featherless) with policy applied."""
 
-    def __init__(self) -> None:
-        self._sdk = GeminiSdkClient()
+    def __init__(self, spec: ProviderSpec) -> None:
+        self.spec = spec
+        self._sdk = OpenAICompatSdkClient(spec)
+
+    @property
+    def supports_embeddings(self) -> bool:
+        return self.spec.embedding_model is not None
 
     async def generate_structured[T: BaseModel](
         self, prompt: str, response_schema: type[T], *, temperature: float | None = None
     ) -> T:
         return await _guard(
+            self.spec.name,
             "structured call",
             lambda: _call_structured(self._sdk, prompt, response_schema, temperature),
         )
 
     async def generate_text(self, prompt: str, *, temperature: float | None = None) -> str:
-        return await _guard("text call", lambda: _call_text(self._sdk, prompt, temperature))
+        return await _guard(
+            self.spec.name, "text call", lambda: _call_text(self._sdk, prompt, temperature)
+        )
 
     async def generate_vision_structured[T: BaseModel](
         self,
@@ -256,6 +262,7 @@ class GeminiLLMClient(BaseLLMClient):
         model: str | None = None,
     ) -> T:
         return await _guard(
+            self.spec.name,
             "vision call",
             lambda: _call_vision_structured(
                 self._sdk, prompt, image_bytes, mime_type, response_schema, temperature, model
@@ -272,6 +279,7 @@ class GeminiLLMClient(BaseLLMClient):
         model: str | None = None,
     ) -> str:
         return await _guard(
+            self.spec.name,
             "vision-text call",
             lambda: _call_vision_text(
                 self._sdk, prompt, image_bytes, mime_type, temperature, model
@@ -286,7 +294,9 @@ class GeminiLLMClient(BaseLLMClient):
         max_tokens: int,
     ) -> ChatCompletion:
         return await _guard(
-            "chat call", lambda: _call_chat(self._sdk, messages, system, max_tokens)
+            self.spec.name,
+            "chat call",
+            lambda: _call_chat(self._sdk, messages, system, max_tokens),
         )
 
     async def embed(
@@ -297,6 +307,7 @@ class GeminiLLMClient(BaseLLMClient):
         output_dimensionality: int | None = None,
     ) -> list[float]:
         return await _guard(
+            self.spec.name,
             "embedding call",
             lambda: _call_embed(self._sdk, text, task_type, output_dimensionality),
         )

@@ -2,7 +2,7 @@
 Agent B — Transaction Classifier.
 
 Reads unclassified ledger entries (category IS NULL) from PostgreSQL using its
-own read-only session, batches them to Gemini for zero-shot classification, and
+own read-only session, batches them to the model for zero-shot classification, and
 writes the results to context["classified_transactions"].
 
 In 'actions' mode the node additionally dispatches the batch Celery task to
@@ -38,14 +38,14 @@ from src.infrastructure.database.postgres import AsyncSessionLocal
 _BATCH_SIZE = get_classifier_tuning().batch_size
 
 
-# ── Gemini classification helper ──────────────────────────────────────────────
+# ── the model classification helper ──────────────────────────────────────────────
 
-async def _classify_via_gemini(
+async def _classify_via_llm(
     entries: list[dict[str, Any]],
     fewshot_block: str = "",
 ) -> list[TransactionClassification]:
     """
-    Classify a batch of ledger entries with Gemini structured output.
+    Classify a batch of ledger entries with the model structured output.
 
     ``fewshot_block`` (Sprint 5) optionally injects the nearest past user
     corrections as few-shot examples; empty string ⇒ the original zero-shot prompt.
@@ -71,7 +71,7 @@ async def _classify_via_gemini(
         prompt, BatchClassificationResult, temperature=0.0
     )
 
-    # Guard: any entry_id not returned by Gemini gets "other"
+    # Guard: any entry_id not returned by the model gets "other"
     returned_ids = {c.entry_id for c in result.classifications}
     for entry in entries:
         eid = str(entry["entry_id"])
@@ -148,10 +148,10 @@ def make_b_classifier_node(llm: Any = None) -> Any:  # llm kept for signature co
             }
 
         try:
-            classifications = await _classify_via_gemini(entries, format_fewshot_block(fewshot))
+            classifications = await _classify_via_llm(entries, format_fewshot_block(fewshot))
         except Exception as exc:
-            error_msg = f"[b_classifier] Gemini classification failed: {exc}"
-            logger.error("b_classifier Gemini call failed", error=str(exc))
+            error_msg = f"[b_classifier] the model classification failed: {exc}"
+            logger.error("b_classifier the model call failed", error=str(exc))
             return {
                 "messages": [AIMessage(content=error_msg, name="b_classifier")],
             }

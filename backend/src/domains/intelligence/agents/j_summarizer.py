@@ -3,13 +3,13 @@ Agent J — Executive Summarizer.
 
 Pipeline:
   1. Enumerate populated agent-output keys in state["context"].
-  2. Pass only non-empty sections to Gemini (avoids token waste on empty stubs).
-  3. Gemini Flash produces exactly 3-5 bullet-point executive summary.
+  2. Pass only non-empty sections to the model (avoids token waste on empty stubs).
+  3. the model Flash produces exactly 3-5 bullet-point executive summary.
   4. If CRM profile specifies a preferred locale (e.g., Swahili, Sheng), the
      model translates the bullets into that locale while preserving KES figures.
   5. Write plain text to context["executive_summary"].
 
-Cost note: Gemini 2.5 Flash is used directly (default model). Summarisation
+Cost note: Gemma 4 is used directly (default model). Summarisation
 requires less reasoning depth than forecasting or advisory; Flash is the
 cost-efficient choice already in this stack vs. Pro variants.
 """
@@ -136,7 +136,7 @@ no markdown inside text.
             result = await generate_structured_content(prompt, ExecutiveSummary)
             bullets = result.bullets[:5]
         except Exception as exc:
-            logger.warning("Agent J: Gemini summarisation failed", error=str(exc))
+            logger.warning("Agent J: the model summarisation failed", error=str(exc))
             bullets = _fallback_bullets(sections)
 
         if not bullets:

@@ -3,7 +3,7 @@ Batch processing Celery tasks.
 
 classify_unclassified_ledger_entries:
   Sweeps ledger_entries WHERE category IS NULL, batches them (up to 50) to
-  Gemini for zero-shot classification, persists the results, and publishes a
+  the model for zero-shot classification, persists the results, and publishes a
   finance.transactions.classified domain event.
 
 run_batch_reconciliation:
@@ -67,12 +67,12 @@ async def _write_to_hub(context: dict[str, Any]) -> str | None:
     return (result or {}).get("context", {}).get("hub_artifact_id")
 
 
-# ── Gemini classification (own copy — avoids circular import with b_classifier) ──
+# ── the model classification (own copy — avoids circular import with b_classifier) ──
 
 async def _classify_batch_async(
     entries: list[dict[str, Any]],
 ) -> list[TransactionClassification]:
-    """Zero-shot classify a batch of raw ledger entries via Gemini structured output."""
+    """Zero-shot classify a batch of raw ledger entries via model structured output."""
     if not entries:
         return []
 
@@ -160,7 +160,7 @@ async def _run_batch_classification() -> dict[str, Any]:
     """
     Full pipeline executed inside asyncio.run():
       1. Fetch up to _BATCH_SIZE rows with FOR UPDATE SKIP LOCKED.
-      2. Classify via Gemini.
+      2. Classify via model.
       3. Persist categories to ledger_entries.
       4. Publish domain event.
       5. Write artifact to intelligence_hub.
@@ -196,8 +196,8 @@ async def _run_batch_classification() -> dict[str, Any]:
         try:
             classifications = await _classify_batch_async(entries)
         except Exception as exc:
-            logger.error("Batch classification: Gemini call failed", error=str(exc))
-            return {"status": "gemini_error", "classified": 0, "error": str(exc)}
+            logger.error("Batch classification: the model call failed", error=str(exc))
+            return {"status": "llm_error", "classified": 0, "error": str(exc)}
 
         # Step 3 — persist.  CAST(:id AS uuid) not :id::uuid — text()'s bind
         # scanner mis-parses a ``:name`` immediately followed by ``::``.
@@ -246,14 +246,14 @@ async def _run_batch_classification() -> dict[str, Any]:
 )
 def classify_unclassified_ledger_entries(self: Any) -> dict[str, Any]:
     """
-    Sweep ledger_entries for unclassified rows, classify with Gemini, and persist.
+    Sweep ledger_entries for unclassified rows, classify with the model, and persist.
 
     Idempotent: FOR UPDATE SKIP LOCKED ensures concurrent workers each process
     a disjoint batch — no entry is classified twice.
 
     Returns:
         {
-            "status": "ok" | "no_work" | "gemini_error",
+            "status": "ok" | "no_work" | "llm_error",
             "classified": int,
             "entry_ids": list[str],   # present when status == "ok"
         }

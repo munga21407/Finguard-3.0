@@ -1,7 +1,7 @@
 """Intelligence admin — KRA knowledge-base ingestion.
 
   POST /admin/knowledge-base/ingest — upload a .txt regulatory document; it is
-  chunked, Gemini-embedded, and stored in the pgvector ``finguard.knowledge_base``
+  chunked, embedded, and stored in the pgvector ``finguard.knowledge_base``
   HNSW index that Agent F's Tax RAG queries.
 
 Restricted to ``USER_MANAGE`` (ADMIN / OWNER) so only operators can mutate the
@@ -87,10 +87,10 @@ async def ingest_knowledge_base(
             status_code=400, detail="File must be UTF-8 encoded text."
         ) from exc
 
-    if not settings.GEMINI_API_KEY:
+    if not settings.FIREWORKS_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Embedding service is not configured (GEMINI_API_KEY unset).",
+            detail="Embedding service is not configured (FIREWORKS_API_KEY unset).",
         )
 
     # Lazy/dynamic import — keeps the script's module-level setup out of app boot.

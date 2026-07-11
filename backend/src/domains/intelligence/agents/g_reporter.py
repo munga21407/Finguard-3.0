@@ -9,7 +9,7 @@ Pipeline:
      Falls back to linear extrapolation when fewer than 4 data points exist.
   3. Compute a deterministic bankability score (0-100) and risk tier from
      the historical + forecast arrays — no LLM hallucination of numbers.
-  4. Pass the computed figures to Gemini 2.5 Flash to write the
+  4. Pass the computed figures to Gemma 4 to write the
      strategic_narrative (executive text only; all numeric fields are
      pre-computed and passed as context).
   5. Generate a professional PDF report (reportlab) and an Excel workbook
@@ -439,8 +439,8 @@ def make_g_reporter_node(llm: Any = None) -> Any:  # llm kept for signature comp
             }
             consumed_upstream.append("audit_result")
 
-        # ── 4. Gemini narrative generation ────────────────────────────────
-        # All numbers are pre-computed; Gemini writes the executive text only.
+        # ── 4. the model narrative generation ────────────────────────────────
+        # All numbers are pre-computed; the model writes the executive text only.
         narrative_payload: dict[str, Any] = {
             "historical_months": months[-12:] if months else [],
             "historical_monthly_revenue_kes": hist_revenue[-12:],
@@ -479,7 +479,7 @@ Write a strategic_narrative (3-5 sentences) that:
         try:
             narrative: str = (await generate_text_content(narrative_prompt)).strip()
         except Exception as exc:
-            logger.warning("Agent G: Gemini narrative failed", error=str(exc))
+            logger.warning("Agent G: the model narrative failed", error=str(exc))
             net_trend = "improving" if (fc_revenue[-1] - fc_revenue[0]) > 0 else "declining"
             narrative = (
                 f"Bankability score {bankability_score}/100 ({risk_tier} risk tier). "
