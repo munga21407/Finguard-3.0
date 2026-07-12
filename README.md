@@ -16,13 +16,13 @@ AI-powered financial operations platform for small-to-medium enterprises, with d
                        │ HTTP
 ┌──────────────────────▼──────────────────────────────────┐
 │  FastAPI Backend (port 8000)                            │
-│  Python 3.12 · LangGraph · Google Gemini 2.5 Flash      │
+│  Python 3.12 · LangGraph · Fireworks Gemma 4            │
 │                                                         │
 │  Supervisor/ReAct loop over 10 agents:                  │
 │    A Invoice   B Classifier  C Reconciler  D Forecaster │
 │    E Watchdog  F Tax Auditor G Credit      H Advisor    │
 │    I Integrator             J Summarizer                │
-│  + standalone Receipt Scanner (Gemini vision) graph     │
+│  + standalone Receipt Scanner (Gemma 4 vision) graph    │
 └──────┬──────────┬──────────┬──────────┬─────────────────┘
        │          │          │          │
   PostgreSQL  MongoDB    Redis      RabbitMQ
@@ -39,7 +39,7 @@ AI-powered financial operations platform for small-to-medium enterprises, with d
 |---|---|
 | Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS |
 | Backend | FastAPI 0.115, Python 3.12, Pydantic v2 |
-| AI | Google Gemini 2.5 Flash, LangGraph |
+| AI | Fireworks AI (Gemma 4) primary + Featherless failover, LangGraph |
 | SQL | PostgreSQL 16 + pgvector, SQLAlchemy async, Alembic |
 | NoSQL | MongoDB 7, Motor async driver |
 | Cache | Redis 7 (3 logical DBs: Celery, Auth, Rate-limit) |
@@ -58,7 +58,7 @@ AI-powered financial operations platform for small-to-medium enterprises, with d
 ### Prerequisites
 
 - Docker and Docker Compose
-- Google Gemini API key
+- Fireworks AI API key (and optionally a Featherless AI key for LLM failover)
 - (Optional) M-Pesa Daraja credentials, SendGrid API key
 
 ### 1. Clone and configure
@@ -72,7 +72,7 @@ cp backend/.env.example backend/.env
 Edit `backend/.env` and fill in required secrets:
 
 ```env
-GEMINI_API_KEY=<your-key>
+FIREWORKS_API_KEY=<your-key>
 SECRET_KEY=<64+ char random string>
 
 # Optional: M-Pesa (Daraja)
@@ -202,18 +202,18 @@ All agents are LangGraph nodes in a Supervisor/ReAct loop: the supervisor routes
 
 | Agent | Name | Trigger | Method | Hub TTL |
 |---|---|---|---|---|
-| A | Invoice Generator | User chat / `/intent` | Gemini structured extraction | 1h |
-| B | Transaction Classifier | Supervisor | Gemini zero-shot + batch Celery sweep | 1h |
-| C | Reconciler | Supervisor / M-Pesa | Exact match → Gemini semantic scoring | 10m |
+| A | Invoice Generator | User chat / `/intent` | Gemma 4 structured extraction | 1h |
+| B | Transaction Classifier | Supervisor | Gemma 4 zero-shot + batch Celery sweep | 1h |
+| C | Reconciler | Supervisor / M-Pesa | Exact match → Gemma 4 semantic scoring | 10m |
 | D | Cash-Flow Forecaster | Supervisor | Holt-Winters + regime detection + Text-to-SQL (CoVe) | 1h |
 | E | Budget Watchdog | RabbitMQ `expenses.created` | HMM + Isolation Forest + rapidfuzz | 30m |
 | F | Tax Auditor | Supervisor | Deterministic Kenya tax + pgvector RAG | 1d |
 | G | Credit Strategist | Supervisor | Holt-Winters + bankability score + NLG | 1d |
-| H | Financial Advisor | Supervisor | Gemini multi-step reasoning + RBAC clip | 1h |
+| H | Financial Advisor | Supervisor | Gemma 4 multi-step reasoning + RBAC clip | 1h |
 | I | External Integrator | Supervisor | httpx (M-Pesa sandbox / free FX / Metropol / KRA) + SSRF guard; explicit live/manual/mock/unavailable status | 1h |
-| J | Executive Summarizer | Last before FINISH | Gemini ≤5-bullet locale-aware summary | 30m |
+| J | Executive Summarizer | Last before FINISH | Gemma 4 ≤5-bullet locale-aware summary | 30m |
 
-**Receipt Scanner** — a standalone two-node vision graph (`receipt_ocr → receipt_classifier`) backing `POST /intelligence/receipts/scan`. It is *not* part of the supervisor loop: it OCRs an uploaded receipt with Gemini vision and suggests an expense category for the user to review, then `POST /finance/receipts` persists the confirmed expense.
+**Receipt Scanner** — a standalone two-node vision graph (`receipt_ocr → receipt_classifier`) backing `POST /intelligence/receipts/scan`. It is *not* part of the supervisor loop: it OCRs an uploaded receipt with Gemma 4 vision and suggests an expense category for the user to review, then `POST /finance/receipts` persists the confirmed expense.
 
 ---
 
@@ -221,7 +221,8 @@ All agents are LangGraph nodes in a Supervisor/ReAct loop: the supervisor routes
 
 - **Dual-vault ledger** — every money-movement row (`mpesa_transactions`, `expenses`, `payments`) declares its payment rail via `VaultType` (`MPESA` / `CASH`).
 - **Event-sourced invoices** — an append-only `invoice_events` log is the source of truth for an invoice's balance; the `invoices` row is a synchronous projection of folding it. `GET /invoices/{id}/reconstruction` proves the row equals the event fold.
-- **Per-agent LLM observability** — every Gemini call records token/cost/latency/outcome attributed to the calling agent (`agent_llm_*` Prometheus metrics); high-risk tools (Text-to-SQL, Daraja HTTP, pgvector RAG) record `agent_tool_duration_seconds`. Surfaced in the Grafana dashboard.
+- **Provider failover** — the LLM stack runs Gemma 4 on a Fireworks deployment (primary) with an always-warm Featherless backup of the same model family. When the scale-to-zero primary cold-starts (~3 min) or times out, calls fail over automatically (`finguard_llm_failover_total`), so users never wait; only if both providers fail does an agent degrade gracefully.
+- **Per-agent LLM observability** — every LLM call records token/cost/latency/outcome attributed to the calling agent (`agent_llm_*` Prometheus metrics); high-risk tools (Text-to-SQL, Daraja HTTP, pgvector RAG) record `agent_tool_duration_seconds`. Surfaced in the Grafana dashboard.
 - **Agent-F eval gate** — `backend/tests/evals/` runs deterministic golden tax scenarios in CI (wrong VAT/CIT/AML math fails the build), with an opt-in nightly LLM-as-judge job for narrative quality.
 
 ---
@@ -260,9 +261,12 @@ FINGUARD_CA_PRIVATE_KEY_HEX=    # Ed25519 CA key (64 hex chars); required in pro
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 REFRESH_TOKEN_EXPIRE_DAYS=7
 
-# AI
-GEMINI_API_KEY=<key>
-GEMINI_MODEL=gemini-2.5-flash
+# AI — Fireworks (Gemma 4) primary + Featherless failover; nomic embeddings
+FIREWORKS_API_KEY=<key>
+LLM_MODEL=accounts/<account>/deployments/<id>   # Gemma 4 deployment (text + vision)
+EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5  # 768-dim, matches the pgvector column
+FEATHERLESS_API_KEY=             # optional always-warm failover provider (leave blank to disable)
+FEATHERLESS_MODEL=google/gemma-4-31B-it
 LLM_PRICING_JSON=                # optional model-keyed cost override → per-agent cost metric
 
 # Background workers
@@ -308,7 +312,7 @@ uv run ruff check src tests              # lint
 uv run mypy --explicit-package-bases src # type check
 
 # Opt-in LLM-as-judge evals (nightly in CI; costs tokens)
-RUN_LLM_EVALS=1 GEMINI_API_KEY=... uv run pytest tests/evals -m llm_judge -v
+RUN_LLM_EVALS=1 FIREWORKS_API_KEY=... uv run pytest tests/evals -m llm_judge -v
 ```
 
 ---
