@@ -32,7 +32,7 @@ Finguard 3.0 is a full-stack, AI-powered financial operations platform for small
 
 **Core Architecture Pattern**: Domain-driven monorepo with a 10-agent LangGraph Supervisor/ReAct orchestration layer, PostgreSQL as source of truth, MongoDB as read-model cache (intelligence hub), Redis for caching/JWT blacklist/rate-limiting, and RabbitMQ for async inter-service messaging.
 
-**AI Model**: Google Gemini 2.5 Flash (`gemini-2.5-flash`) — all AI tasks including structured extraction, forecasting narratives, RAG, and routing decisions.
+**AI Model**: Gemma 4 via Fireworks AI (primary) with a Featherless AI failover of the same model family — all AI tasks including structured extraction, forecasting narratives, RAG, and routing decisions. Embeddings use `nomic-embed-text-v1.5` (768-dim). All access is through the provider-neutral `BaseLLMClient` (OpenAI-compatible API), never a vendor SDK directly.
 
 **Agent Framework**: LangGraph 0.2+ (`StateGraph`, TypedDict state, annotated error accumulation). Supervisor/ReAct loop: Supervisor decides next agent; every agent unconditionally returns to supervisor.
 
@@ -114,7 +114,8 @@ Finguard-3.0/
 │       │   ├── intelligence/          # AI/ML domain
 │       │       ├── llm_client.py      # back-compat facade re-exporting the llm/ package surface
 │       │       ├── llm/               # provider-agnostic LLM layer:
-│       │       │                      #   base.py (BaseLLMClient), gemini.py (impl),
+│       │       │                      #   base.py (BaseLLMClient), openai_compat.py (sole openai SDK importer),
+│       │       │                      #   provider.py (retry/timeout policy), failover.py (Fireworks primary + Featherless backup),
 │       │       │                      #   telemetry.py (agent_context/observe_llm_call), pricing.py (model-keyed cost)
 │       │       ├── observability.py   # @traced_tool — per-tool latency/outcome metrics
 │       │       ├── orchestrator.py    # LangGraph StateGraph builder; _tracked node wrapper
@@ -122,7 +123,7 @@ Finguard-3.0/
 │       │       ├── routers/           # HTTP split by concern + _common.py (idempotency, orchestrator, GenUI):
 │       │       │                      #   insights, receipts, conversations,
 │       │       │                      #   admin.py (KRA KB ingest, USER_MANAGE), telemetry.py (GenUI error reports)
-│       │       ├── service.py         # Gemini streaming chat service
+│       │       ├── service.py         # streaming chat service (Gemma 4)
 │       │       ├── schemas.py         # OrchestratorState, all agent output models (incl. AgentHOutput + ui_widgets)
 │       │       ├── models.py          # AgentRun, AgentEModel (per-customer IsolationForest), KnowledgeBase (pgvector) ORM
 │       │       ├── dependencies.py    # FastAPI dependency injection
@@ -139,7 +140,7 @@ Finguard-3.0/
 │       │       │   ├── h_advisor.py   # Financial advisor ✅
 │       │       │   ├── i_integrator.py# External API integrator ✅
 │       │       │   ├── j_summarizer.py# Executive summarizer ✅
-│       │       │   └── receipt_scanner.py # receipt_ocr + receipt_classifier nodes (Gemini vision) ✅
+│       │       │   └── receipt_scanner.py # receipt_ocr + receipt_classifier nodes (Gemma 4 vision) ✅
 │       │       ├── prompts/
 │       │       │   ├── a_generator.py
 │       │       │   ├── b_classifier.py
@@ -339,8 +340,9 @@ Finguard-3.0/
 | SQL ORM | SQLAlchemy (async) | ≥2.0.0 |
 | SQL Driver | asyncpg | ≥0.29.0 |
 | NoSQL Driver | Motor (async MongoDB) | ≥3.5.0 |
-| AI Model | Google Gemini | 2.5 Flash |
-| AI Client SDK | google-genai | ≥1.0.0 |
+| AI Model | Gemma 4 via Fireworks (primary) + Featherless (failover) | gemma-4-31b-it |
+| Embeddings | nomic-embed-text-v1.5 (via Fireworks) | 768-dim |
+| AI Client SDK | openai (OpenAI-compatible) | ≥1.0.0 |
 | Agent Framework | LangGraph | ≥0.2.0 |
 | LangChain Core | langchain-core | ≥0.3.0 |
 | ML (anomaly) | scikit-learn (IsolationForest) | ≥1.5.0 |
@@ -830,7 +832,7 @@ class CompositeGenUIPayload(BaseModel):
 | Trigger | User document input / `/intent` endpoint |
 | Context key written | `extracted_invoice` |
 | Output schema | `ExtractedInvoice` (vendor, customer, invoice_number, line_items, totals, confidence) |
-| Method | Gemini structured output (`response_schema=ExtractedInvoice`) via `generate_structured_content` |
+| Method | Gemma 4 structured output (`response_schema=ExtractedInvoice`) via `generate_structured_content` |
 | Prompt | `prompts/a_generator.py` — system prompt + few-shot example |
 | Frontend integration | `extractInvoice()` in `lib/api/intelligence.ts` calls `/intent`; `InvoiceGenerator.tsx` maps result into editable form |
 | Hub TTL | 1 hour |
@@ -846,7 +848,7 @@ class CompositeGenUIPayload(BaseModel):
 | Context key written | `classified_transactions` |
 | Prompt | `prompts/b_classifier.py` — taxonomy of 17 categories + zero-shot classification |
 | Output schemas | `TransactionClassification`, `BatchClassificationResult` |
-| Method | Fetches recent unclassified ledger entries, classifies via Gemini structured output, persists categories |
+| Method | Fetches recent unclassified ledger entries, classifies via Gemma 4 structured output, persists categories |
 | Batch Celery task | `workers/tasks/batch.py::classify_unclassified_ledger_entries` — batches of 50, `SELECT … FOR UPDATE SKIP LOCKED` |
 | Hub TTL | 1 hour |
 
@@ -861,7 +863,7 @@ class CompositeGenUIPayload(BaseModel):
 | Context key written | `reconciliation_report` |
 | Prompt | `prompts/c_reconciler.py` — pass-2 fuzzy matching rules for M-Pesa ↔ invoice |
 | Output schemas | `ReconciliationCandidate`, `ReconciliationScoringResult`, `ReconciliationMatch`, `ReconciliationReport` |
-| Method | Pass-1 exact match (amount + reference), pass-2 Gemini semantic scoring. All writes in a single atomic transaction. |
+| Method | Pass-1 exact match (amount + reference), pass-2 Gemma 4 semantic scoring. All writes in a single atomic transaction. |
 | Batch Celery task | `workers/tasks/batch.py::run_batch_reconciliation` — 100 tx/batch, `SELECT … FOR UPDATE SKIP LOCKED` |
 | Hub TTL | 10 minutes |
 
@@ -879,7 +881,7 @@ class CompositeGenUIPayload(BaseModel):
 | Schema masking | `get_masked_schema("D")` — DDL only for `ledger_entries`, `invoices`, `budgets`, `expenses` |
 | Output schemas | `ForecastDataPoint`, `CashFlowForecast`, `CoVeSQLQuery` |
 | GenUI payload | `CompositeGenUIPayload` → `component_id: "CashFlowChart"` |
-| Method | 12 months daily net cash-flow via SQL → Holt-Winters → regime detection → invoice overlays → Gemini narrative |
+| Method | 12 months daily net cash-flow via SQL → Holt-Winters → regime detection → invoice overlays → Gemma 4 narrative |
 | Hub TTL | 1 hour |
 
 ---
@@ -894,7 +896,7 @@ class CompositeGenUIPayload(BaseModel):
 | SQL access | `execute_readonly_sql()` for recent amounts and invoices |
 | Output schema | `WatchdogAnalysis` |
 | GenUI payload | `CompositeGenUIPayload` → `component_id: "BudgetWatchdogMeter"` |
-| Method | HMM (3-state) + **persisted per-customer IsolationForest** + rapidfuzz duplicate detection + Gemini narrative + VC issuance |
+| Method | HMM (3-state) + **persisted per-customer IsolationForest** + rapidfuzz duplicate detection + Gemma 4 narrative + VC issuance |
 | Model store | `finguard.agent_e_models` — the weekly `batch.retrain_agent_e_models` Celery task fits one forest per customer over the trailing 90 days of categorized transactions and upserts the serialized bytes (`version` bumped). Scoring loads the customer's row; a brand-new customer falls back to an on-the-fly fit plus an async background fit. |
 | Alert sink | A watchdog finding becomes a durable `finguard.alerts` row via `watchdog_consumer.py` |
 | Hub TTL | 30 minutes |
@@ -910,7 +912,7 @@ class CompositeGenUIPayload(BaseModel):
 | Context key written | `tax_audit_result` |
 | Output schema | `AgentFOutput` |
 | GenUI payload | `CompositeGenUIPayload` → `component_id: "TaxLiabilityDonut"` |
-| Method | Deterministic Kenya tax calculations (16% VAT, KES 5M mandatory registration threshold, 30% CIT) + pgvector RAG (top-3 KRA excerpts) + Gemini structured output |
+| Method | Deterministic Kenya tax calculations (16% VAT, KES 5M mandatory registration threshold, 30% CIT) + pgvector RAG (top-3 KRA excerpts) + Gemma 4 structured output |
 | Hub TTL | 1 day |
 
 ---
@@ -924,7 +926,7 @@ class CompositeGenUIPayload(BaseModel):
 | Context key written | `credit_strategy_result`, `credit_forecast` |
 | Output schema | `AgentGOutput` |
 | GenUI payload | `CompositeGenUIPayload` → `component_id: "BankabilityScoreRadar"` |
-| Method | Holt-Winters 12-month forecast → 4-component bankability score → Gemini narrative |
+| Method | Holt-Winters 12-month forecast → 4-component bankability score → Gemma 4 narrative |
 | Bankability components | Revenue trend (30pts) + Expense ratio (30pts) + Cash-flow consistency CoV (20pts) + Forecast solvency (20pts) |
 | Risk tiers | LOW (≥75) / MEDIUM (45-74) / HIGH (<45) |
 | Hub TTL | 1 day |
@@ -938,9 +940,9 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/h_advisor.py`; prompt + catalog in `prompts/h_advisor.py` |
 | Trigger | Supervisor routes here for advisory/recommendation requests |
 | Context key written | `advice` |
-| Output schema | `AgentHOutput` (`narrative_response` always required + optional `ui_widgets: list[GenUIPayload]`) — Gemini structured output |
+| Output schema | `AgentHOutput` (`narrative_response` always required + optional `ui_widgets: list[GenUIPayload]`) — Gemma 4 structured output |
 | GenUI | The system prompt embeds a **GenUI component catalog** (`H_ADVISOR_GENUI_CATALOG`); emitted widgets are allowlist-filtered against `H_ADVISOR_ALLOWED_COMPONENTS` (`MiniTrendSparkline`, `TransactionHistoryList`, `SemiCircleGaugeCard`) — unknown `component_id`s are dropped — then appended to `OrchestratorState.gen_ui_payloads` so the chat renders them inline. Narrative still goes to `context["advice"]`. |
-| Method | RBAC role resolution → CRM profile → aggregated watchdog/forecast/tax context → Gemini multi-step reasoning. VIEWERs get summaries; MANAGERs+ get full actionable recommendations. |
+| Method | RBAC role resolution → CRM profile → aggregated watchdog/forecast/tax context → Gemma 4 multi-step reasoning. VIEWERs get summaries; MANAGERs+ get full actionable recommendations. |
 | Hub TTL | 1 hour |
 
 ---
@@ -965,7 +967,7 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/j_summarizer.py` |
 | Trigger | Always the last agent before FINISH |
 | Context key written | `executive_summary` |
-| Method | Collates non-empty context from agents A–I, Gemini ≤5-bullet summary, locale-aware output from CRM `preferred_locale` |
+| Method | Collates non-empty context from agents A–I, Gemma 4 ≤5-bullet summary, locale-aware output from CRM `preferred_locale` |
 | Hub TTL | 30 minutes |
 
 ---
@@ -999,7 +1001,7 @@ class CompositeGenUIPayload(BaseModel):
 | Field | Value |
 |---|---|
 | File | `agents/supervisor.py` |
-| Method | Gemini structured output (`_SupervisorDecision` schema); fallback to `FINISH` on parse failure |
+| Method | Gemma 4 structured output (`_SupervisorDecision` schema); fallback to `FINISH` on parse failure |
 
 ---
 
@@ -1011,11 +1013,11 @@ A standalone two-node graph (not part of the A–J supervisor loop) backing `POS
 |---|---|
 | File | `agents/receipt_scanner.py` (`make_receipt_ocr_node`, `make_receipt_classifier_node`) |
 | Graph | `build_receipt_graph()` — `receipt_ocr → receipt_classifier` |
-| `receipt_ocr` | Gemini vision over base64 image → `ReceiptExtraction` (merchant_name, date, total_amount, currency, kra_pin, line_items, confidence) |
+| `receipt_ocr` | Gemma 4 vision over base64 image → `ReceiptExtraction` (merchant_name, date, total_amount, currency, kra_pin, line_items, confidence) |
 | `receipt_classifier` | Suggests an expense category from the extracted fields |
 | Output schema | `ReceiptScanResponse` (session_id, extraction, suggested_category, error) |
 | Persistence | None — user reviews, then `POST /finance/receipts` (`ReceiptExpenseCreate`) writes the expense |
-| Degradation | Gemini failure → empty extraction + `error` message; form is still hand-fillable |
+| Degradation | LLM failure → empty extraction + `error` message; form is still hand-fillable |
 
 ---
 
@@ -1058,7 +1060,7 @@ class OrchestratorState(TypedDict):
 [START] → [receipt_ocr] → [receipt_classifier] → [END]
 ```
 
-`receipt_ocr` runs Gemini vision over the uploaded image; `receipt_classifier` suggests an expense category. The graph degrades to an empty extraction plus an `error` message on Gemini failure so the user can still fill the form by hand. No persistence — confirmed values are posted to `POST /finance/receipts`.
+`receipt_ocr` runs Gemma 4 vision over the uploaded image; `receipt_classifier` suggests an expense category. The graph degrades to an empty extraction plus an `error` message on LLM failure so the user can still fill the form by hand. No persistence — confirmed values are posted to `POST /finance/receipts`.
 
 **Conversation Endpoint** (`/conversation`) — dual-path with background task dispatch:
 
@@ -1155,7 +1157,7 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | POST | `/receipts/scan` | `intelligence:read` | Receipt OCR graph (receipt_ocr → receipt_classifier); multipart image/PDF upload ≤10 MB; returns extraction + suggested category (no persistence) |
 | POST | `/conversation` | `intelligence:read` | Dual-path; stores task_owner for IDOR guard |
 | GET | `/conversation/{session_id}/status` | `intelligence:read` | Owner-verified status poll |
-| POST | `/admin/knowledge-base/ingest` | `user:manage` | Upload a `.txt`/`.md` KRA document; chunked + Gemini-embedded into the pgvector KB (idempotent upsert — same code path as `scripts.ingest_kra_docs`) |
+| POST | `/admin/knowledge-base/ingest` | `user:manage` | Upload a `.txt`/`.md` KRA document; chunked + embedded (nomic) into the pgvector KB (idempotent upsert — same code path as `scripts.ingest_kra_docs`) |
 | POST | `/genui/error` | `intelligence:read` | GenUI error-boundary telemetry sink (frontend reports a crashed widget; returns 202) |
 | GET | `/proposals` | `intelligence:read` | Human-in-the-loop queue: value-changing agent actions awaiting release (currently Agent K stock adjustments) |
 | POST | `/proposals/{id}/approve` | `inventory:adjust` | Release a pending agent proposal — applies the write exactly once (claim-first). Requester ≠ approver enforced in service |
@@ -1553,12 +1555,15 @@ MAX_LOGIN_ATTEMPTS=5
 LOCKOUT_DURATION_MINUTES=30
 PASSWORD_MIN_LENGTH=8
 
-# Google Gemini
-GEMINI_API_KEY=<your-key>
-GEMINI_MODEL=gemini-2.5-flash
-# Per-agent cost attribution is now model-keyed and externally configurable.
+# AI — Fireworks (Gemma 4) primary + Featherless failover; nomic embeddings
+FIREWORKS_API_KEY=<your-key>
+LLM_MODEL=accounts/<account>/deployments/<id>    # Gemma 4 deployment (text + vision)
+EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5   # 768-dim, matches the pgvector column
+FEATHERLESS_API_KEY=              # optional always-warm failover (blank = Fireworks-only)
+FEATHERLESS_MODEL=google/gemma-4-31B-it
+# Per-agent cost attribution is model-keyed and externally configurable.
 # Optional JSON override of the built-in price table (USD per 1M tokens):
-LLM_PRICING_JSON=                 # e.g. {"gemini-2.5-flash":{"input":0.30,"output":2.50}}
+LLM_PRICING_JSON=                 # e.g. {"accounts/<account>/deployments/<id>":{"input":0.0,"output":0.0}}
 
 # Internal CA (Ed25519)
 FINGUARD_CA_PRIVATE_KEY_HEX=    # 32 bytes hex (64 chars). Required in production; dev derives a fixed seed (NOT from SECRET_KEY).
@@ -1607,9 +1612,9 @@ RABBITMQ_PASSWORD=finguard
 Every agent unconditionally returns to supervisor after executing. Supervisor terminates by routing to `FINISH`.
 **Files**: `orchestrator.py`, `agents/supervisor.py`
 
-### 2. Gemini Native Structured Output
-`generate_structured_content(prompt, ResponseSchema)` uses `response_schema` in the Gemini API request — no fallback parsing needed. All call sites go through the provider-neutral `BaseLLMClient` surface (`generate_structured`, `generate_text`, `generate_vision_structured`, `embed`, `raw`); `llm_client.py` is a back-compat facade preserving the original module-level helpers. Every method accepts an optional `temperature` kwarg, and deterministic agents pin it (`temperature=0.0` for classification, reconciliation scoring, receipt OCR, and the CoVe draft/explain/audit passes; `0.2` for regime analysis) so structured financial extraction does not drift between runs.
-**Files**: `domains/intelligence/llm/base.py` (`BaseLLMClient`), `domains/intelligence/llm/gemini.py`, `domains/intelligence/llm_client.py` (facade)
+### 2. Native Structured Output + Provider Failover
+`generate_structured_content(prompt, ResponseSchema)` sends the schema via Fireworks' `response_format={"type":"json_schema",...}` (constrained decoding) — no fallback parsing needed. All call sites go through the provider-neutral `BaseLLMClient` surface (`generate_structured`, `generate_text`, `generate_vision_structured`, `generate_chat`, `embed`); `llm_client.py` is a facade over it. The client is a **failover** composition: a Fireworks (Gemma 4) primary with an always-warm Featherless backup of the same model family — a primary cold-start (the scale-to-zero deployment takes ~3 min to warm) or timeout transparently routes to the backup (`finguard_llm_failover_total`), which uses `json_object` mode + markdown-fence-stripping since Featherless does not enforce `json_schema`. Gemma's thinking mode is disabled per-call so free-form replies aren't swallowed by hidden reasoning. Every method accepts an optional `temperature` kwarg, and deterministic agents pin it (`temperature=0.0` for classification, reconciliation scoring, receipt OCR, and the CoVe draft/explain/audit passes; `0.2` for regime analysis) so structured financial extraction does not drift between runs.
+**Files**: `domains/intelligence/llm/base.py` (`BaseLLMClient`), `openai_compat.py` (sole `openai` importer), `provider.py` (retry/timeout/telemetry policy), `failover.py` (primary + backup), `llm_client.py` (facade)
 
 ### 3. Hub-First Read-Through Cache
 Every agent writes an `InsightArtifact` to MongoDB `intelligence_hub` with a per-agent TTL. Downstream consumers read the hub first.
@@ -1628,7 +1633,7 @@ Watchdog consumer checks Redis `watchdog_consumer:{expense_id}` before processin
 **File**: `workers/consumers/watchdog_consumer.py`
 
 ### 7. pgvector RAG (Tax Knowledge Base)
-KRA regulation chunks stored with 768-dim Gemini embeddings. Agent F retrieves top-3 excerpts via L2-distance search.
+KRA regulation chunks stored with 768-dim nomic embeddings (`nomic-embed-text-v1.5`). Agent F retrieves top-3 excerpts via L2-distance search.
 **File**: `domains/intelligence/services/tax_rag_service.py`
 
 ### 8. Verifiable Credentials Audit Trail
@@ -1636,7 +1641,7 @@ Before Agent E writes a budget alert, an **Ed25519-signed** VC is issued (agent 
 **Files**: `domains/intelligence/security/vc_issuer.py`, `security/key_manager.py`, `agents/e_watchdog.py`
 
 ### 9. Deterministic Compute + LLM Narrative
-Agents G and F pre-compute all financial figures deterministically; Gemini only writes the human-readable narrative. Prevents hallucination of financial numbers.
+Agents G and F pre-compute all financial figures deterministically; Gemma 4 only writes the human-readable narrative. Prevents hallucination of financial numbers.
 **Files**: `agents/g_reporter.py`, `agents/f_auditor.py`
 
 ### 10. Schema-Masked SQL (Agent D)
@@ -1663,7 +1668,7 @@ Two-stage gate on Agent D queries: regex pre-filter + `sqlglot.parse` AST walk. 
 **File**: `domains/intelligence/llm_client.py`
 
 ### 16. Redis Embedding Cache (Tax RAG)
-Before calling Gemini `text-embedding-004`, `tax_rag_service.py` checks Redis `rag:embed:{sha256(query)}` (24h TTL).
+Before calling the embedding model (`nomic-embed-text-v1.5` via Fireworks), `tax_rag_service.py` checks Redis `rag:embed:{sha256(query)}` (24h TTL).
 **File**: `domains/intelligence/services/tax_rag_service.py`
 
 ### 17. CompositeGenUIPayload — Findings + Visualisation Split
@@ -1703,7 +1708,7 @@ The `invoice_events` table is an **append-only log** that is the source of truth
 **Files**: `domains/finance/events.py`, `domains/finance/models.py` (`InvoiceEvent`, `InvoiceSnapshot`), `domains/finance/service.py`
 
 ### 26. Per-Agent LLM Observability (contextvar attribution)
-Every graph node is wrapped at registration by `orchestrator._tracked(name, node)`, which sets a `current_agent_id` contextvar for the node's execution. The Gemini client's `observe_llm_call()` reads that contextvar and records **per-agent** Prometheus metrics for each call — latency (`agent_llm_processing_seconds`), tokens (`agent_llm_tokens_total{kind=prompt|completion}`), estimated cost (`agent_llm_cost_usd_total`, tokens × the model-keyed rate from `llm/pricing.py`, overridable via `LLM_PRICING_JSON`), and outcome (`agent_llm_calls_total{status}`). This gives central attribution with no per-agent edits, so a Grafana panel can show which agent burns the most tokens (e.g. Agent B/C dumping `ledger_entries`). Recording is best-effort and never throws into the agent path (non-numeric token counts are coerced/skipped). Agent E calls the Gemini client directly (not the shared helpers) and so calls `observe_llm_call(..., elapsed=None)` to add tokens/cost without double-counting the latency it already records.
+Every graph node is wrapped at registration by `orchestrator._tracked(name, node)`, which sets a `current_agent_id` contextvar for the node's execution. The LLM client's `observe_llm_call()` reads that contextvar and records **per-agent** Prometheus metrics for each call — latency (`agent_llm_processing_seconds`), tokens (`agent_llm_tokens_total{kind=prompt|completion}`), estimated cost (`agent_llm_cost_usd_total`, tokens × the model-keyed rate from `llm/pricing.py`, overridable via `LLM_PRICING_JSON`), and outcome (`agent_llm_calls_total{status}`). This gives central attribution with no per-agent edits, so a Grafana panel can show which agent burns the most tokens (e.g. Agent B/C dumping `ledger_entries`). Recording is best-effort and never throws into the agent path (non-numeric token counts are coerced/skipped). Agent E calls the LLM client directly (not the shared helpers) and so calls `observe_llm_call(..., elapsed=None)` to add tokens/cost without double-counting the latency it already records.
 **Files**: `domains/intelligence/llm_client.py` (`agent_context`, `observe_llm_call`), `domains/intelligence/orchestrator.py` (`_tracked`), `core/metrics.py`
 
 ### 27. Tool Observability (traced high-risk tools)
@@ -1729,7 +1734,7 @@ All tasks use `asyncio.run()` to bridge into the async layer (see Design Pattern
 | Task | Schedule | Purpose |
 |---|---|---|
 | `batch.classify_unclassified_ledger_entries` | Every 5 min | Sweeps unclassified ledger entries (Agent B) |
-| `batch.run_batch_reconciliation` | Every 15 min | Pass-1 exact + pass-2 Gemini reconciliation (Agent C) |
+| `batch.run_batch_reconciliation` | Every 15 min | Pass-1 exact + pass-2 Gemma 4 reconciliation (Agent C) |
 | `batch.run_batch_bank_reconciliation` | Every 15 min | Bank-statement-line reconciliation pass |
 | `reporting.dispatch_monthly_reports` | Monthly, 1st at 00:00 | Fans out `generate_monthly_intelligence_report` (Agent F + G) per active customer → `intelligence_hub` |
 | `dlq.drain_watchdog_dlq` | Every 15 min | Drains RabbitMQ DLQ; discards poison messages after 3 total deaths |
@@ -1740,16 +1745,16 @@ All tasks use `asyncio.run()` to bridge into the async layer (see Design Pattern
 
 | Task | Purpose |
 |---|---|
-| `ocr.process_document_ocr` | Gemini multimodal extraction from invoice document |
-| `ocr.process_receipt_ocr` | Gemini multimodal extraction from receipt image |
-| `ocr.process_invoice_image` | Gemini multimodal extraction from invoice image |
+| `ocr.process_document_ocr` | Gemma 4 multimodal extraction from invoice document |
+| `ocr.process_receipt_ocr` | Gemma 4 multimodal extraction from receipt image |
+| `ocr.process_invoice_image` | Gemma 4 multimodal extraction from invoice image |
 
 ### Batch Queue (`batch_processing`)
 
 | Task | Purpose |
 |---|---|
 | `batch.classify_unclassified_ledger_entries` | Sweeps `ledger_entries WHERE category IS NULL`; batches of 50; `FOR UPDATE SKIP LOCKED` |
-| `batch.run_batch_reconciliation` | Pass-1 exact match + pass-2 Gemini confirmation; 100 tx/batch |
+| `batch.run_batch_reconciliation` | Pass-1 exact match + pass-2 Gemma 4 confirmation; 100 tx/batch |
 | `batch.run_batch_bank_reconciliation` | Reconciles imported bank-statement lines against the ledger |
 | `batch.enforce_data_retention` | Bounded-batch deletion of 7-year-old ledger rows |
 | `batch.retrain_agent_e_models` | Fits one IsolationForest per customer over the trailing 90 days; upserts serialized bytes to `agent_e_models` |
@@ -1769,7 +1774,7 @@ Runs on every push and pull request (plus a nightly `schedule` for the eval job)
 | `test` | Spins up `pgvector/pgvector:pg16`, MongoDB, RabbitMQ services; creates `finguard_test` DB; runs `pytest` (250+ tests across 49 files); uploads coverage. Includes the **deterministic Agent-F tax eval gate** (`tests/evals/` — golden VAT/CIT/AML scenarios + pinned regulatory constants), so wrong tax math fails the build |
 | `lint` | `ruff check`, `mypy` |
 | `migration-check` | Runs `alembic upgrade head` against the test DB to ensure migrations are not broken |
-| `llm-evals` | **Nightly + non-blocking** (`if: schedule`, `continue-on-error`): runs the LLM-as-judge narrative evals (`pytest tests/evals -m llm_judge`, `RUN_LLM_EVALS=1`, needs `GEMINI_API_KEY` secret). Judges narrative grounding only — never gates a PR |
+| `llm-evals` | **Nightly + non-blocking** (`if: schedule`, `continue-on-error`): runs the LLM-as-judge narrative evals (`pytest tests/evals -m llm_judge`, `RUN_LLM_EVALS=1`, needs `FIREWORKS_API_KEY` secret). Judges narrative grounding only — never gates a PR |
 | `security-scan` | **gitleaks** (blocking — fails the build on secrets); **pip-audit** (report only); **bandit** (report only); **npm audit** (report only) |
 
 ### `deploy.yml` — Deployment
@@ -1792,7 +1797,7 @@ Runs on push to `main` (gated by `DEPLOY_ENABLED=true` repository variable).
 git clone <repo>
 cd Finguard-3.0
 cp infrastructure/.env.example infrastructure/.env
-# Fill in: SECRET_KEY, GEMINI_API_KEY
+# Fill in: SECRET_KEY, FIREWORKS_API_KEY
 
 make install        # Install backend (uv) + frontend (npm) dependencies
 make up             # docker compose up --build (core services)
@@ -1858,16 +1863,16 @@ ENABLE_OUTBOX_PROJECTOR=true         # Starts PostgreSQL outbox → MongoDB proj
 
 | Agent | Name | Status | Core Algorithm | Context Key Written | GenUI component_id | Hub TTL |
 |---|---|---|---|---|---|---|
-| A | Invoice Generator | ✅ Complete | Gemini structured extraction | `extracted_invoice` | — | 1h |
-| B | Transaction Classifier | ✅ Complete | Gemini zero-shot + batch Celery | `classified_transactions` | — | 1h |
-| C | Reconciler | ✅ Complete | Exact match + Gemini semantic scoring; atomic transaction | `reconciliation_report` | — | 10m |
+| A | Invoice Generator | ✅ Complete | Gemma 4 structured extraction | `extracted_invoice` | — | 1h |
+| B | Transaction Classifier | ✅ Complete | Gemma 4 zero-shot + batch Celery | `classified_transactions` | — | 1h |
+| C | Reconciler | ✅ Complete | Exact match + Gemma 4 semantic scoring; atomic transaction | `reconciliation_report` | — | 10m |
 | D | Cash-Flow Forecaster | ✅ Complete | Holt-Winters + regime detection + CoVe schema-masked SQL | `forecast` | `CashFlowChart` | 1h |
 | E | Budget Watchdog | ✅ Complete | HMM + persisted per-customer IsolationForest (weekly retrain) + rapidfuzz + AML flag; raises durable `alerts` | `watchdog_result` | `BudgetWatchdogMeter` | 30m |
 | F | Tax Auditor | ✅ Complete | Deterministic Kenya tax + pgvector RAG + AML flag | `tax_audit_result` | `TaxLiabilityDonut` | 1d |
-| G | Credit Strategist | ✅ Complete | Holt-Winters + bankability score + Gemini NLG | `credit_strategy_result` | `BankabilityScoreRadar` | 1d |
-| H | Financial Advisor | ✅ Complete | Gemini multi-step reasoning + RBAC clip; structured `AgentHOutput` + allowlisted GenUI widgets | `advice` | `MiniTrendSparkline` / `TransactionHistoryList` / `SemiCircleGaugeCard` (allowlisted) | 1h |
+| G | Credit Strategist | ✅ Complete | Holt-Winters + bankability score + Gemma 4 NLG | `credit_strategy_result` | `BankabilityScoreRadar` | 1d |
+| H | Financial Advisor | ✅ Complete | Gemma 4 multi-step reasoning + RBAC clip; structured `AgentHOutput` + allowlisted GenUI widgets | `advice` | `MiniTrendSparkline` / `TransactionHistoryList` / `SemiCircleGaugeCard` (allowlisted) | 1h |
 | I | External Integrator | ✅ Complete | httpx M-Pesa (sandbox) / free FX provider / Metropol / KRA + SSRF guard; explicit per-source status (live/manual/mock/unavailable) | `external_data` | — | 1h |
-| J | Executive Summarizer | ✅ Complete | Gemini context distillation ≤5 bullets + locale-aware | `executive_summary` | — | 30m |
+| J | Executive Summarizer | ✅ Complete | Gemma 4 context distillation ≤5 bullets + locale-aware | `executive_summary` | — | 30m |
 
 ---
 
