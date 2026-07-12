@@ -72,7 +72,11 @@ cp backend/.env.example backend/.env
 Edit `backend/.env` and fill in required secrets:
 
 ```env
-FIREWORKS_API_KEY=<your-key>
+# AI provider — see "AI Provider (Fireworks + Featherless)" below for how to obtain these
+FIREWORKS_API_KEY=<your-fireworks-key>
+LLM_MODEL=accounts/<account>/deployments/<id>   # your Gemma 4 deployment (or the serverless id)
+EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
+FEATHERLESS_API_KEY=                             # optional failover; blank = Fireworks-only
 SECRET_KEY=<64+ char random string>
 
 # Optional: M-Pesa (Daraja)
@@ -153,6 +157,42 @@ DATABASE_READONLY_URL=postgresql+asyncpg://finguard_readonly:<password>@postgres
 | Celery Flower | http://localhost:5555 | — |
 | Prometheus | http://localhost:9090 | — |
 | Grafana | http://localhost:3001 | admin / $GRAFANA_PASSWORD |
+
+---
+
+## AI Provider (Fireworks + Featherless)
+
+Every AI task — structured extraction, forecasting/credit/advisory narratives, receipt-image OCR, tax RAG, and supervisor routing — runs on the open **Gemma 4** model, with **`nomic-embed-text-v1.5`** (768-dim) for the pgvector knowledge base. Agents never touch a vendor SDK: all access goes through a provider-neutral `BaseLLMClient` (OpenAI-compatible), so the provider set is swappable in one place (`llm_client._build_client()`).
+
+**Two providers, automatic failover:**
+- **Primary — Fireworks AI** serves Gemma 4 (text **and** vision) plus the nomic embeddings.
+- **Backup — Featherless AI** (optional) hosts the same Gemma 4 family, always warm. If the primary cold-starts or times out, calls transparently fail over to it (`finguard_llm_failover_total` metric); only if **both** fail does an agent degrade gracefully. Embeddings run on the primary only (always-warm serverless — no failover needed).
+
+### Setup
+
+**1. Fireworks (required).** Create an account at [fireworks.ai](https://fireworks.ai), generate an API key (`fw_…`), and pick a Gemma 4 model id:
+- **Serverless** (if your account offers it): `accounts/fireworks/models/gemma-4-31b-it` (this is the default).
+- **Dedicated deployment**: deploy Gemma 4 from the Fireworks dashboard and use `accounts/<your-account>/deployments/<id>`. Dedicated deployments **scale to zero when idle** (a cold start is ~3 min) — either keep min-replicas ≥ 1, or configure the Featherless failover below so users never wait on a cold start.
+
+```env
+FIREWORKS_API_KEY=fw_...
+LLM_MODEL=accounts/<account>/deployments/<id>    # or accounts/fireworks/models/gemma-4-31b-it
+EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5   # served by Fireworks; matches the pgvector column
+```
+
+**2. Featherless failover (optional, recommended for dedicated deployments).** Create an account at [featherless.ai](https://featherless.ai), generate a key (`rc_…`):
+
+```env
+FEATHERLESS_API_KEY=rc_...              # leave blank to run Fireworks-only (no failover)
+FEATHERLESS_MODEL=google/gemma-4-31B-it
+```
+
+### How it works & operational notes
+
+- **Structured output** uses Fireworks' `json_schema` constrained decoding; the Featherless backup falls back to `json_object` + fence-stripping (it doesn't enforce `json_schema`). Gemma's *thinking mode* is disabled per-call so free-form replies aren't swallowed by hidden reasoning.
+- **Cost metric**: Gemma-on-Fireworks is GPU-hour billed and Featherless is subscription-priced, so per-token cost attribution defaults to `0`. Set `LLM_PRICING_JSON` (per-model USD / 1M tokens) to populate the `/metrics` cost counter.
+- **Re-embedding**: if you change the embedding model later, run `python -m scripts.backfill_embeddings` **per environment** to re-embed the KB into the new vector space (L2 distances across embedding spaces are meaningless).
+- **Where it lives**: `backend/src/domains/intelligence/llm/` — `base.py` (the `BaseLLMClient` interface), `openai_compat.py` (the only file importing the OpenAI SDK), `provider.py` (retry/timeout/telemetry policy), `failover.py` (primary + backup). To swap providers, edit `llm_client._build_client()` — no agent code changes.
 
 ---
 
