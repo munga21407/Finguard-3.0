@@ -130,15 +130,27 @@ async def flush_once(
     return {"sent": sent, "failed": failed, "dead_lettered": dead_lettered}
 
 
+# Per-send failures are handled inside flush_once, so anything escaping it is a
+# database-level fault (connection dropped, lock timeout). Retry sooner than the
+# poll interval — a 60s wait would stall delivery over a blip — but back off
+# exponentially up to the interval so a sustained outage isn't hammered.
+_ERROR_BACKOFF_START = 5.0
+
+
 async def run_email_flusher(interval_seconds: float = 60.0) -> None:
     """Poll the email outbox forever. Started from the app lifespan when
     ``ENABLE_EMAIL_FLUSHER`` is set — the Celery-free delivery path."""
     logger.info("Email flusher started", interval=interval_seconds)
+    backoff = min(_ERROR_BACKOFF_START, interval_seconds)
     while True:
         try:
             result = await flush_once()
             if result["sent"] or result["dead_lettered"]:
                 logger.info("Email outbox flushed", **result)
         except Exception:
-            logger.exception("Email flusher error")
+            logger.exception("Email flusher error; retrying", retry_in=backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, interval_seconds)
+            continue
+        backoff = min(_ERROR_BACKOFF_START, interval_seconds)  # reset after a clean pass
         await asyncio.sleep(interval_seconds)
