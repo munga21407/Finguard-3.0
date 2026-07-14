@@ -174,7 +174,12 @@ class Settings(BaseSettings):
     MAIL_FROM_ADDRESS: str = ""         # defaults to SMTP_USERNAME (see validator)
     MAIL_REPLY_TO: str = ""             # Reply-To header; defaults to MAIL_FROM_ADDRESS
     EMAIL_MAX_RETRIES: int = 5          # attempts before an email is dead-lettered
-    EMAIL_POLL_INTERVAL: float = 60.0   # Celery-beat flush cadence (seconds)
+    EMAIL_POLL_INTERVAL: float = 60.0   # flush cadence (seconds) — beat or in-process
+    # Drain the email outbox from inside the API process instead of a Celery
+    # worker + beat pair. For deployments that don't run Celery (e.g. a single
+    # Railway service). Safe alongside Celery (the batch is SKIP LOCKED) but
+    # redundant — pick one. Off by default: Celery is the default topology.
+    ENABLE_EMAIL_FLUSHER: bool = False
     # Payment-reminder tiers (operator-tunable). due_soon fires within N days
     # before the due date; each overdue threshold fires once as it's crossed.
     REMINDER_DUE_SOON_DAYS: int = 3

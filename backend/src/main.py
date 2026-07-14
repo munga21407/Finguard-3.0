@@ -84,6 +84,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             asyncio.create_task(run_projector(settings.OUTBOX_POLL_INTERVAL))
         )
 
+    # Celery-free email delivery: drain the email outbox from this process. Only
+    # for deployments without a Celery worker + beat (see ENABLE_EMAIL_FLUSHER).
+    if settings.ENABLE_EMAIL_FLUSHER:
+        from src.workers.email.flusher import run_email_flusher
+        background_tasks.append(
+            asyncio.create_task(run_email_flusher(settings.EMAIL_POLL_INTERVAL))
+        )
+
     yield
 
     for task in background_tasks:
