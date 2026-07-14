@@ -19,7 +19,7 @@ from src.domains.notifications.models import (
 )
 from src.domains.notifications.service import NotificationService
 from src.infrastructure.email.renderer import render
-from src.workers.tasks import email_tasks
+from src.workers.email import flusher
 from tests.conftest import TestingSessionLocal
 
 
@@ -117,7 +117,10 @@ def test_render_missing_template_raises() -> None:
 # ── flush worker ──────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_flush_marks_sent_in_dry_run() -> None:
+async def test_flush_marks_sent_in_dry_run(monkeypatch) -> None:
+    # Pin the flag under test: a developer with MAIL_ENABLED=true in their .env
+    # would otherwise make this attempt a real SMTP send and fail.
+    monkeypatch.setattr(flusher.settings, "MAIL_ENABLED", False)
     await _clear_outbox()
     key = _key()
     async with TestingSessionLocal() as s:
@@ -127,7 +130,7 @@ async def test_flush_marks_sent_in_dry_run() -> None:
         )
         await s.commit()
 
-    result = await email_tasks._flush_email_outbox(session_factory=TestingSessionLocal)
+    result = await flusher.flush_once(session_factory=TestingSessionLocal)
     assert result["sent"] >= 1
 
     async with TestingSessionLocal() as s:
@@ -152,10 +155,10 @@ async def test_flush_dead_letters_after_exhausting_retries(monkeypatch) -> None:
     async def _boom(**_: object) -> None:
         raise RuntimeError("smtp exploded")
 
-    monkeypatch.setattr(email_tasks, "send_email", _boom)
-    monkeypatch.setattr(email_tasks.settings, "EMAIL_MAX_RETRIES", 1)
+    monkeypatch.setattr(flusher, "send_email", _boom)
+    monkeypatch.setattr(flusher.settings, "EMAIL_MAX_RETRIES", 1)
 
-    result = await email_tasks._flush_email_outbox(session_factory=TestingSessionLocal)
+    result = await flusher.flush_once(session_factory=TestingSessionLocal)
     assert result["dead_lettered"] == 1
 
     async with TestingSessionLocal() as s:

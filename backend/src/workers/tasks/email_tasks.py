@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.infrastructure.database.postgres import AsyncSessionLocal
-from src.workers.email.flusher import flush_once as _flush_email_outbox
+from src.workers.email.flusher import flush_once
 from src.workers.tasks.celery_app import celery_app
 
-__all__ = ["_flush_email_outbox", "dispatch_payment_reminders", "flush_outbox"]
+__all__ = ["dispatch_payment_reminders", "flush_outbox"]
 
 
 @celery_app.task(name="email.flush_outbox", queue="notifications")  # type: ignore[untyped-decorator]
@@ -29,7 +29,7 @@ def flush_outbox() -> dict[str, Any]:
 
     celery -A src.workers.tasks.celery_app call email.flush_outbox
     """
-    return asyncio.run(_flush_email_outbox())
+    return asyncio.run(flush_once())
 
 
 # ── Payment reminders ─────────────────────────────────────────────────────────
