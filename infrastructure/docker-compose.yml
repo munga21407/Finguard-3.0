@@ -39,6 +39,17 @@ x-backend-env: &backend-env
   CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-finguard}:${RABBITMQ_PASSWORD:-finguard}@rabbitmq:5672/
   CELERY_REDIS_URL: redis://:${REDIS_PASSWORD:-finguard}@redis:6379/0
   CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-finguard}@redis:6379/0
+  # Transactional email. The celery-worker runs the outbox flush, so it needs
+  # these as much as the backend does. MAIL_ENABLED defaults to false (dry run).
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+  MAIL_ENABLED: ${MAIL_ENABLED:-false}
+  SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_APP_PASSWORD: ${SMTP_APP_PASSWORD:-}
+  MAIL_FROM_NAME: ${MAIL_FROM_NAME:-Finguard}
+  MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-}
+  MAIL_REPLY_TO: ${MAIL_REPLY_TO:-}
 
 # depends_on block reused by celery-worker (needs the schema migrated + DB and
 # both brokers healthy).
@@ -252,8 +263,10 @@ services:
   celery-worker:
     build: *worker-build
     # -c 2  : two child processes (scale out via replicas, not concurrency)
-    # -Q    : subscribe to all three queues wired in celery_app.task_routes
-    command: uv run celery -A src.workers.tasks worker -l info -c 2 -Q ocr_processing,batch_processing,watchdog
+    # -Q    : subscribe to every queue wired in celery_app.task_routes — a queue
+    #         missing here means Beat keeps publishing tasks nothing ever consumes
+    #         (notifications carries email.* : outbox flush + payment reminders).
+    command: uv run celery -A src.workers.tasks worker -l info -c 2 -Q ocr_processing,batch_processing,watchdog,notifications
     profiles: ["workers"]
     security_opt:
       - "no-new-privileges:true"
