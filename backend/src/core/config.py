@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -20,6 +22,13 @@ class Settings(BaseSettings):
     # fixed dev-only key is derived (never from SECRET_KEY). See key_manager.py.
     FINGUARD_CA_PRIVATE_KEY_HEX: str = ""
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
+    # SameSite policy for auth cookies. "strict" suits a same-site deployment
+    # (single domain, or the nginx reverse proxy serving UI + API on one origin).
+    # Set "none" when the frontend is on a DIFFERENT site than the API (e.g. a
+    # Vercel frontend calling a Railway backend) so the browser sends auth
+    # cookies on cross-site XHR. "none" forces Secure=True (HTTPS both ends);
+    # the double-submit CSRF token remains the mutation guard either way.
+    COOKIE_SAMESITE: Literal["strict", "lax", "none"] = "strict"
     # Public base URL of the app, used to build links inside emails (e.g. the
     # approvals inbox). Defaults to the dev frontend origin.
     APP_BASE_URL: str = "http://localhost:3000"

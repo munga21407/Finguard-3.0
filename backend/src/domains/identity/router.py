@@ -1,6 +1,6 @@
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -60,10 +60,22 @@ _REFRESH_COOKIE = "fg_refresh_token"
 _REFRESH_COOKIE_PATH = "/api/v1/identity"   # only sent to auth endpoints
 _COOKIE_MAX_AGE = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86_400
 _ACCESS_COOKIE_MAX_AGE = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
-# secure=True requires HTTPS — safe to enable only in production.
+# SameSite for the auth cookies (access/refresh/csrf). Configurable so a
+# cross-site deployment (Vercel UI → Railway API) can use "none"; same-site
+# deployments keep the stricter "strict".
+_COOKIE_SAMESITE = settings.COOKIE_SAMESITE
+# secure=True requires HTTPS — safe to enable only in production. SameSite=None
+# is additionally *invalid* without Secure (browsers drop it), so force it on
+# whenever cross-site cookies are requested.
 # Never set secure=True behind HTTP in development or tests; the browser
 # silently drops the cookie.
-_COOKIE_SECURE = settings.ENVIRONMENT == "production"
+_COOKIE_SECURE = settings.ENVIRONMENT == "production" or _COOKIE_SAMESITE == "none"
+# The session presence-marker is Lax for same-site (so top-level navigations
+# still see it) but must be None to survive cross-site XHR when the API lives
+# on another domain.
+_SESSION_SAMESITE: Literal["lax", "none"] = (
+    "none" if _COOKIE_SAMESITE == "none" else "lax"
+)
 
 
 def _set_auth_cookies(
@@ -78,7 +90,7 @@ def _set_auth_cookies(
         value=access_token,
         httponly=True,
         secure=_COOKIE_SECURE,
-        samesite="strict",
+        samesite=_COOKIE_SAMESITE,
         path="/",
         max_age=_ACCESS_COOKIE_MAX_AGE,
     )
@@ -87,7 +99,7 @@ def _set_auth_cookies(
         value=refresh_token,
         httponly=True,
         secure=_COOKIE_SECURE,
-        samesite="strict",
+        samesite=_COOKIE_SAMESITE,
         path=_REFRESH_COOKIE_PATH,
         max_age=_COOKIE_MAX_AGE,
     )
@@ -98,7 +110,7 @@ def _set_auth_cookies(
         value=csrf_token,
         httponly=False,
         secure=_COOKIE_SECURE,
-        samesite="strict",
+        samesite=_COOKIE_SAMESITE,
         path="/",
         max_age=_COOKIE_MAX_AGE,
     )
@@ -110,7 +122,7 @@ def _set_auth_cookies(
         value="1",
         httponly=False,
         secure=_COOKIE_SECURE,
-        samesite="lax",
+        samesite=_SESSION_SAMESITE,
         path="/",
         max_age=_COOKIE_MAX_AGE,
     )
@@ -121,25 +133,25 @@ def _clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(
         key=ACCESS_COOKIE_NAME,
         path="/",
-        samesite="strict",
+        samesite=_COOKIE_SAMESITE,
         secure=_COOKIE_SECURE,
     )
     response.delete_cookie(
         key=_REFRESH_COOKIE,
         path=_REFRESH_COOKIE_PATH,
-        samesite="strict",
+        samesite=_COOKIE_SAMESITE,
         secure=_COOKIE_SECURE,
     )
     response.delete_cookie(
         key=CSRF_COOKIE_NAME,
         path="/",
-        samesite="strict",
+        samesite=_COOKIE_SAMESITE,
         secure=_COOKIE_SECURE,
     )
     response.delete_cookie(
         key=SESSION_COOKIE_NAME,
         path="/",
-        samesite="lax",
+        samesite=_SESSION_SAMESITE,
         secure=_COOKIE_SECURE,
     )
 
