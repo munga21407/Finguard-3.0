@@ -7,7 +7,7 @@
   "deploy": {
     "preDeployCommand": "uv run alembic -c alembic/alembic.ini upgrade head",
     "healthcheckPath": "/health/live",
-    "healthcheckTimeout": 30,
+    "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3
   }

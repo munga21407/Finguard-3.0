@@ -29,6 +29,7 @@ import {
   resendInvoice,
   schedulePayable,
   sendInvoice,
+  updateCustomer,
 } from "@/lib/api/finance";
 import type {
   ApiBankStatementImport,
