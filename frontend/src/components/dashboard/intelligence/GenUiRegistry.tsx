@@ -170,6 +170,89 @@ const GenUiRegistry: Record<string, React.ElementType> = {
       ),
     { ssr: false, loading: () => <RegistrySkeleton /> }
   ),
+
+  // ── Sprint 8 widget families (variant-driven — see each file's `variant` prop) ──
+
+  /** Charts · chart-bar / chart-column / chart-line via `variant` */
+  ChartXY: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/ChartXY").then(
+        (m) => ({ default: m.ChartXY })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** Charts · chart-pie */
+  ChartPie: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/ChartPie").then(
+        (m) => ({ default: m.ChartPie })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** Charts · chart-wordcloud */
+  ChartWordcloud: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/ChartWordcloud").then(
+        (m) => ({ default: m.ChartWordcloud })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** Lists · list-column / list-grid / list-pyramid / list-row / list-sector / list-waterfall / list-zigzag via `variant` */
+  RankedList: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/RankedList").then(
+        (m) => ({ default: m.RankedList })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** Quadrants + Comparisons · quadrant-quarter / quadrant-simple / compare-quadrant / compare-swot via `variant` */
+  QuadrantGrid: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/QuadrantGrid").then(
+        (m) => ({ default: m.QuadrantGrid })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** Sequences & Timelines · all seventeen sequence-* names via `variant` */
+  SequenceFlow: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/SequenceFlow").then(
+        (m) => ({ default: m.SequenceFlow })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** Comparisons · compare-binary */
+  CompareBinary: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/CompareBinary").then(
+        (m) => ({ default: m.CompareBinary })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** Hierarchies & Mind Maps + Comparisons · Hierarchy (Mind Map) / hierarchy-structure / Hierarchy Tree / compare-hierarchy via `variant` */
+  HierarchyTree: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/HierarchyTree").then(
+        (m) => ({ default: m.HierarchyTree })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
+
+  /** Relations · relation-circle / relation-dagre / relation-network via `variant` */
+  RelationGraph: dynamic(
+    () =>
+      import("@/components/dashboard/intelligence/genui/RelationGraph").then(
+        (m) => ({ default: m.RelationGraph })
+      ),
+    { ssr: false, loading: () => <RegistrySkeleton /> }
+  ),
 };
 
 export default GenUiRegistry;
