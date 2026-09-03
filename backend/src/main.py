@@ -30,6 +30,7 @@ from src.domains.intelligence.security.vc_issuer import ensure_trust_log_ttl_ind
 from src.domains.inventory.router import router as inventory_router
 from src.domains.notifications.router import router as notifications_router
 from src.infrastructure.cache.redis import close_redis, init_redis
+from src.infrastructure.database.checkpointer import close_checkpointer, init_checkpointer
 from src.infrastructure.database.mongodb import close_mongo, init_mongo
 from src.infrastructure.database.postgres import close_db, init_db, verify_schema_migrated
 from src.infrastructure.message_bus.rabbitmq_publisher import close_rabbitmq, init_rabbitmq
@@ -71,6 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await ensure_trust_log_ttl_index()
     await init_redis()
     await init_rabbitmq()
+    await init_checkpointer()
 
     background_tasks: list[asyncio.Task[Any]] = []
 
@@ -102,6 +104,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await close_rabbitmq()
     await close_redis()
     await close_mongo()
+    await close_checkpointer()
     await close_db()
 
 

@@ -118,6 +118,16 @@ class Settings(BaseSettings):
     FEATHERLESS_API_BASE: str = "https://api.featherless.ai/v1"
     FEATHERLESS_MODEL: str = "google/gemma-4-31B-it"
 
+    # ── Gemini (Google) — alternative primary provider ─────────────────────────
+    # Uses Google's OpenAI-compatibility endpoint, so it reuses the same
+    # openai_compat wrapper as Fireworks/Featherless — no separate SDK. When set,
+    # this replaces Fireworks as the primary provider (see llm_client._build_client);
+    # Featherless, if also configured, still applies as the failover backup.
+    # Embeddings are NOT wired for Gemini yet — EMBEDDING_MODEL stays Fireworks-only.
+    GEMINI_API_KEY: str = ""
+    GEMINI_API_BASE: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    GEMINI_MODEL: str = "gemini-3.6-flash"
+
     # Agent H (Financial Advisor) — when true, actionable-tier advice is flagged
     # `requires_review` so a human signs off before concrete recommendations are
     # acted on (advice-liability guardrail, S6-5). Off by default; a request may
@@ -134,6 +144,15 @@ class Settings(BaseSettings):
     # Safety ceiling on how many times a single orchestration may re-plan (a
     # consumer appending context["_replan_targets"]) before the planner finishes.
     A2A_MAX_REPLANS: int = 2
+
+    # Replayability — LangGraph Postgres checkpointer on the supervisor graph
+    # (orchestrator.build_graph). When true, state is durably persisted after
+    # every node so a failed/killed run can resume from its last completed
+    # node instead of re-running from START (see
+    # infrastructure/database/checkpointer.py and
+    # routers/conversations.py's /conversation/{session_id}/resume). Off by
+    # default: compiles the graph without a checkpointer exactly as before.
+    LANGGRAPH_CHECKPOINTING_ENABLED: bool = False
     # Per-agent LLM cost attribution is now model-keyed and externally
     # configurable via the LLM_PRICING_JSON env var — see
     # src/domains/intelligence/llm/pricing.py. The old hardcoded single-rate

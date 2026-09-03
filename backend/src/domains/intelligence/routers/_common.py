@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from src.domains.intelligence.orchestrator import (
     GraphRecursionError,
     run_graph,
+    try_fast_path,
 )
 from src.domains.intelligence.schemas import (
     GenUIPayload,
@@ -205,7 +206,9 @@ async def _run_orchestrator(
     }
 
     try:
-        final_state = await run_graph(initial_state)
+        final_state = await try_fast_path(initial_state)
+        if final_state is None:
+            final_state = await run_graph(initial_state)
 
     except GraphRecursionError as exc:
         logger.warning(

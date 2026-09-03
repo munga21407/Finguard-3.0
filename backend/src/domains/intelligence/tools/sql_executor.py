@@ -27,6 +27,7 @@ from sqlglot.errors import ParseError
 
 from src.core.config import settings
 from src.domains.finance.models import InvoiceStatus, TransactionType
+from src.domains.intelligence.agent_registry import allowed_sql_tables
 from src.domains.intelligence.observability import traced_tool
 from src.domains.inventory.types import MovementType, UnitOfMeasure
 from src.infrastructure.database.postgres import ReadOnlyAsyncSessionLocal
@@ -206,26 +207,10 @@ stock_movements(
 )""",
 }
 
-# Agent D (d_forecaster / IntelliAgent) is the only consumer of Text-to-SQL.
-# It must NEVER see users, knowledge_base, or outbox_events.
-_AGENT_ALLOWED_TABLES: dict[str, frozenset[str]] = {
-    "D": frozenset({"ledger_entries", "invoices", "budgets", "expenses"}),
-    # Agent K (Stock Steward) does ad-hoc inventory analytics (cross-product
-    # rollups, slow-movers). It must NEVER see users / finance money tables — only
-    # the three inventory tables. The structural allowlist enforces this even
-    # against a prompt-injected SELECT (see _assert_allowed_tables).
-    "K": frozenset({"products", "stock_levels", "stock_movements"}),
-    # Other agents do not use dynamic SQL; add entries here as needed.
-}
-
-
-# Union of every agent's allowed table set — the hard allowlist the read-only
-# executor enforces structurally (not just via prompt masking).  Any SELECT that
-# touches a table outside this set (users, knowledge_base, outbox_events, the
-# Postgres catalog, information_schema, …) is rejected before it reaches the DB.
-_READONLY_ALLOWED_TABLES: frozenset[str] = frozenset().union(
-    *_AGENT_ALLOWED_TABLES.values()
-)
+# Per-agent table allowlists now live in agent_registry.TOOL_GRANTS (the single
+# declarative source, generalized across sql_executor/http_caller/event_publisher
+# — see agent_registry.allowed_sql_tables). Never see users, knowledge_base, or
+# outbox_events regardless of agent — those simply never appear in any grant.
 
 
 def get_masked_schema(agent_id: str) -> str:
@@ -235,9 +220,11 @@ def get_masked_schema(agent_id: str) -> str:
     Agent D receives ledger_entries, invoices, budgets, and expenses.
     Sensitive tables (users, knowledge_base, outbox_events) are never included.
 
-    Raises KeyError for unknown agent IDs.
+    Raises KeyError for an agent with no SQL grant.
     """
-    allowed = _AGENT_ALLOWED_TABLES[agent_id]
+    allowed = allowed_sql_tables(agent_id)
+    if not allowed:
+        raise KeyError(agent_id)
     fragments = [_TABLE_DDL[t] for t in sorted(allowed) if t in _TABLE_DDL]
     return "\n\n".join(fragments)
 
@@ -457,16 +444,17 @@ def make_sql_executor(session: AsyncSession) -> Any:
 
 
 @traced_tool("readonly_sql")
-async def execute_readonly_sql(query: str) -> list[dict[str, Any]]:
+async def execute_readonly_sql(query: str, *, agent_id: str) -> list[dict[str, Any]]:
     """
     Execute a validated SELECT query using the read-only session factory.
 
     Used by the Text-to-SQL CoVe workflow in Agent D and the Agent E watchdog so
     LLM-generated queries run under the finguard_readonly PostgreSQL role.  In
     addition to the read-only role boundary (defence in depth), every query is
-    structurally restricted to the table allowlist so a prompt-injected or
-    hallucinated SELECT cannot read users / knowledge_base / outbox_events even
-    if the role grant were ever misconfigured.
+    structurally restricted to ``agent_id``'s table allowlist
+    (``agent_registry.allowed_sql_tables``) so a prompt-injected or hallucinated
+    SELECT cannot read users / knowledge_base / outbox_events — or another
+    agent's tables — even if the role grant were ever misconfigured.
 
     Fail-closed in production: ``ReadOnlyAsyncSessionLocal`` is bound to a
     fail-closed engine (see infrastructure/database/postgres.py) that refuses to
@@ -474,7 +462,7 @@ async def execute_readonly_sql(query: str) -> list[dict[str, Any]]:
     production.
     """
     normalized_query = _normalize_known_enum_literals(query)
-    _validate(normalized_query, allowed_tables=_READONLY_ALLOWED_TABLES)
+    _validate(normalized_query, allowed_tables=allowed_sql_tables(agent_id))
     safe_query = _enforce_limit(normalized_query)
 
     if not settings.DATABASE_READONLY_URL:

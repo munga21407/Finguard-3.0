@@ -2,6 +2,7 @@
 
   POST /conversation                         — cached VC read OR force-refresh dispatch
   GET  /conversation/{session_id}/status     — poll background graph run status
+  POST /conversation/{session_id}/resume     — retry a failed run from its last checkpoint
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from langchain_core.messages import HumanMessage
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
+from src.core.config import settings
 from src.domains.identity.dependencies import RequireIntelligenceRead
 from src.domains.intelligence.routers._common import (
     _TASK_STATUS_TTL,
@@ -154,7 +156,7 @@ class ConversationOrchestrator:
             f"task_owner:{session_id}", _TASK_STATUS_TTL, user_id or ""
         )
 
-        background_tasks.add_task(_graph_background_task, state)
+        background_tasks.add_task(_graph_background_task, state, session_id)
 
         logger.info(
             "conversation: background refresh dispatched",
@@ -165,7 +167,9 @@ class ConversationOrchestrator:
         return session_id
 
 
-async def _graph_background_task(state: OrchestratorState) -> None:
+async def _graph_background_task(
+    state: OrchestratorState | None, session_id: str
+) -> None:
     """
     Fire-and-forget wrapper executed by FastAPI BackgroundTasks.
 
@@ -176,45 +180,65 @@ async def _graph_background_task(state: OrchestratorState) -> None:
     polls this via ``GET /conversation/{session_id}/status`` to show which
     agent is actively compiling data.
 
+    ``state`` is ``None`` for a **resume** (see the ``/resume`` endpoint):
+    with checkpointing enabled, ``astream(None, config=...)`` with the same
+    ``thread_id`` continues from the last checkpoint instead of restarting at
+    ``START`` — LangGraph's own resume convention, not something this
+    function implements itself. ``session_id`` doubles as ``thread_id``
+    either way (see ``orchestrator.graph_config``).
+
     On completion the Redis key is updated to ``"completed"`` and includes:
     - ``artifact_id``         — MongoDB key written by hub_writer
     - ``genui_artifact_ids``  — MongoDB keys for GenUI payloads (hub_writer)
     - ``gen_ui_payloads``     — serialized payloads for immediate client use
     - ``active_node``         — cleared to null
     """
-    session_id: str = state["session_id"]
     redis_client = get_redis()
 
     try:
-        from src.domains.intelligence.orchestrator import build_graph
+        from src.domains.intelligence.orchestrator import (
+            build_graph,
+            graph_config,
+            try_fast_path,
+        )
 
-        graph = build_graph()
-        config: dict[str, Any] = {"recursion_limit": 25}
-
+        config = graph_config(session_id)
         final_state: dict[str, Any] = {}
-        prev_active: str = ""
 
-        # stream_mode="values" yields the FULL accumulated state after every
-        # node, so the last snapshot IS the final state — no second ainvoke.
-        async for snapshot in graph.astream(state, config=config, stream_mode="values"):
-            final_state = snapshot
+        # Fast path only applies to a fresh dispatch (state is not None) — a
+        # resume (state is None) always continues via the full graph's
+        # checkpoint, per the plan's documented resume-simplification: the
+        # extra hub_writer -> supervisor -> FINISH hop it costs on resume is
+        # the same overhead every non-fast-pathed request already pays.
+        fast_result = await try_fast_path(dict(state)) if state is not None else None
 
-            # supervisor sets state["next"] immediately before the agent runs,
-            # so "next == b_classifier" means b_classifier is about to start.
-            current_next: str = snapshot.get("next", "FINISH") or "FINISH"
-            active_label = (
-                f"running:{current_next}" if current_next != "FINISH" else ""
-            )
+        if fast_result is not None:
+            final_state = fast_result
+        else:
+            graph = build_graph()
+            prev_active: str = ""
 
-            if active_label != prev_active:
-                await redis_client.setex(
-                    f"task_status:{session_id}",
-                    _TASK_STATUS_TTL,
-                    json.dumps(
-                        {"status": "running", "active_node": active_label or None}
-                    ),
+            # stream_mode="values" yields the FULL accumulated state after every
+            # node, so the last snapshot IS the final state — no second ainvoke.
+            async for snapshot in graph.astream(state, config=config, stream_mode="values"):
+                final_state = snapshot
+
+                # supervisor sets state["next"] immediately before the agent runs,
+                # so "next == b_classifier" means b_classifier is about to start.
+                current_next: str = snapshot.get("next", "FINISH") or "FINISH"
+                active_label = (
+                    f"running:{current_next}" if current_next != "FINISH" else ""
                 )
-                prev_active = active_label
+
+                if active_label != prev_active:
+                    await redis_client.setex(
+                        f"task_status:{session_id}",
+                        _TASK_STATUS_TTL,
+                        json.dumps(
+                            {"status": "running", "active_node": active_label or None}
+                        ),
+                    )
+                    prev_active = active_label
 
         # --- Collect GenUI payloads -----------------------------------------
         # 1. Payloads the graph accumulated in state["gen_ui_payloads"]
@@ -265,6 +289,10 @@ async def _graph_background_task(state: OrchestratorState) -> None:
             "status": "failed",
             "detail": error_msg,
             "active_node": None,
+            # Checkpointed progress exists iff checkpointing is on — the client
+            # can call POST /conversation/{session_id}/resume instead of
+            # re-submitting the whole request from scratch.
+            "resumable": settings.LANGGRAPH_CHECKPOINTING_ENABLED,
         }
         await redis_client.setex(
             f"task_status:{session_id}",
@@ -310,6 +338,10 @@ class TaskStatusResponse(BaseModel):
     # Structured GenUI payloads ready to render in the chat window.
     gen_ui_payloads: list[dict[str, Any]] = []
     detail: str | None = None
+    # True only when status == "failed" and a checkpointed run can be
+    # continued via POST /conversation/{session_id}/resume instead of
+    # re-submitting the request from scratch.
+    resumable: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -433,4 +465,63 @@ async def conversation_status(
         active_node=payload.get("active_node"),
         gen_ui_payloads=payload.get("gen_ui_payloads") or [],
         detail=payload.get("detail"),
+        resumable=bool(payload.get("resumable")),
     )
+
+
+@router.post(
+    "/conversation/{session_id}/resume", response_model=TaskStatusResponse
+)
+async def conversation_resume(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: RequireIntelligenceRead,
+) -> TaskStatusResponse:
+    """
+    Retry a failed background graph run from its last LangGraph checkpoint
+    instead of re-submitting the request (and re-paying every prior LLM/tool
+    call) from scratch.
+
+    Requires ``LANGGRAPH_CHECKPOINTING_ENABLED`` and a session whose last
+    known status is ``"failed"`` with ``resumable=true`` (see
+    ``GET /conversation/{session_id}/status``). Re-dispatches the same
+    background task with ``state=None`` so LangGraph continues from the last
+    completed node — see ``_graph_background_task``.
+    """
+    redis_client = get_redis()
+
+    owner: str | None = await redis_client.get(f"task_owner:{session_id}")  # type: ignore[assignment]
+    if owner is not None and owner != str(current_user.id):
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found or status has expired.",
+        )
+
+    raw: str | None = await redis_client.get(f"task_status:{session_id}")  # type: ignore[assignment]
+    if raw is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found or status has expired.",
+        )
+
+    try:
+        payload: dict[str, Any] = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        payload = {}
+
+    if payload.get("status") != "failed" or not payload.get("resumable"):
+        raise HTTPException(
+            status_code=409,
+            detail="Session is not in a resumable failed state.",
+        )
+
+    await redis_client.setex(
+        f"task_status:{session_id}",
+        _TASK_STATUS_TTL,
+        json.dumps({"status": "pending"}),
+    )
+    background_tasks.add_task(_graph_background_task, None, session_id)
+
+    logger.info("conversation: background resume dispatched", session_id=session_id)
+
+    return TaskStatusResponse(session_id=session_id, status="pending")

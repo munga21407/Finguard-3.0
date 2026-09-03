@@ -389,7 +389,12 @@ langgraph-checkpoint==4.1.1 \
     --hash=sha256:6c2bdb530c91f91d7d9c1bd100925d0fc4f498d418c17f3587d1526279482a25
     # via
     #   langgraph
+    #   langgraph-checkpoint-postgres
     #   langgraph-prebuilt
+langgraph-checkpoint-postgres==3.1.2 \
+    --hash=sha256:1cd404803ff895a2b79f3ac04ce92b775e6b999715f8333fce674c6d927bba95 \
+    --hash=sha256:6a7e38ef16985b54e356cba7bdaf447943aae33d5aaf290026c593bb6b4a6264
+    # via finguard-backend
 langgraph-prebuilt==1.1.0 \
     --hash=sha256:3c579cf6eed2d17f9c157c2d0fcaddcd8688524e7022d3b22b37a3bf4589d528 \
     --hash=sha256:51e311747d755b751d5c6b39b0c1446124d3a7643d2515017e6714b323508fc9
@@ -499,6 +504,7 @@ orjson==3.11.9 \
     --hash=sha256:d8ea516b3726d190e1b4297e6f4e7a8650347ae053868a18163b4dd3641d1fff \
     --hash=sha256:e5c9b8f28e726e97d97696c826bc7bea5d71cecd63576dba92924a32c1961291
     # via
+    #   langgraph-checkpoint-postgres
     #   langgraph-sdk
     #   langsmith
 ormsgpack==1.12.2 \
@@ -600,6 +606,29 @@ propcache==0.5.2 \
     --hash=sha256:db2b80ea58eab4f86b2beec3cc8b39e8ff9276ac20e96b7cce43c8ae84cd6b5a \
     --hash=sha256:e5cbfac9f61484f7e9f3597775500cd3ebe8274e9b050c38f9525c77c97520bf
     # via yarl
+psycopg==3.3.5 \
+    --hash=sha256:ce5aa5cdb4f9379f00f487590e5890bfa7df9a164648c969ffa628505e21af4e \
+    --hash=sha256:d0a3d9ccf5788af054cbd745278cb02401b5c312aeaafbf2c6144460aec47da4
+    # via
+    #   finguard-backend
+    #   langgraph-checkpoint-postgres
+psycopg-binary==3.3.5 ; implementation_name != 'pypy' \
+    --hash=sha256:0249c3e960cdee686000eb77169fb6590105c05bacc37e057ccdffdcd8e6ebde \
+    --hash=sha256:25105f9b46bdf2a30fcb67f56976ed66f6855941ae16bc024192609b917d493c \
+    --hash=sha256:35885e333020fc152d27bea1a494bef13b2e68f6fd92b6229015e93539152008 \
+    --hash=sha256:5698ab5941a4d138c30fef858588e651fe7d583280cd6e41832825ad9e747750 \
+    --hash=sha256:682a17a57415c3ca1731eec018ed031f012ffcb81ba74806eb219cb396065672 \
+    --hash=sha256:c065531e8c1815276f50dbfa283e3a7f022671414cdda6fa9a16794dd53b28f9 \
+    --hash=sha256:c09775c549b40b274206e1b043c5e5b5af39666e85c98382a30bd05d23ab677b \
+    --hash=sha256:cf0e5e63ee86098299c673992053d556c489ba9ae6aca6cb6e24d16a8e0b09e6 \
+    --hash=sha256:d2a61e8147902771df7efe14062a3c8736347850d0d8befcf048235752504f2e \
+    --hash=sha256:df9853b832b7b916e02ef68e0d5403a7dab2d5c1ddfe94f22b1b155eb862622f \
+    --hash=sha256:f7e1e45aad410e20de45df2b159df68ff6c8dbf47a3501f806c4489b27f4ad2b
+    # via psycopg
+psycopg-pool==3.3.1 \
+    --hash=sha256:2af5b432941c4c9ad5c87b3fa410aec910ec8f7c122855897983a06c45f2e4b5 \
+    --hash=sha256:b10b10b7a175d5cc1592147dc5b7eec8a9e0834eb3ed2c4a92c858e2f51eb63c
+    # via langgraph-checkpoint-postgres
 pyasn1==0.6.3 \
     --hash=sha256:697a8ecd6d98891189184ca1fa05d1bb00e2f84b5977c481452050549c8a72cf \
     --hash=sha256:a80184d120f0864a52a073acc6fc642847d0be408e7c7252f31390c0f4eadcde
@@ -851,6 +880,8 @@ typing-extensions==4.15.0 \
     #   langchain-protocol
     #   limits
     #   openai
+    #   psycopg
+    #   psycopg-pool
     #   pydantic
     #   pydantic-core
     #   sqlalchemy
@@ -869,6 +900,7 @@ tzdata==2026.2 \
     # via
     #   kombu
     #   pandas
+    #   psycopg
     #   tzlocal
 tzlocal==5.3.1 \
     --hash=sha256:cceffc7edecefea1f595541dbd6e990cb1ea3d19bf01b2809f362a03dd7921fd \

@@ -30,6 +30,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from src.domains.intelligence.agent_registry import allowed_http_hosts
 from src.domains.intelligence.observability import traced_tool
 
 logger = structlog.get_logger(__name__)
@@ -203,16 +204,19 @@ async def _send_with_retry(
 # LangGraph-compatible tool factory
 # ---------------------------------------------------------------------------
 
-def make_http_caller(timeout: float = _DEFAULT_TIMEOUT) -> Any:
+def make_http_caller(agent_id: str, timeout: float = _DEFAULT_TIMEOUT) -> Any:
     """
     Return a LangChain @tool that makes resilient outbound HTTP calls.
 
     Args:
+        agent_id: The calling agent's id — requests are restricted to the
+            hostnames declared in ``agent_registry.allowed_http_hosts(agent_id)``,
+            on top of (never instead of) the SSRF public-IP guard below.
         timeout: Per-request connect + read timeout in seconds.
 
     Usage inside an agent node::
 
-        caller = make_http_caller()
+        caller = make_http_caller(agent_id="I")
         result = await caller.ainvoke({
             "method": "GET",
             "url": "https://api.example.com/endpoint",
@@ -264,6 +268,15 @@ def make_http_caller(timeout: float = _DEFAULT_TIMEOUT) -> Any:
             # address after the check.  Redirects stay disabled so a public URL
             # cannot 30x-bounce elsewhere either.
             pinned_ip = await _resolve_and_pin(url)
+
+            # Per-agent host allowlist — narrower authorization layered on top
+            # of the SSRF safety check above, never a replacement for it.
+            host = (urlparse(url).hostname or "").lower()
+            if host not in allowed_http_hosts(agent_id):
+                raise BlockedURLError(
+                    f"blocked URL: host {host!r} not permitted for agent {agent_id!r}"
+                )
+
             async with httpx.AsyncClient(
                 timeout=timeout,
                 follow_redirects=False,

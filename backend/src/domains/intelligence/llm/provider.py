@@ -14,6 +14,19 @@ Owns the contract shared by every model call, but not the calls themselves:
 It never imports ``openai``: it wraps an :class:`OpenAICompatSdkClient` with the
 cross-cutting concerns above and parses the neutral response into the interface's
 return types.
+
+Call chain (deliberately layered, not accidentally nested): ``llm_client``'s
+facade functions call :class:`~src.domains.intelligence.llm.failover.FailoverLLMClient`
+(cross-provider redundancy — primary vs. backup, tested in isolation in
+``test_llm_provider.py``'s ``test_failover_*``), which calls this module's
+:class:`OpenAICompatLLMClient` (the per-provider resilience policy above —
+timeout/retry/telemetry, also independently tested here), which calls
+:class:`~src.domains.intelligence.llm.openai_compat.OpenAICompatSdkClient` (the
+vendor-SDK boundary — see that module's docstring: the ``openai`` SDK is
+confined to a single wrapper and never leaks above :class:`BaseLLMClient`).
+Each boundary is a distinct, separately-tested concern; collapsing them would
+touch the single highest-traffic path in the app for a readability preference
+with no runtime benefit, at the cost of the per-layer test isolation above.
 """
 from __future__ import annotations
 

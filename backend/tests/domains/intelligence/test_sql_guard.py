@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import pytest
 
+from src.domains.intelligence.agent_registry import allowed_sql_tables
 from src.domains.intelligence.tools.sql_executor import (
-    _READONLY_ALLOWED_TABLES,
     _enforce_limit,
     _normalize_known_enum_literals,
     _validate,
 )
+
+# Union of every agent's SQL grant — this file tests the generic AST/allowlist
+# *mechanism* (not per-agent scoping, see test_sql_executor_agent_scoping.py),
+# so it exercises the broadest table set the mechanism ever sees in practice.
+_ANY_GRANTED_TABLES = allowed_sql_tables("D") | allowed_sql_tables("K") | allowed_sql_tables("E")
 
 
 def test_plain_select_allowed() -> None:
@@ -98,7 +103,7 @@ def test_enum_normalization_does_not_change_unrelated_literals() -> None:
 def test_allowed_table_select_passes() -> None:
     # Tables in the read-only allowlist are permitted.
     _validate(
-        "SELECT id, total FROM invoices", allowed_tables=_READONLY_ALLOWED_TABLES
+        "SELECT id, total FROM invoices", allowed_tables=_ANY_GRANTED_TABLES
     )
 
 
@@ -118,7 +123,7 @@ def test_disallowed_table_rejected(query: str) -> None:
     # A perfectly valid read-only SELECT is still refused when it reaches outside
     # the allowlist — the gate that prompt-only schema masking cannot enforce.
     with pytest.raises(ValueError):
-        _validate(query, allowed_tables=_READONLY_ALLOWED_TABLES)
+        _validate(query, allowed_tables=_ANY_GRANTED_TABLES)
 
 
 def test_cte_name_not_treated_as_disallowed_table() -> None:
@@ -127,7 +132,7 @@ def test_cte_name_not_treated_as_disallowed_table() -> None:
     _validate(
         "WITH paid AS (SELECT total FROM invoices WHERE status = 'paid') "
         "SELECT SUM(total) FROM paid",
-        allowed_tables=_READONLY_ALLOWED_TABLES,
+        allowed_tables=_ANY_GRANTED_TABLES,
     )
 
 

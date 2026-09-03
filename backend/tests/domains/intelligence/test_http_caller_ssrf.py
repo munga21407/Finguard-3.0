@@ -26,7 +26,7 @@ from src.domains.intelligence.tools.http_caller import (
 )
 @pytest.mark.asyncio
 async def test_http_caller_blocks_unsafe_urls(url: str) -> None:
-    caller = make_http_caller()
+    caller = make_http_caller(agent_id="I")
     result = await caller.ainvoke({"method": "GET", "url": url})
     # Blocked requests surface as the tool's error envelope, never a real call.
     assert result["status_code"] == 0
@@ -88,3 +88,48 @@ async def test_resolve_and_pin_returns_validated_public_ip(monkeypatch) -> None:
     )
     pinned = await _resolve_and_pin("https://example.com/path")
     assert pinned == "93.184.216.34"
+
+
+# ── Per-agent host allowlist (Phase 3 — tool-capability registry) ────────────
+# Layered on top of the SSRF check above, never a replacement for it: these
+# hosts all resolve to a wholly-public IP (would pass _resolve_and_pin) but
+# aren't in agent "I"'s declared grant.
+
+class _FakeResponse:
+    status_code = 200
+    url = "https://sandbox.safaricom.co.ke/oauth/v1/generate"
+
+    def json(self) -> dict[str, bool]:
+        return {"ok": True}
+
+
+async def _fake_send_with_retry(*_a: object, **_k: object) -> _FakeResponse:
+    return _FakeResponse()
+
+
+@pytest.mark.asyncio
+async def test_host_not_in_agent_grant_is_blocked_even_when_publicly_resolvable(
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    monkeypatch.setattr(
+        http_caller.socket, "getaddrinfo", _fake_getaddrinfo(["93.184.216.34"])
+    )
+    caller = make_http_caller(agent_id="I")
+    result = await caller.ainvoke({"method": "GET", "url": "https://evil.example.com/steal"})
+
+    assert result["status_code"] == 0
+    assert "not permitted for agent" in str(result["data"]).lower()
+
+
+@pytest.mark.asyncio
+async def test_host_in_agent_grant_is_allowed_through(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(
+        http_caller.socket, "getaddrinfo", _fake_getaddrinfo(["93.184.216.34"])
+    )
+    monkeypatch.setattr(http_caller, "_send_with_retry", _fake_send_with_retry)
+    caller = make_http_caller(agent_id="I")
+    result = await caller.ainvoke(
+        {"method": "GET", "url": "https://sandbox.safaricom.co.ke/oauth/v1/generate"}
+    )
+
+    assert result["status_code"] == 200

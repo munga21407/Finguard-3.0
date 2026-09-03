@@ -30,15 +30,33 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
 
     GRANT CONNECT ON DATABASE "$POSTGRES_DB" TO finguard_readonly;
     GRANT USAGE ON SCHEMA public TO finguard_readonly;
+    GRANT USAGE ON SCHEMA "$POSTGRES_USER" TO finguard_readonly;
 
     -- Future tables (created later by the migrate service, which connects as
-    -- this same role) are automatically SELECT-only for finguard_readonly.
+    -- this same role) are automatically SELECT-only for finguard_readonly. Both
+    -- schemas are covered: Postgres's default search_path ("\$user", public)
+    -- resolves unqualified DDL from the migrate/backend connection (which
+    -- authenticates as \$POSTGRES_USER) to a same-named schema when one exists,
+    -- which is where this app's tables actually land — "public" stays covered
+    -- too for a deployment where that resolution doesn't apply.
     ALTER DEFAULT PRIVILEGES IN SCHEMA public
         GRANT SELECT ON TABLES TO finguard_readonly;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public
         REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLES FROM finguard_readonly;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public
         REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM finguard_readonly;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA "$POSTGRES_USER"
+        GRANT SELECT ON TABLES TO finguard_readonly;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA "$POSTGRES_USER"
+        REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLES FROM finguard_readonly;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA "$POSTGRES_USER"
+        REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM finguard_readonly;
+
+    -- The readonly role's own search_path ("\$user" → "finguard_readonly",
+    -- then public) never resolves to "\$POSTGRES_USER"'s schema on its own, so
+    -- point it there directly — otherwise every unqualified query 404s even
+    -- with the grants above in place.
+    ALTER ROLE finguard_readonly SET search_path = "$POSTGRES_USER", public;
 EOSQL
 
 echo "init-readonly-role: finguard_readonly provisioned (SELECT-only on public)."

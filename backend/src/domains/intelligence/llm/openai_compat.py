@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import base64
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import openai
@@ -41,8 +41,11 @@ _RETRYABLE_HTTP_CODES: frozenset[int] = frozenset({429, 500, 502, 504})  # 503 h
 # generous so narrative/report structured outputs are never truncated.
 _DEFAULT_MAX_TOKENS = 8192
 
-# Disable Gemma's thinking mode on every call (see module docstring).
-_EXTRA_BODY: dict[str, Any] = {"chat_template_kwargs": {"enable_thinking": False}}
+# Disable Gemma's thinking mode on every call (see module docstring). This is
+# ProviderSpec.extra_body's default, so Fireworks/Featherless keep sending it
+# unchanged; a provider whose thinking-disable shape differs (or has none
+# verified — e.g. Gemini) overrides ``extra_body`` explicitly in its own spec.
+_GEMMA_EXTRA_BODY: dict[str, Any] = {"chat_template_kwargs": {"enable_thinking": False}}
 
 # nomic-embed-text-v1.5 requires a task-instruction prefix; without it retrieval
 # quality degrades. The app only ever passes these two task types.
@@ -63,6 +66,10 @@ class ProviderSpec:
     structured_mode: str = "json_schema"  # or "json_object" (Featherless)
     embedding_model: str | None = None  # None → provider offers no embeddings
     embedding_dimensions: int | None = None
+    # Extra vendor-specific request body merged into every call. Defaults to the
+    # Gemma thinking-mode-off flag (Fireworks/Featherless); override per spec for
+    # a provider with different quirks — see the module docstring.
+    extra_body: dict[str, Any] = field(default_factory=lambda: dict(_GEMMA_EXTRA_BODY))
 
 
 def is_retryable_error(exc: BaseException) -> bool:
@@ -191,7 +198,7 @@ class OpenAICompatSdkClient:
             "model": model or self.spec.model,
             "messages": [{"role": "user", "content": _schema_prompt(prompt, schema)}],
             "max_tokens": _DEFAULT_MAX_TOKENS,
-            "extra_body": _EXTRA_BODY,
+            "extra_body": self.spec.extra_body,
             **self._structured_kwargs(response_schema, schema),
         }
         if temperature is not None:
@@ -205,7 +212,7 @@ class OpenAICompatSdkClient:
             "model": model or self.spec.model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": _DEFAULT_MAX_TOKENS,
-            "extra_body": _EXTRA_BODY,
+            "extra_body": self.spec.extra_body,
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
@@ -228,7 +235,7 @@ class OpenAICompatSdkClient:
         kwargs: dict[str, Any] = {
             "model": model or self.spec.model,
             "max_tokens": _DEFAULT_MAX_TOKENS,
-            "extra_body": _EXTRA_BODY,
+            "extra_body": self.spec.extra_body,
         }
         structured = response_schema is not None
         if response_schema is not None:
@@ -270,7 +277,7 @@ class OpenAICompatSdkClient:
                 model=model or self.spec.model,
                 messages=msgs,
                 max_tokens=max_tokens,
-                extra_body=_EXTRA_BODY,
+                extra_body=self.spec.extra_body,
             )
         )
 

@@ -27,14 +27,51 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.core.exceptions import ForbiddenError, NotFoundError, UnprocessableError
+from src.core.logging import logger
 from src.domains.identity.models import User
 from src.domains.identity.permissions import Permission
 from src.domains.intelligence.models import AgentActionProposal, ProposalStatus
+from src.domains.intelligence.security.vc_issuer import issue_vc
 from src.domains.intelligence.tools.inventory_tools import propose_stock_movement
 from src.domains.notifications.reviewers import notify_reviewers
 
 # Action types whose approval replays a stock movement through the guarded tool.
 ACTION_STOCK_ADJUSTMENT = "stock.adjustment"
+
+
+async def _issue_decision_vc(
+    proposal: AgentActionProposal, operation: str, reviewer_id: uuid.UUID
+) -> None:
+    """Best-effort, tamper-evident record of a proposal decision in ``trust_log``.
+
+    Mirrors ``e_watchdog.py``'s VC-issuance pattern: never let a Mongo hiccup
+    affect the outcome of an already-committed Postgres decision — the plain
+    ``audit_logs`` row (written by the router via ``AuditService``) is the
+    system of record regardless of whether this signed copy succeeds.
+    """
+    try:
+        await issue_vc(
+            agent_id=proposal.agent_label,
+            operation=operation,
+            operation_summary=(
+                f"proposal {proposal.id} ({proposal.action_type}) "
+                f"{operation.rsplit('.', 1)[-1]} by {reviewer_id}"
+            ),
+            payload={
+                "proposal_id": str(proposal.id),
+                "action_type": proposal.action_type,
+                "payload": proposal.payload,
+                "reviewer_id": str(reviewer_id),
+                "applied_ref": proposal.applied_ref,
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "proposal: VC issuance failed",
+            proposal_id=str(proposal.id),
+            operation=operation,
+            error=str(exc),
+        )
 
 
 class ProposalService:
@@ -145,6 +182,7 @@ class ProposalService:
 
         proposal.applied_ref = applied_ref
         await self._session.commit()
+        await _issue_decision_vc(proposal, "proposal.approved", current_user.id)
         await self._session.refresh(proposal)
         return proposal
 
@@ -166,6 +204,7 @@ class ProposalService:
         proposal.reviewed_by = current_user.id
         proposal.reviewed_at = datetime.now(UTC)
         await self._session.commit()
+        await _issue_decision_vc(proposal, "proposal.rejected", current_user.id)
         await self._session.refresh(proposal)
         return proposal
 

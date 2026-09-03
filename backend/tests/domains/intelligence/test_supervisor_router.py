@@ -29,18 +29,18 @@ def _boom_factory(counter: dict[str, int]):
 # ── Pure heuristic ────────────────────────────────────────────────────────────
 
 def test_heuristic_single_winner() -> None:
-    assert sup._heuristic_route("please reconcile the mpesa payments") == "c_reconciler"
-    assert sup._heuristic_route("what is my vat tax liability") == "f_auditor"
-    assert sup._heuristic_route("generate invoice from this email") == "a_generator"
+    assert sup.heuristic_route("please reconcile the mpesa payments") == "c_reconciler"
+    assert sup.heuristic_route("what is my vat tax liability") == "f_auditor"
+    assert sup.heuristic_route("generate invoice from this email") == "a_generator"
 
 
 def test_heuristic_no_match_returns_none() -> None:
-    assert sup._heuristic_route("hello, how are you today") is None
+    assert sup.heuristic_route("hello, how are you today") is None
 
 
 def test_heuristic_tie_defers_to_llm() -> None:
     # one c_reconciler keyword + one f_auditor keyword → tie → None
-    assert sup._heuristic_route("reconcile the tax") is None
+    assert sup.heuristic_route("reconcile the tax") is None
 
 
 # ── Node short-circuits (no LLM) ──────────────────────────────────────────────

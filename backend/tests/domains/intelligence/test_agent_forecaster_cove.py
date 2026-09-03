@@ -16,7 +16,7 @@ def _install_mocks(monkeypatch: pytest.MonkeyPatch, calls: list[object], audit_o
             )
         return _CoVeAudit(intent_preserved=audit_ok, confidence=0.9, issues=[])
 
-    async def fake_sql(_q: str) -> list[dict[str, object]]:
+    async def fake_sql(_q: str, *, agent_id: str = "D") -> list[dict[str, object]]:
         return [{"x": 1}]
 
     monkeypatch.setattr(d, "generate_structured_content", fake_gen)
@@ -69,7 +69,7 @@ async def test_non_select_rejected_even_when_audit_approves(
             )
         return _CoVeAudit(intent_preserved=True, confidence=0.99, issues=[])  # …and "approves" it
 
-    async def fake_sql(q: str) -> list[dict[str, object]]:
+    async def fake_sql(q: str, *, agent_id: str = "D") -> list[dict[str, object]]:
         executed.append(q)
         return [{"x": 1}]
 

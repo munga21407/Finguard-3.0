@@ -29,6 +29,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal
+from urllib.parse import urlparse
+
+from src.core.config import settings
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,11 @@ class AgentDescriptor:
     # write. Ownership must be disjoint across agents so the merge_context reducer
     # is conflict-free under parallel fan-out (see write_keys + contract test).
     aux_context_keys: tuple[str, ...] = ()
+    # True only for agents that never mutate state (no create_proposal / write
+    # tool calls) regardless of `mode` — lets a clean single-domain intent skip
+    # the supervisor graph entirely via orchestrator.try_fast_path. Opt-in and
+    # False by default; do not set on any agent capable of proposing a write.
+    read_only: bool = False
 
     def build_payload(self, context: dict[str, Any]) -> dict[str, Any]:
         if self.payload_builder is not None:
@@ -166,6 +174,7 @@ AGENT_REGISTRY: tuple[AgentDescriptor, ...] = (
         node_name="f_auditor",
         description="Run compliance and audit checks on financial data",
         ttl=timedelta(hours=24), priority=7, summary_order=1,
+        read_only=True,
     ),
     AgentDescriptor(
         agent_id="D", context_key="forecast", intent="CASH_FLOW_FORECAST",
@@ -173,6 +182,7 @@ AGENT_REGISTRY: tuple[AgentDescriptor, ...] = (
         ttl=timedelta(hours=1), priority=6, summary_order=4,
         payload_builder=_forecast_payload,
         aux_context_keys=("sql_result",),
+        read_only=True,
     ),
     AgentDescriptor(
         agent_id="E", context_key="watchdog_analysis", intent="BUDGET_WATCHDOG",
@@ -217,8 +227,147 @@ AGENT_REGISTRY: tuple[AgentDescriptor, ...] = (
 # Fast lookups.
 _BY_KEY: dict[str, AgentDescriptor] = {d.context_key: d for d in AGENT_REGISTRY}
 _BY_AGENT: dict[str, AgentDescriptor] = {d.agent_id: d for d in AGENT_REGISTRY}
+_BY_NODE: dict[str, AgentDescriptor] = {
+    d.node_name: d for d in AGENT_REGISTRY if d.node_name
+}
 
 _DEFAULT_TTL = timedelta(hours=1)
+
+
+def descriptor_for_agent(agent_id: str) -> AgentDescriptor | None:
+    """The registry entry for ``agent_id`` ("A".."K"), or None if unknown."""
+    return _BY_AGENT.get(agent_id)
+
+
+# ── Tool capability grants ─────────────────────────────────────────────────
+# Generalizes the pattern sql_executor.py's per-agent table allowlist already
+# proved out for one tool: a single declarative source recording which agent
+# may use which tool, and under what constraint (SQL tables / HTTP hosts /
+# RabbitMQ exchanges). An agent with no entry for a given tool is granted
+# nothing — fail-closed, matching sql_executor's existing posture.
+
+@dataclass(frozen=True)
+class ToolGrant:
+    tool: Literal["sql", "http", "events"]
+    allowed: frozenset[str]
+
+
+TOOL_GRANTS: dict[str, tuple[ToolGrant, ...]] = {
+    "D": (
+        ToolGrant("sql", frozenset({"ledger_entries", "invoices", "budgets", "expenses"})),
+    ),
+    "K": (
+        ToolGrant("sql", frozenset({"products", "stock_levels", "stock_movements"})),
+    ),
+    "E": (
+        # Narrower than D's grant — E's own queries (_fetch_recent_amounts /
+        # _fetch_recent_invoices) only ever touch these two tables. Previously
+        # E had implicit access to every agent's tables via sql_executor's old
+        # global table-union enforcement, though it never exercised more than
+        # this — this grant closes that gap without changing E's behavior.
+        ToolGrant("sql", frozenset({"ledger_entries", "invoices"})),
+        ToolGrant("events", frozenset({"finguard.intelligence"})),
+    ),
+    "I": (
+        ToolGrant("http", frozenset({
+            urlparse(settings.FX_API_URL).hostname or "",
+            "sandbox.safaricom.co.ke",
+            "api.metropol.co.ke",
+            "itax.kra.go.ke",
+        })),
+    ),
+}
+
+
+def _grant(agent_id: str, tool: str) -> frozenset[str]:
+    return frozenset().union(
+        *(g.allowed for g in TOOL_GRANTS.get(agent_id, ()) if g.tool == tool)
+    )
+
+
+def allowed_sql_tables(agent_id: str) -> frozenset[str]:
+    """Tables ``agent_id`` may reference in dynamic SQL (empty if ungranted)."""
+    return _grant(agent_id, "sql")
+
+
+def allowed_http_hosts(agent_id: str) -> frozenset[str]:
+    """Hostnames ``agent_id`` may call via the HTTP tool (empty if ungranted)."""
+    return _grant(agent_id, "http")
+
+
+def allowed_event_exchanges(agent_id: str) -> frozenset[str]:
+    """RabbitMQ exchanges ``agent_id`` may publish to (empty if ungranted)."""
+    return _grant(agent_id, "events")
+
+
+# ── Deterministic keyword router (Sprint 3 — cut per-hop LLM routing cost) ─────
+# Single source of truth for both the supervisor's initial-hop short-circuit
+# (agents/supervisor.py) and the fast-path bypass (orchestrator.try_fast_path),
+# so the two never diverge. A clear single-agent intent skips the model routing
+# call entirely: each entry is (node_name, keyword/phrase set); the initial user
+# message is scored against every set and a *strict* single winner (score ≥ 1,
+# no tie) short-circuits the LLM. Ambiguous / multi-agent intents return None.
+_KEYWORD_ROUTES: tuple[tuple[str, frozenset[str]], ...] = (
+    ("a_generator", frozenset({"extract invoice", "parse invoice", "generate invoice",
+                               "invoice from", "scan invoice"})),
+    ("b_classifier", frozenset({"classify", "categorize", "categorise",
+                                "classification", "categorization"})),
+    ("c_reconciler", frozenset({"reconcile", "reconciliation", "match payment",
+                                "match the payment", "mpesa", "bank statement"})),
+    ("d_forecaster", frozenset({"forecast", "cash flow", "cashflow", "runway",
+                                "projection", "project cash", "burn rate",
+                                "cash burn", "burn"})),
+    ("e_watchdog", frozenset({"budget", "watchdog", "anomaly", "overspend",
+                              "duplicate invoice", "over budget"})),
+    ("f_auditor", frozenset({"tax", "vat", "kra", "tax audit", "tax compliance",
+                             "corporate income tax"})),
+    ("g_reporter", frozenset({"bankability", "credit strategy", "credit score",
+                              "loan readiness", "credit report"})),
+    ("h_advisor", frozenset({"advice", "advise", "recommend", "what should i",
+                             "should i", "recommendation"})),
+    ("i_integrator", frozenset({"exchange rate", "fx rate", "forex",
+                                "external data", "credit bureau"})),
+    ("j_summarizer", frozenset({"executive summary", "summarize", "summarise",
+                                "summary of", "overview"})),
+    ("k_stockkeeper", frozenset({"stock", "inventory", "sku", "reorder",
+                                 "stock level", "out of stock", "restock",
+                                 "low stock", "stockout", "on hand", "on-hand"})),
+)
+
+
+def heuristic_route(intent_text: str) -> str | None:
+    """Return the single clear agent node for ``intent_text``, or None if ambiguous.
+
+    ``intent_text`` should already be normalised (lowercased, whitespace
+    collapsed) by the caller — see ``agents/supervisor._normalise_intent``.
+    """
+    if not intent_text:
+        return None
+    scored: list[tuple[int, str]] = []
+    for node, keywords in _KEYWORD_ROUTES:
+        score = sum(1 for kw in keywords if kw in intent_text)
+        if score:
+            scored.append((score, node))
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        return None  # tie — let the model decide
+    return scored[0][1]
+
+
+def read_only_route(intent_text: str) -> str | None:
+    """``heuristic_route``'s match, but only if that agent is tagged ``read_only``.
+
+    Used by ``orchestrator.try_fast_path`` to gate the supervisor bypass — a
+    clean single-agent match on a write-capable agent (e.g. k_stockkeeper)
+    still returns None here and falls through to the full graph.
+    """
+    node = heuristic_route(intent_text)
+    if node is None:
+        return None
+    desc = _BY_NODE.get(node)
+    return node if desc is not None and desc.read_only else None
 
 
 def resolve_artifacts(context: dict[str, Any]) -> list[ResolvedArtifact]:

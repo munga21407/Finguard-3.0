@@ -140,12 +140,12 @@ async def _fetch_upcoming_invoices(
             SUM(balance_due::float)  AS total_due
         FROM invoices
         WHERE status IN ('SENT', 'OVERDUE', 'PARTIALLY_PAID')
-          AND due_date BETWEEN NOW() AND NOW() + CAST(:interval AS interval)
+          AND due_date BETWEEN NOW() AND NOW() + (:horizon_days * INTERVAL '1 day')
           AND balance_due > 0
         GROUP BY due_date::date
         ORDER BY due_date ASC
     """)
-    result = await session.execute(sql, {"interval": f"{horizon_days} days"})
+    result = await session.execute(sql, {"horizon_days": horizon_days})
     return [{"date": str(row[0]), "amount": float(row[1])} for row in result.fetchall()]
 
 
@@ -293,7 +293,7 @@ async def _cove_text_to_sql(user_query: str, *, verify: bool = True) -> CoVeSQLQ
     results: list[dict[str, Any]] | None = None
     if approved:
         try:
-            results = await execute_readonly_sql(draft.sql_query)
+            results = await execute_readonly_sql(draft.sql_query, agent_id="D")
             logger.info(
                 "d_forecaster: CoVe SQL executed",
                 rows=len(results),

@@ -102,5 +102,4 @@ jobs:
       # 3) Smoke-test readiness; on failure, roll back to the previous SHA.
       - name: Smoke test
         run: |
-          echo "curl -fsS https://${{ secrets.PROD_HOST }}/health/ready"
-          # curl -fsS "https://${{ secrets.PROD_HOST }}/health/ready" || exit 1
+          curl -fsS "https://${{ secrets.PROD_HOST }}/health/ready" || exit 1

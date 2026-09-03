@@ -35,7 +35,7 @@ from pydantic import BaseModel, ValidationError
 from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import SUPERVISOR_ROUTES
-from src.domains.intelligence.agent_registry import supervisor_agent_table
+from src.domains.intelligence.agent_registry import heuristic_route, supervisor_agent_table
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.supervisor import (
     SUPERVISOR_HUMAN,
@@ -49,37 +49,6 @@ VALID_NEXT = frozenset({
     "e_watchdog", "f_auditor", "g_reporter", "h_advisor",
     "i_integrator", "j_summarizer", "k_stockkeeper", "FINISH",
 })
-
-# ── Deterministic keyword router (Sprint 3 — cut per-hop LLM routing cost) ─────
-# A clear single-agent intent skips the the model routing call entirely. Each entry
-# is (agent_node, keyword/phrase set); the initial user message is scored against
-# every set and a *strict* single winner (score ≥ 1, no tie) short-circuits the
-# LLM. Ambiguous / multi-agent intents fall through to the model as before.
-_KEYWORD_ROUTES: tuple[tuple[str, frozenset[str]], ...] = (
-    ("a_generator", frozenset({"extract invoice", "parse invoice", "generate invoice",
-                               "invoice from", "scan invoice"})),
-    ("b_classifier", frozenset({"classify", "categorize", "categorise",
-                                "classification", "categorization"})),
-    ("c_reconciler", frozenset({"reconcile", "reconciliation", "match payment",
-                                "match the payment", "mpesa", "bank statement"})),
-    ("d_forecaster", frozenset({"forecast", "cash flow", "cashflow", "runway",
-                                "projection", "project cash"})),
-    ("e_watchdog", frozenset({"budget", "watchdog", "anomaly", "overspend",
-                              "duplicate invoice", "over budget"})),
-    ("f_auditor", frozenset({"tax", "vat", "kra", "tax audit", "tax compliance",
-                             "corporate income tax"})),
-    ("g_reporter", frozenset({"bankability", "credit strategy", "credit score",
-                              "loan readiness", "credit report"})),
-    ("h_advisor", frozenset({"advice", "advise", "recommend", "what should i",
-                             "should i", "recommendation"})),
-    ("i_integrator", frozenset({"exchange rate", "fx rate", "forex",
-                                "external data", "credit bureau"})),
-    ("j_summarizer", frozenset({"executive summary", "summarize", "summarise",
-                                "summary of", "overview"})),
-    ("k_stockkeeper", frozenset({"stock", "inventory", "sku", "reorder",
-                                 "stock level", "out of stock", "restock",
-                                 "low stock", "stockout", "on hand", "on-hand"})),
-)
 
 # Bounded cache of the initial routing decision, keyed by normalised intent text,
 # so repeated identical intents skip even the the model call. Process-global; only
@@ -97,23 +66,6 @@ def _first_intent_text(messages: list[Any]) -> str:
         if isinstance(m, HumanMessage):
             return _normalise_intent(str(m.content))
     return ""
-
-
-def _heuristic_route(intent_text: str) -> str | None:
-    """Return the single clear agent for ``intent_text``, or None if ambiguous."""
-    if not intent_text:
-        return None
-    scored: list[tuple[int, str]] = []
-    for node, keywords in _KEYWORD_ROUTES:
-        score = sum(1 for kw in keywords if kw in intent_text)
-        if score:
-            scored.append((score, node))
-    if not scored:
-        return None
-    scored.sort(reverse=True)
-    if len(scored) > 1 and scored[0][0] == scored[1][0]:
-        return None  # tie — let the model decide
-    return scored[0][1]
 
 
 def _cache_get(intent_text: str) -> str | None:
@@ -291,7 +243,7 @@ def make_supervisor_node(llm: Any = None) -> Any:  # llm kept for signature comp
             cached = _cache_get(intent_text)
             if cached is not None and cached in VALID_NEXT:
                 return _route(cached, f"Cached route → {cached}", "cache")
-            heuristic = _heuristic_route(intent_text)
+            heuristic = heuristic_route(intent_text)
             if heuristic is not None:
                 _cache_put(intent_text, heuristic)
                 return _route(heuristic, f"Keyword route → {heuristic}", "heuristic")

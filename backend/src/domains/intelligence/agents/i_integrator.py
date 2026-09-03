@@ -354,7 +354,7 @@ def make_i_integrator_node(llm: Any = None) -> Any:  # llm kept for signature co
         kra_pin: str = ctx.get("kra_pin", "")
         manual_credit: dict[str, Any] | None = ctx.get("manual_credit_score")
         manual_kra: dict[str, Any] | None = ctx.get("manual_kra_status")
-        caller = make_http_caller(timeout=20.0)
+        caller = make_http_caller(agent_id="I", timeout=20.0)
 
         # ── 1. FX rates (first — needed for normalisation) ────────────────────
         try:

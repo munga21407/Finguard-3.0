@@ -166,8 +166,8 @@ def test_soft_dependency_not_pulled_into_plan() -> None:
 
 
 def test_supervisor_routes_stock_queries_to_k() -> None:
-    assert sup._heuristic_route("what is my current stock level for sugar") == "k_stockkeeper"
-    assert sup._heuristic_route("which products are low stock and need a reorder") == "k_stockkeeper"
+    assert sup.heuristic_route("what is my current stock level for sugar") == "k_stockkeeper"
+    assert sup.heuristic_route("which products are low stock and need a reorder") == "k_stockkeeper"
     assert "k_stockkeeper" in sup.VALID_NEXT
 
 

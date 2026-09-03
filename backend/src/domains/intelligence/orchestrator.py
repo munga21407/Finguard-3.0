@@ -18,12 +18,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import HumanMessage
 from langgraph.errors import (
     GraphRecursionError as GraphRecursionError,  # explicit re-export for callers
 )
 from langgraph.graph import END, START, StateGraph
 
 from src.core.config import settings
+from src.domains.intelligence.agent_registry import read_only_route
 from src.domains.intelligence.agents.a_generator import make_a_generator_node
 from src.domains.intelligence.agents.b_classifier import make_b_classifier_node
 from src.domains.intelligence.agents.c_reconciler import make_c_reconciler_node
@@ -48,6 +50,7 @@ from src.domains.intelligence.agents.receipt_scanner import (
 from src.domains.intelligence.agents.supervisor import make_supervisor_node
 from src.domains.intelligence.llm_client import agent_context
 from src.domains.intelligence.schemas import OrchestratorState
+from src.infrastructure.database.checkpointer import get_checkpointer
 
 
 def _tracked(name: str, node: Any) -> Any:
@@ -123,22 +126,100 @@ def build_receipt_graph() -> Any:
     return workflow.compile()
 
 
+# Node factories eligible for the fast-path bypass — keep in sync with the
+# `read_only=True` entries in agent_registry.AGENT_REGISTRY.
+_FAST_PATH_NODE_FACTORIES: dict[str, Any] = {
+    "d_forecaster": make_d_forecaster_node,
+    "f_auditor": make_f_auditor_node,
+}
+
+
+def build_fast_path_graph(node_name: str) -> Any:
+    """
+    Single-agent bypass graph for a read-only domain agent (Agent D / F today).
+
+    Topology: START → <node_name> → hub_writer → END
+
+    Mirrors build_invoice_graph/build_receipt_graph (no supervisor node), but
+    — unlike them — compiles with checkpointer=get_checkpointer() so a
+    fast-pathed run's replay/resume behaviour stays consistent with the full
+    graph's (see try_fast_path / orchestrator module docstring plan notes).
+    """
+    factory = _FAST_PATH_NODE_FACTORIES[node_name]
+    workflow = StateGraph(OrchestratorState)
+    workflow.add_node(node_name, _tracked(node_name, factory()))
+    workflow.add_node("hub_writer", _tracked("hub_writer", make_hub_writer_node()))
+    workflow.add_edge(START, node_name)
+    workflow.add_edge(node_name, "hub_writer")
+    workflow.add_edge("hub_writer", END)
+    return workflow.compile(checkpointer=get_checkpointer())
+
+
+def _first_human_text(messages: list[Any]) -> str:
+    for m in messages:
+        if isinstance(m, HumanMessage):
+            return " ".join(str(m.content).lower().split())
+    return ""
+
+
+async def try_fast_path(state: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Classify ``state``'s initial intent and, if it strictly matches exactly one
+    read-only agent (agent_registry.read_only_route), run that agent directly
+    via build_fast_path_graph — skipping the supervisor graph entirely.
+
+    Returns the final graph state on a fast-path hit, or None if the intent is
+    ambiguous, multi-domain, or not tagged read_only — callers should fall back
+    to the normal build_graph()/run_graph() path unchanged in that case.
+
+    Never fires if state["context"]["requested_agent"] is already set — that's
+    a different, existing short-circuit honoured inside the supervisor node
+    itself (see agents/supervisor.py), and callers that already know their
+    target agent explicitly (service.py._dispatch_agent) check
+    agent_registry.descriptor_for_agent(...).read_only directly instead of
+    going through this classifier.
+    """
+    if state.get("context", {}).get("requested_agent"):
+        return None
+    node_name = read_only_route(_first_human_text(state.get("messages", [])))
+    if node_name is None:
+        return None
+    graph = build_fast_path_graph(node_name)
+    return await graph.ainvoke(state, config=graph_config(state["session_id"]))
+
+
 _RECURSION_LIMIT = 25   # maximum supervisor ↔ agent round-trips per session
+
+
+def graph_config(session_id: str) -> dict[str, Any]:
+    """Shared LangGraph run config: recursion ceiling + checkpointer thread_id.
+
+    ``thread_id`` is only meaningful when a checkpointer is actually compiled
+    into the graph (``LANGGRAPH_CHECKPOINTING_ENABLED``); harmless to always
+    set it otherwise. ``session_id`` doubles as ``thread_id`` — every call
+    site already mints a fresh one per run (see ``run_graph``/callers), so a
+    checkpointed run and its thread are 1:1 today (no cross-request resume
+    beyond the explicit resume path in ``routers/conversations.py``).
+    """
+    return {
+        "recursion_limit": _RECURSION_LIMIT,
+        "configurable": {"thread_id": session_id},
+    }
 
 
 async def run_graph(state: dict[str, Any]) -> dict[str, Any]:
     """
     Invoke the full supervisor graph with the native LangGraph recursion limit.
 
-    Centralises the ``{"recursion_limit": _RECURSION_LIMIT}`` config so every
-    call site (HTTP router, background task, tests) uses the same ceiling.
+    Centralises the run config so every call site (HTTP router, background
+    task, tests) uses the same ceiling and checkpointer thread_id.
 
     Raises:
         GraphRecursionError — if the graph exceeds _RECURSION_LIMIT hops.
             Callers should catch this and return a 508 / degraded response.
     """
     graph = build_graph()
-    return await graph.ainvoke(state, config={"recursion_limit": _RECURSION_LIMIT})
+    return await graph.ainvoke(state, config=graph_config(state["session_id"]))
 
 
 def build_graph() -> Any:
@@ -201,4 +282,4 @@ def build_graph() -> Any:
         workflow.add_edge("hub_writer", "supervisor")
 
     workflow.set_entry_point("supervisor")
-    return workflow.compile()
+    return workflow.compile(checkpointer=get_checkpointer())

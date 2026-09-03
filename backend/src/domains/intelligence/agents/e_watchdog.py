@@ -257,22 +257,37 @@ async def _fetch_spending_ratios(
     session: Any,
     period_days: int = 30,
 ) -> list[float]:
-    """Query daily spending vs active budget; return list of ratios."""
-    since = (datetime.now(UTC) - timedelta(days=period_days)).isoformat()
+    """Query daily spending vs active budget; return list of ratios.
+
+    ``account_id`` is optional — nothing in the chat flow populates
+    ``context["account_id"]`` today (this is a single-ledger app; see
+    d_forecaster's equivalent queries, which never filter by it either), so an
+    empty string must NOT be bound against the ``account_id`` UUID column
+    (asyncpg rejects that at bind time, crashing the whole node). Filter by it
+    only when a real value is supplied, for forward compatibility.
+    """
+    # A native datetime, not .isoformat() — asyncpg binds this against a
+    # timestamptz column and rejects a plain string at bind time.
+    since = datetime.now(UTC) - timedelta(days=period_days)
+    params: dict[str, Any] = {"since": since}
+    account_filter = ""
+    if account_id:
+        account_filter = "AND le.account_id = :account_id"
+        params["account_id"] = account_id
 
     spending_result = await session.execute(
-        text("""
+        text(f"""
             SELECT
                 DATE_TRUNC('day', le.created_at) AS day,
                 SUM(le.amount)                   AS spent
             FROM ledger_entries le
-            WHERE le.account_id = :account_id
-              AND le.transaction_type = 'DEBIT'
+            WHERE le.transaction_type = 'DEBIT'
               AND le.created_at >= :since
+              {account_filter}
             GROUP BY 1
             ORDER BY 1
         """),
-        {"account_id": account_id, "since": since},
+        params,
     )
     rows = spending_result.mappings().all()
 
@@ -304,7 +319,7 @@ async def _fetch_recent_amounts(limit: int = 50) -> list[float]:
         WHERE transaction_type = 'DEBIT'
         ORDER BY created_at DESC
         LIMIT {limit}
-    """)
+    """, agent_id="E")
     return [float(r["amount"]) for r in rows]
 
 
@@ -316,7 +331,7 @@ async def _fetch_recent_invoices(limit: int = 30) -> list[dict[str, Any]]:
         FROM invoices
         ORDER BY created_at DESC
         LIMIT {limit}
-    """)
+    """, agent_id="E")
     return [dict(r) for r in rows]
 
 
@@ -479,7 +494,7 @@ def make_e_watchdog_node(llm: Any = None) -> Any:  # llm kept for signature comp
         event_published = False
         if (anomaly_detected or iso_is_anomaly or iso_score > 0.7) and mode == "actions":
             try:
-                publisher = make_event_publisher(mode)
+                publisher = make_event_publisher(mode, agent_id="E")
                 await publisher.ainvoke({
                     "exchange": "finguard.intelligence",
                     "routing_key": "intelligence.watchdog.anomaly",

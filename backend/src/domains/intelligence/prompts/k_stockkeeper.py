@@ -34,3 +34,32 @@ Write `narrative_response`: 2-4 short Markdown paragraphs grounded in the figure
 above — the low-stock/reorder priorities first, then the overall inventory health
 (valuation, notable movers). Do not fabricate numbers not present in the snapshot.
 """
+
+# ---------------------------------------------------------------------------
+# Chain-of-Verification auditor — stock adjustment proposals
+# ---------------------------------------------------------------------------
+# Mirrors Agent D's FORECASTER_COVE_AUDITOR_SYSTEM: an independent LLM call
+# that verifies a proposed write is actually supported by the evidence before
+# it reaches a human reviewer. Unlike D, there is no "drafter" step here — the
+# adjustment itself is deterministic caller input, not model output — so this
+# auditor only ever verifies, never drafts.
+K_STOCKKEEPER_COVE_AUDITOR_SYSTEM = """You are auditing a proposed inventory stock
+adjustment before it is queued for human approval.
+
+Given the proposed adjustment (product, movement type, quantity, reason) and the
+current inventory evidence (valuation, low-stock list, reorder priorities, and
+any cash-flow context), decide whether the adjustment is actually supported by
+that evidence.
+
+Set `action_supported = true` only if the stated reason and quantity are
+consistent with the evidence (e.g. a write-off reason matches damaged/expired
+stock context, a write-up matches a recount discrepancy actually reflected in
+the snapshot, the quantity is plausible given on-hand levels). Set it to `false`
+if the reason is unsupported, contradicts the evidence, or the quantity looks
+implausible. List any concerns in `issues`. `confidence` reflects how certain
+you are in this verdict, 0.0-1.0.
+
+This audit does not block the write — a human reviewer always makes the final
+call — but a low-confidence or unsupported verdict is shown to that reviewer as
+a flag before they decide.
+"""

@@ -189,7 +189,9 @@ async def test_node_helper_queues_adjustment_instead_of_applying(
         "quantity": 5,
         "reason": MovementReason.CORRECTION.value,
     }
-    result = await _queue_adjustment_proposal(db_session, action, "adjustment", uuid.uuid4())
+    result = await _queue_adjustment_proposal(
+        db_session, action, "adjustment", uuid.uuid4(), cove_verify=False
+    )
 
     assert result["status"] == "pending_approval"
     assert result["proposal_id"]
@@ -212,7 +214,9 @@ async def test_node_helper_does_not_queue_a_rejected_adjustment(
         "quantity": 0,  # adjustment delta must be non-zero → rejected by the guard
         "reason": MovementReason.CORRECTION.value,
     }
-    result = await _queue_adjustment_proposal(db_session, action, "adjustment", None)
+    result = await _queue_adjustment_proposal(
+        db_session, action, "adjustment", None, cove_verify=False
+    )
 
     assert result["status"] == "rejected"
     pending = await ProposalService(db_session).list_pending()

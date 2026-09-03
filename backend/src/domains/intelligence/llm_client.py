@@ -81,25 +81,48 @@ _provider: BaseLLMClient | None = None
 
 
 def _build_client() -> BaseLLMClient:
-    """Assemble the failover client: Fireworks primary + optional Featherless backup.
+    """Assemble the failover client: primary + optional Featherless backup.
 
-    The primary runs Gemma 4 on a dedicated (scale-to-zero) Fireworks deployment
-    using strict ``json_schema`` structured output. When ``FEATHERLESS_API_KEY`` is
-    set, an always-warm Featherless backup of the same Gemma 4 family is attached;
-    it uses ``json_object`` structured output (Featherless does not enforce
-    ``json_schema``). Leave the key blank for a Fireworks-only (no-failover) setup.
+    The primary is Gemini (Google's OpenAI-compatible endpoint) when
+    ``GEMINI_API_KEY`` is set; otherwise it falls back to Fireworks, which runs
+    Gemma 4 on a dedicated (scale-to-zero) deployment using strict
+    ``json_schema`` structured output. When ``FEATHERLESS_API_KEY`` is set, an
+    always-warm Featherless backup of the Gemma 4 family is attached regardless
+    of which primary is active; it uses ``json_object`` structured output
+    (Featherless does not enforce ``json_schema``). Leave both primary keys
+    blank and nothing will answer; leave FEATHERLESS_API_KEY blank for a
+    primary-only (no-failover) setup.
+
+    Gemini's thinking-mode-off request shape isn't verified, so its spec leaves
+    ``extra_body`` empty (Gemini's default thinking behavior applies) rather
+    than guessing at an unconfirmed field. Embeddings are NOT wired for Gemini —
+    ``EMBEDDING_MODEL``/``EMBEDDING_DIMENSIONS`` stay Fireworks-only regardless
+    of which provider is primary, so ``embed()`` still requires FIREWORKS_API_KEY.
     """
-    primary = OpenAICompatLLMClient(
-        ProviderSpec(
-            name="fireworks",
-            api_key=settings.FIREWORKS_API_KEY,
-            base_url=settings.LLM_API_BASE,
-            model=settings.LLM_MODEL,
-            structured_mode="json_schema",
-            embedding_model=settings.EMBEDDING_MODEL,
-            embedding_dimensions=settings.EMBEDDING_DIMENSIONS,
+    if settings.GEMINI_API_KEY:
+        primary = OpenAICompatLLMClient(
+            ProviderSpec(
+                name="gemini",
+                api_key=settings.GEMINI_API_KEY,
+                base_url=settings.GEMINI_API_BASE,
+                model=settings.GEMINI_MODEL,
+                structured_mode="json_schema",
+                embedding_model=None,
+                extra_body={},
+            )
         )
-    )
+    else:
+        primary = OpenAICompatLLMClient(
+            ProviderSpec(
+                name="fireworks",
+                api_key=settings.FIREWORKS_API_KEY,
+                base_url=settings.LLM_API_BASE,
+                model=settings.LLM_MODEL,
+                structured_mode="json_schema",
+                embedding_model=settings.EMBEDDING_MODEL,
+                embedding_dimensions=settings.EMBEDDING_DIMENSIONS,
+            )
+        )
     backup: BaseLLMClient | None = None
     if settings.FEATHERLESS_API_KEY:
         backup = OpenAICompatLLMClient(

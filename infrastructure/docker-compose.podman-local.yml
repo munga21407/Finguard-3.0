@@ -1,0 +1,3 @@
+services:
+  rabbitmq:
+    user: "100:101"

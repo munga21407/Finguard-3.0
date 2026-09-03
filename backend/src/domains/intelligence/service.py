@@ -143,7 +143,12 @@ class IntelligenceService:
         The surrounding `run_agent` already handles AgentRun status writes and
         the session commit, so this method only needs to return the final output.
         """
-        from src.domains.intelligence.orchestrator import build_graph
+        from src.domains.intelligence.agent_registry import descriptor_for_agent
+        from src.domains.intelligence.orchestrator import (
+            build_fast_path_graph,
+            build_graph,
+            graph_config,
+        )
 
         session_id = str(_uuid.uuid4())
         query = input_data.get("query", input_data.get("intent", agent_name))
@@ -159,9 +164,17 @@ class IntelligenceService:
             "mode": input_data.get("mode", "insights"),
         }
 
+        # The caller already named agent_name explicitly, so no classification
+        # is needed — a read-only agent (Agent D/F today) skips the supervisor
+        # graph entirely rather than paying a full round-trip just to route to
+        # itself and immediately FINISH.
+        descriptor = descriptor_for_agent(agent_name)
         try:
-            graph = build_graph()
-            final_state = await graph.ainvoke(initial_state)
+            if descriptor is not None and descriptor.read_only and descriptor.node_name:
+                graph = build_fast_path_graph(descriptor.node_name)
+            else:
+                graph = build_graph()
+            final_state = await graph.ainvoke(initial_state, config=graph_config(session_id))
         except Exception as exc:
             logger.error(
                 "LangGraph invocation failed",
