@@ -19,6 +19,16 @@ LLM re-deciding one hop at a time. Companion to
 > so single-agent flows are unchanged and the bankability score stays
 > ledger-derived. Other agents declare no `consumes`, so G is the whole surface
 > today. Every phase is backward-compatible with the existing single-agent flows.
+>
+> **Since (DeepSeek-harness-inspired hardening):** a **P0 fast-path** now sits
+> ahead of tier 1 (§2.3) — a clean single-agent, `read_only=True` intent (D, F
+> today) skips the supervisor node *and* graph entirely via
+> `orchestrator.try_fast_path`/`build_fast_path_graph`, not just the LLM
+> routing call. `AgentDescriptor` gained `read_only: bool` to gate it. Separately,
+> `agent_registry.TOOL_GRANTS` generalizes the registry beyond routing metadata
+> into **tool authorization** — see §4.6. Neither changes the P1–P5 multi-domain
+> design above; both compose with it (a planner-routed agent still respects its
+> own `read_only`/`TOOL_GRANTS` entries).
 
 ---
 
@@ -80,11 +90,20 @@ Each agent writes its result under a well-known key: `context["forecast"]`,
 `agent_registry.AGENT_REGISTRY` already names these keys — but only for
 **persistence and summary ordering**, not for consumption.
 
-### 2.3 Routing — three tiers (`agents/supervisor.py`)
+### 2.3 Routing — four tiers (`orchestrator.py`, `agents/supervisor.py`)
 
+0. **Fast-path bypass** (`orchestrator.try_fast_path`) — a clean single-agent
+   match via `agent_registry.read_only_route` on a `read_only=True` agent (D, F
+   today) skips the supervisor node *and the graph traversal itself*:
+   `build_fast_path_graph(node_name)` runs `START → <agent> → hub_writer → END`
+   directly, with no supervisor round-trip at all. Strictly narrower than tier 1
+   below — it never fires if `context["requested_agent"]` is already set (that
+   short-circuit is honoured inside the supervisor node instead, tier 1), and
+   never fires for a write-capable agent even on a clean keyword match.
 1. **`requested_agent` short-circuit** — caller names the first agent; 0 LLM calls.
-2. **Deterministic keyword router + LRU cache** (`_KEYWORD_ROUTES`) — a strict,
-   tie-free single winner skips Gemini entirely.
+2. **Deterministic keyword router + LRU cache** (`agent_registry.heuristic_route`,
+   shared with tier 0 above so the two never diverge) — a strict, tie-free
+   single winner skips Gemini entirely.
 3. **Gemini structured-output router** — ambiguous / multi-agent intents only;
    returns `{next, reason}` validated against `VALID_NEXT`.
 
@@ -355,6 +374,49 @@ adding an agent updates the router prompt automatically and the "single-entry to
 add an agent" invariant extends to routing. Deferred — it's a refinement, not a
 prerequisite for the DAG.
 
+### 4.6 Tool capability grants (implemented)
+
+A different axis from routing/`consumes`: which agent may use which *tool*, and
+under what constraint. `sql_executor.py` had this narrowly, for one tool, since
+Sprint 1 (`_AGENT_ALLOWED_TABLES`) — but enforcement was a **global union**
+across every agent, not per-caller, so Agent E had de-facto access to every
+other agent's tables despite never being declared in that dict (it never used
+more than `ledger_entries`/`invoices`, but nothing stopped it). Generalized:
+
+```python
+# agent_registry.py
+@dataclass(frozen=True)
+class ToolGrant:
+    tool: Literal["sql", "http", "events"]
+    allowed: frozenset[str]
+
+TOOL_GRANTS: dict[str, tuple[ToolGrant, ...]] = {
+    "D": (ToolGrant("sql", frozenset({"ledger_entries", "invoices", "budgets", "expenses"})),),
+    "K": (ToolGrant("sql", frozenset({"products", "stock_levels", "stock_movements"})),),
+    "E": (
+        ToolGrant("sql", frozenset({"ledger_entries", "invoices"})),   # scoped to what E actually queries
+        ToolGrant("events", frozenset({"finguard.intelligence"})),
+    ),
+    "I": (ToolGrant("http", frozenset({...})),),   # M-Pesa/Metropol/KRA/FX hosts
+}
+```
+
+`allowed_sql_tables`/`allowed_http_hosts`/`allowed_event_exchanges` are the
+accessors; an agent with no entry for a tool is granted nothing (fail-closed,
+matching `sql_executor`'s pre-existing posture). Enforcement is **additive**,
+never a replacement for an existing safety check: `sql_executor.execute_readonly_sql`
+still runs the same sqlglot AST walk, just against the *caller's* table set
+instead of the global union; `http_caller.make_http_caller`'s per-agent host
+check runs strictly after the SSRF/DNS-pinning guard; `event_publisher`'s
+per-agent exchange check narrows, never widens, the existing hardcoded
+`ALLOWED_EXCHANGES` ceiling. `inventory_tools`/`mongo_reader`/`vision_ocr`
+deliberately have no grant — the first's only write path is already gated by
+mandatory `ProposalService` HITL (a stronger control), the second has zero
+callers, the third never touches SQL/HTTP/events directly.
+
+**Files:** `agent_registry.py` (`ToolGrant`, `TOOL_GRANTS`, accessors),
+`tools/sql_executor.py`, `tools/http_caller.py`, `tools/event_publisher.py`.
+
 ---
 
 ## 5. Worked example
@@ -424,6 +486,15 @@ is one round-trip instead of two). Validate against the existing supervisor eval
   (extend `test_supervisor_routing_judge` / `test_supervisor_trajectory`).
 - **Concurrency:** two same-stage agents land distinct keys under `merge_context`
   with no lost writes.
+- **Fast-path (§2.3 tier 0):** `test_orchestrator_fast_path.py` — a clean
+  `read_only` match skips the graph (zero `supervisor`-named messages, one
+  agent + `hub_writer`); a non-`read_only` match or a tie still falls through
+  to the full graph; `requested_agent` in context defers to tier 1 instead.
+- **Tool grants (§4.6):** `test_agent_registry_tool_grants.py` (pure accessor
+  unit tests, including the fail-closed unknown-agent case),
+  `test_sql_executor_agent_scoping.py` (the Agent-E over-grant regression
+  guard), extended `test_http_caller_ssrf.py` / new
+  `test_event_publisher_scoping.py` for the per-agent host/exchange checks.
 
 ---
 

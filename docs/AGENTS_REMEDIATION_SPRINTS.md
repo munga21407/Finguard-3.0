@@ -41,6 +41,10 @@ is by *leverage × dependency*, not hard requirement.
 | 25 | OCR accuracy is the ceiling; tiny category set | A, Receipt | S6 |
 | — | Single-jurisdiction (Kenya only) | F, G | Backlog (see §7) |
 
+*Sprint 7 (tool-capability registry, VC-signed proposal decisions) isn't in this
+table — it doesn't trace back to a con here; see the Sprint 7 section below for
+its own provenance.*
+
 ---
 
 ## Sprint 1 — Externalize domain constants  *(highest leverage)*
@@ -96,6 +100,24 @@ current behavior; changing a value requires no redeploy; validator rejects nonse
 > (`test_agent_hub_writer.py`) proves a new agent surfaces in hub + J from one
 > registry entry with zero edits to either module. 33 unit tests + full suite
 > 185 passed (1 pre-existing Redis fail).
+> - **Addendum (DeepSeek-harness-inspired hardening, later):** extended the same
+>   decoupling philosophy to `hub_writer_node`'s own *internal* behavior — it was
+>   still one monolithic function body (message compaction, GenUI persistence,
+>   insight persistence all inline). Split into independent `HubWriterStep`
+>   functions run against a shared read-only `_StepContext`, registered in an
+>   ordered `HUB_WRITER_STEPS` list — a new cross-cutting concern (e.g. the
+>   compaction step below) attaches as one more registry entry, matching S2's
+>   "one entry, zero edits elsewhere" contract but applied to hub_writer's own
+>   logic rather than just the agent↔hub_writer mapping. Also added a message
+>   **compaction** step: `state["messages"]` is append-only with no built-in
+>   limit (a gap this sprint's original scope didn't cover); past a threshold,
+>   redundant repeat-visits from the same agent are pruned via LangGraph's
+>   `RemoveMessage`, keeping every `HumanMessage` and the most-recent message
+>   per agent name so the cycle guard's stall-detection can't be affected.
+>   Tests: `test_agent_hub_writer.py` (+7: 2 registry-extension tests, 5
+>   compaction tests) + `test_message_reconstructibility_invariant.py` (2 —
+>   proves a pruned message is still recoverable from LangGraph checkpoint
+>   history, and documents that this depends on checkpointing being enabled).
 
 **Goal:** Adding a new agent should be *one* declarative registration, not edits
 across `hub_writer`, its TTL maps, and Agent J's key lists.
@@ -137,6 +159,21 @@ untouched; multi-agent sessions persist every produced artifact; existing tests 
 >   dashboards: the `agent_supervisor_routes_total` + existing per-agent cost
 >   metrics are emitted; the dashboard JSON itself is unbuilt.
 > Full suite: 199 passed (1 pre-existing Redis fail).
+> - **Addendum (DeepSeek-harness-inspired hardening, later):** S3-1's keyword
+>   router only ever cut the supervisor's *LLM call* — the graph still paid a
+>   full `supervisor → agent → hub_writer → supervisor → END` round-trip even
+>   for a zero-LLM-call route. `orchestrator.try_fast_path` now skips the
+>   **graph traversal itself** for a clean single-agent match on a `read_only`
+>   agent (D, F): `build_fast_path_graph(node_name)` runs `START → agent →
+>   hub_writer → END` directly, reusing the exact same keyword table
+>   (`agent_registry.heuristic_route`, extracted from `supervisor.py` so both
+>   paths share one classifier) gated by a new `AgentDescriptor.read_only`
+>   flag so a write-capable agent (K) never gets fast-pathed even on a clean
+>   match. Wired into all three call sites that build a graph
+>   (`service.py`, `routers/_common.py`, `routers/conversations.py`).
+>   Tests: `test_orchestrator_fast_path.py` (7 tests). Intelligence suite
+>   after this addendum + Sprint 2's hub_writer/compaction addendum: 341
+>   passed (1 pre-existing Redis fail).
 
 **Goal:** Cut per-session LLM spend/latency and remove the algorithmic/dependency hot spots.
 
@@ -181,6 +218,19 @@ benchmarked faster at 10× volume; no regression in output quality on the eval s
 >   now fixed to use `AuditorTuning`. Added `tests/evals/conftest.py` so the
 >   deterministic evals run without Postgres. Evals: 43 passed / 3 nightly-skipped;
 >   intelligence suite 208 passed. `schema.d.ts` regenerated (ReceiptExtraction).
+> - **Addendum (DeepSeek-harness-inspired hardening, later):** S4-6's
+>   "self-grading isn't the only gate" pattern (LLM verdict + a deterministic
+>   override) extended to a third agent that didn't exist when this sprint was
+>   scoped — **Agent K**. `_cove_verify_stock_action` audits a proposed stock
+>   adjustment against the same inventory evidence K already gathered, mirroring
+>   D's CoVe shape but as a pure verifier (K's action is deterministic caller
+>   input, not model output, so there's nothing to draft). Unlike D's audit
+>   (which gates whether the SQL executes), K's write already requires human
+>   approval either way — an unsupported verdict is folded into the proposal's
+>   `rationale` as a flag rather than blocking, so the human reviewer sees it
+>   before deciding. Toggle: `k_cove_verify` context flag, same convention as
+>   D's `cove_verify`. Tests: `test_agent_k_stockkeeper_cove.py` (6 tests,
+>   including the deterministic-gate-overrides-a-passing-LLM-verdict case).
 
 **Goal:** Know when an agent is right, and never silently serve a degraded result.
 
@@ -295,6 +345,52 @@ carries a disclaimer + review path; low-confidence receipts get a second pass.
 
 ---
 
+## Sprint 7 — DeepSeek-harness-inspired hardening
+
+> **Status: DONE.** Unlike Sprints 1–6, these tickets don't trace back to a con
+> in `AGENTS_REPORT.md` — they came from comparing Finguard's orchestrator
+> against `deepseek-ai/deepseek-harness`'s plugin/capability-seam design and
+> picking the ideas that addressed a real, already-felt gap (see addenda on
+> Sprints 2–4 above for the routing/hub_writer/CoVe pieces of this same pass).
+> This section covers the two tickets that don't extend an earlier sprint.
+
+| Ticket | Detail | Status |
+|---|---|---|
+| S7-1 | Generalize `sql_executor.py`'s per-agent table allowlist (`_AGENT_ALLOWED_TABLES`) into a cross-tool registry (`agent_registry.TOOL_GRANTS` — SQL tables, HTTP hosts, RabbitMQ exchanges) and enforce it **per calling agent**, not a global union. | DONE |
+| S7-2 | Extend the Ed25519 VC / `trust_log` audit trail (previously Agent E's watchdog only) to human proposal-approval decisions. | DONE |
+
+**S7-1 detail — a real bug, not just tidiness:** `execute_readonly_sql()` enforced
+the *union* of every agent's declared tables regardless of caller. Agent E calls
+it twice and was never even listed in the allowlist dict, yet had de facto access
+to all 7 tables across D's and K's grants — it just happened to only ever query
+`ledger_entries`/`invoices`. `TOOL_GRANTS` closes this: `execute_readonly_sql`,
+`get_masked_schema`, `make_http_caller`, and `make_event_publisher` all now take
+the calling `agent_id` and scope to exactly its own grant. Zero behavior change
+for any agent's *actual* queries/calls — every change is a tightening of a
+previously-accidental over-grant. `inventory_tools`/`mongo_reader`/`vision_ocr`
+were deliberately left ungranted (mandatory HITL already covers the one write
+path; zero callers; no SQL/HTTP/events surface, respectively).
+Tests: `test_agent_registry_tool_grants.py` (7), `test_sql_executor_agent_scoping.py`
+(6), 2 new cases in `test_http_caller_ssrf.py`, `test_event_publisher_scoping.py`
+(4) — 19 new tests, full intelligence suite 362 passed (1 pre-existing Redis fail).
+
+**S7-2 detail:** `ProposalService.approve()`/`reject()` now call `issue_vc()`
+(the same function `e_watchdog.py` already used) after the Postgres decision is
+durably committed — best-effort, never blocking or rolling back an
+already-successful approval on a Mongo hiccup, mirroring E's existing
+call-site pattern exactly. The plain `audit_logs` row (written by the router via
+`AuditService`, unsigned) stays the system of record regardless; the VC is an
+additional, tamper-evident copy. Tests: `test_proposal_vc_audit.py` (2 — signs on
+success, never raises on `issue_vc` failure).
+
+**Files:** `agent_registry.py`, `tools/sql_executor.py`, `tools/http_caller.py`,
+`tools/event_publisher.py`, `proposal_service.py`, plus the call-site updates in
+`d_forecaster.py`, `e_watchdog.py`, `i_integrator.py`. See `docs/A2A_PROTOCOL.md`
+§4.6 for the design and `docs/AGENTS_REPORT.md` §3 for the cross-cutting strength
+this adds.
+
+---
+
 ## 7. Backlog / not-yet-scheduled
 
 - **Multi-jurisdiction tax & credit logic** (F, G). Large, strategic — depends on
@@ -312,6 +408,8 @@ S1 (config) ──▶ S3 (perf tuning needs knobs)
 S2 (decouple) ──▶ makes every later agent change cheaper
 S4 ──▶ S5 (feedback loop builds on B evals)
 S6 last — vendor-gated + depends on guardrails maturing
+S7 — independent of S1-S6; ran opportunistically alongside an external
+     harness-design comparison, addenda folded back into S2/S3/S4 above
 ```
 
 **If you can only do two sprints:** run **S1** then **S2** — together they remove the

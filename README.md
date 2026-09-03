@@ -1,6 +1,6 @@
 # FinGuard 3.0
 
-AI-powered financial operations platform for small-to-medium enterprises, with deep M-Pesa integration. Automates invoice generation, receipt scanning, transaction classification, payment reconciliation, cash-flow forecasting, budget monitoring, tax compliance, credit strategy, and financial advisory through a 10-agent LangGraph orchestration layer.
+AI-powered financial operations platform for small-to-medium enterprises, with deep M-Pesa integration. Automates invoice generation, receipt scanning, transaction classification, payment reconciliation, cash-flow forecasting, budget monitoring, tax compliance, credit strategy, financial advisory, and inventory stewardship through an 11-agent LangGraph orchestration layer.
 
 > For the full rebuild-level reference (schema, every endpoint, agent internals, design patterns), see [`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md). For scaling/architecture trade-off notes, see [`docs/SCALING.md`](./docs/SCALING.md).
 
@@ -18,10 +18,11 @@ AI-powered financial operations platform for small-to-medium enterprises, with d
 │  FastAPI Backend (port 8000)                            │
 │  Python 3.12 · LangGraph · Fireworks Gemma 4            │
 │                                                         │
-│  Supervisor/ReAct loop over 10 agents:                  │
+│  Supervisor/ReAct loop over 11 agents (fast path for    │
+│  clean single-domain read-only D/F intents):            │
 │    A Invoice   B Classifier  C Reconciler  D Forecaster │
 │    E Watchdog  F Tax Auditor G Credit      H Advisor    │
-│    I Integrator             J Summarizer                │
+│    I Integrator             J Summarizer   K Stock      │
 │  + standalone Receipt Scanner (Gemma 4 vision) graph    │
 └──────┬──────────┬──────────┬──────────┬─────────────────┘
        │          │          │          │
@@ -238,7 +239,7 @@ Finguard-3.0/
 
 ## AI Agents
 
-All agents are LangGraph nodes in a Supervisor/ReAct loop: the supervisor routes to an agent, the agent runs and writes an `InsightArtifact` to the `intelligence_hub` MongoDB collection (read-through cache), then returns to the supervisor until `FINISH`.
+All agents are LangGraph nodes in a Supervisor/ReAct loop: the supervisor routes to an agent, the agent runs and writes an `InsightArtifact` to the `intelligence_hub` MongoDB collection (read-through cache), then returns to the supervisor until `FINISH`. A clean single-agent, read-only intent for D or F skips the supervisor loop entirely via a fast path.
 
 | Agent | Name | Trigger | Method | Hub TTL |
 |---|---|---|---|---|
@@ -250,8 +251,9 @@ All agents are LangGraph nodes in a Supervisor/ReAct loop: the supervisor routes
 | F | Tax Auditor | Supervisor | Deterministic Kenya tax + pgvector RAG | 1d |
 | G | Credit Strategist | Supervisor | Holt-Winters + bankability score + NLG | 1d |
 | H | Financial Advisor | Supervisor | Gemma 4 multi-step reasoning + RBAC clip | 1h |
-| I | External Integrator | Supervisor | httpx (M-Pesa sandbox / free FX / Metropol / KRA) + SSRF guard; explicit live/manual/mock/unavailable status | 1h |
+| I | External Integrator | Supervisor | httpx (M-Pesa sandbox / free FX / Metropol / KRA) + SSRF guard + per-agent host allowlist; explicit live/manual/mock/unavailable status | 1h |
 | J | Executive Summarizer | Last before FINISH | Gemma 4 ≤5-bullet locale-aware summary | 30m |
+| K | Stock Steward | Supervisor | Deterministic inventory tools; CoVe-audited stock adjustments queued for human approval (no direct writes) | 30m |
 
 **Receipt Scanner** — a standalone two-node vision graph (`receipt_ocr → receipt_classifier`) backing `POST /intelligence/receipts/scan`. It is *not* part of the supervisor loop: it OCRs an uploaded receipt with Gemma 4 vision and suggests an expense category for the user to review, then `POST /finance/receipts` persists the confirmed expense.
 
@@ -264,6 +266,8 @@ All agents are LangGraph nodes in a Supervisor/ReAct loop: the supervisor routes
 - **Provider failover** — the LLM stack runs Gemma 4 on a Fireworks deployment (primary) with an always-warm Featherless backup of the same model family. When the scale-to-zero primary cold-starts (~3 min) or times out, calls fail over automatically (`finguard_llm_failover_total`), so users never wait; only if both providers fail does an agent degrade gracefully.
 - **Per-agent LLM observability** — every LLM call records token/cost/latency/outcome attributed to the calling agent (`agent_llm_*` Prometheus metrics); high-risk tools (Text-to-SQL, Daraja HTTP, pgvector RAG) record `agent_tool_duration_seconds`. Surfaced in the Grafana dashboard.
 - **Agent-F eval gate** — `backend/tests/evals/` runs deterministic golden tax scenarios in CI (wrong VAT/CIT/AML math fails the build), with an opt-in nightly LLM-as-judge job for narrative quality.
+- **Per-agent tool-capability grants** — `agent_registry.TOOL_GRANTS` scopes which SQL tables, HTTP hosts, and RabbitMQ exchanges each agent may use, enforced per caller (not a global ceiling) on top of the existing SQL-allowlist/SSRF/exchange guards.
+- **Signed audit trail on human decisions** — approving or rejecting an agent's proposed write now issues an Ed25519 VC to `trust_log` (same mechanism as Agent E's watchdog), alongside the existing plain `audit_logs` row.
 
 ---
 
@@ -373,5 +377,5 @@ The pre-built Grafana dashboard (`monitoring/dashboards/finguard_ai_overview.jso
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` · `GET /health/live` | Liveness — process is up (always 200) |
-| `GET /health/ready` | Readiness — checks PostgreSQL + Redis (503 when degraded) |
+| `GET /health/ready` | Readiness — checks PostgreSQL + Redis + MongoDB, RabbitMQ soft-checked (503 when degraded). This is Railway's deploy-gating healthcheck; the container-level `Dockerfile HEALTHCHECK` intentionally stays on `/health/live` |
 | `GET /metrics` | Prometheus metrics (Bearer-protected when `METRICS_AUTH_SECRET` is set) |

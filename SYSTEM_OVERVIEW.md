@@ -11,7 +11,7 @@
 3. [Tech Stack](#3-tech-stack)
 4. [Infrastructure & Services](#4-infrastructure--services)
 5. [Database Schema](#5-database-schema)
-6. [AI Agents (A–J)](#6-ai-agents-aj)
+6. [AI Agents (A–K)](#6-ai-agents-ak)
 7. [Orchestrator & State Machine](#7-orchestrator--state-machine)
 8. [API Routes](#8-api-routes)
 9. [Frontend Pages & Components](#9-frontend-pages--components)
@@ -30,7 +30,7 @@
 
 Finguard 3.0 is a full-stack, AI-powered financial operations platform for small-to-medium enterprises (SMEs), primarily targeting businesses in Kenya. It automates invoice extraction, transaction classification, payment reconciliation, cash-flow forecasting, budget monitoring, tax compliance, and financial advisory through a multi-agent AI system backed by an event-driven architecture.
 
-**Core Architecture Pattern**: Domain-driven monorepo with a 10-agent LangGraph Supervisor/ReAct orchestration layer, PostgreSQL as source of truth, MongoDB as read-model cache (intelligence hub), Redis for caching/JWT blacklist/rate-limiting, and RabbitMQ for async inter-service messaging.
+**Core Architecture Pattern**: Domain-driven monorepo with an 11-agent LangGraph Supervisor/ReAct orchestration layer (a fast path bypasses the supervisor for clean single-domain read-only intents — see §7), PostgreSQL as source of truth, MongoDB as read-model cache (intelligence hub), Redis for caching/JWT blacklist/rate-limiting, and RabbitMQ for async inter-service messaging.
 
 **AI Model**: Gemma 4 via Fireworks AI (primary) with a Featherless AI failover of the same model family — all AI tasks including structured extraction, forecasting narratives, RAG, and routing decisions. Embeddings use `nomic-embed-text-v1.5` (768-dim). All access is through the provider-neutral `BaseLLMClient` (OpenAI-compatible API), never a vendor SDK directly.
 
@@ -792,7 +792,7 @@ one-click **unsubscribe** link (`List-Unsubscribe`-ready).
 
 ---
 
-## 6. AI Agents (A–J)
+## 6. AI Agents (A–K)
 
 All agents are LangGraph nodes. They receive `OrchestratorState`, perform their task, update `state["context"]`, and return to the supervisor unconditionally. Every result is written to `intelligence_hub` by `hub_writer_node`.
 
@@ -878,10 +878,11 @@ class CompositeGenUIPayload(BaseModel):
 | Context key written | `forecast` |
 | SQL access | `execute_readonly_sql()` — routes through `finguard_readonly` PostgreSQL role; never receives a session parameter |
 | Prompts | `prompts/d_forecaster.py` — CoVe SQL-drafting, regime-detection, narrative explainer |
-| Schema masking | `get_masked_schema("D")` — DDL only for `ledger_entries`, `invoices`, `budgets`, `expenses` |
+| Schema masking | `get_masked_schema("D")` — DDL only for `ledger_entries`, `invoices`, `budgets`, `expenses`, sourced from `agent_registry.allowed_sql_tables("D")` (the same table every SQL-capable agent scopes from — see `TOOL_GRANTS`) |
 | Output schemas | `ForecastDataPoint`, `CashFlowForecast`, `CoVeSQLQuery` |
 | GenUI payload | `CompositeGenUIPayload` → `component_id: "CashFlowChart"` |
 | Method | 12 months daily net cash-flow via SQL → Holt-Winters → regime detection → invoice overlays → Gemma 4 narrative |
+| Fast path | A clean single-agent match (`read_only=True` in `AgentDescriptor`) skips the supervisor graph entirely — see §7 Fast-Path Graph |
 | Hub TTL | 1 hour |
 
 ---
@@ -893,7 +894,8 @@ class CompositeGenUIPayload(BaseModel):
 | File | `agents/e_watchdog.py` |
 | Trigger | RabbitMQ `expenses.created` event or direct supervisor routing |
 | Context key written | `watchdog_result` |
-| SQL access | `execute_readonly_sql()` for recent amounts and invoices |
+| SQL access | `execute_readonly_sql(..., agent_id="E")` for recent amounts and invoices — scoped to `{ledger_entries, invoices}` only (`agent_registry.TOOL_GRANTS`); previously read via a global table union with no per-agent enforcement |
+| Event exchange | Publishes to `finguard.intelligence` only — `make_event_publisher(mode, agent_id="E")` narrows the global 4-exchange ceiling to E's own grant |
 | Output schema | `WatchdogAnalysis` |
 | GenUI payload | `CompositeGenUIPayload` → `component_id: "BudgetWatchdogMeter"` |
 | Method | HMM (3-state) + **persisted per-customer IsolationForest** + rapidfuzz duplicate detection + Gemma 4 narrative + VC issuance |
@@ -913,6 +915,7 @@ class CompositeGenUIPayload(BaseModel):
 | Output schema | `AgentFOutput` |
 | GenUI payload | `CompositeGenUIPayload` → `component_id: "TaxLiabilityDonut"` |
 | Method | Deterministic Kenya tax calculations (16% VAT, KES 5M mandatory registration threshold, 30% CIT) + pgvector RAG (top-3 KRA excerpts) + Gemma 4 structured output |
+| Fast path | A clean single-agent match (`read_only=True`) skips the supervisor graph entirely — see §7 Fast-Path Graph |
 | Hub TTL | 1 day |
 
 ---
@@ -955,7 +958,8 @@ class CompositeGenUIPayload(BaseModel):
 | Trigger | Supervisor routes here when external data is needed |
 | Context key written | `external_data` |
 | Method | Calls M-Pesa Daraja (sandbox), a free FX provider (`FX_API_URL`), Metropol, KRA via `http_caller` (SSRF-guarded). Every source carries an explicit `status` (live/manual/mock/unavailable); Metropol & KRA are deferred — `unavailable` unless real or manually supplied (never fabricated). |
-| SSRF protection | `_assert_public_url()` in `http_caller.py` blocks private IPs, loopback, link-local; `follow_redirects=False` |
+| SSRF protection | `_resolve_and_pin()` in `http_caller.py` blocks private IPs, loopback, link-local; `follow_redirects=False`; DNS-pinned to defeat rebinding (see §14 Pattern 20) |
+| Host allowlist | `make_http_caller(agent_id="I", ...)` additionally restricts calls to I's own declared hosts (`agent_registry.allowed_http_hosts("I")` — the M-Pesa/Metropol/KRA/FX hostnames), layered on top of the SSRF check, never in place of it |
 | Hub TTL | 1 hour |
 
 ---
@@ -982,7 +986,8 @@ class CompositeGenUIPayload(BaseModel):
 | Context key written | `stock_steward` (narrative + `proposed_actions`, `can_act`) |
 | Tools | Typed inventory tools; the **only** write path is `propose_stock_movement`, which routes through `InventoryService` (row lock, non-negative guard, weighted-avg costing, agent-attributed audit) — never LLM-authored SQL |
 | A2A | Soft-consumes Agent D's cash-flow forecast when present (advisory only) |
-| Human-in-the-loop | A stock **ADJUSTMENT** (creates/destroys stock) is never applied inline — it is persisted to `agent_action_proposals` at `proposed` for a second human holding `inventory:adjust` to release via `/proposals/{id}/approve`. Routine receipts/issues keep the inline path. Segregation of duties (requester ≠ approver) + exactly-once apply (claim-first) enforced in `ProposalService` |
+| CoVe audit | Before a stock ADJUSTMENT is queued, `_cove_verify_stock_action` (an independent Gemma 4 call, mirroring Agent D's CoVe pattern) checks it against the same inventory evidence K already gathered. An unsupported verdict is folded into the proposal's `rationale` as a flag for the human reviewer — never used to silently drop the proposal. Deterministic sanity checks (quantity > 0, non-empty reason) can override the LLM verdict either way. Opt-out: `k_cove_verify=false` in request context |
+| Human-in-the-loop | A stock **ADJUSTMENT** (creates/destroys stock) is never applied inline — it is persisted to `agent_action_proposals` at `proposed` for a second human holding `inventory:adjust` to release via `/proposals/{id}/approve`. Routine receipts/issues keep the inline path. Segregation of duties (requester ≠ approver) + exactly-once apply (claim-first) enforced in `ProposalService`. Approve/reject decisions now also issue an Ed25519 VC to `trust_log` (best-effort, alongside the existing `audit_logs` row) — see §14 Pattern 8 |
 
 ---
 
@@ -1007,7 +1012,7 @@ class CompositeGenUIPayload(BaseModel):
 
 ### Receipt Scanner (Vision OCR) ✅
 
-A standalone two-node graph (not part of the A–J supervisor loop) backing `POST /intelligence/receipts/scan`.
+A standalone two-node graph (not part of the A–K supervisor loop) backing `POST /intelligence/receipts/scan`.
 
 | Field | Value |
 |---|---|
@@ -1047,6 +1052,14 @@ class OrchestratorState(TypedDict):
                ▲                │
                └─── [any agent node] (unconditional return to supervisor)
 ```
+
+**Fast-Path Graph** (`build_fast_path_graph(node_name)`) — no dedicated endpoint; selected at runtime by `orchestrator.try_fast_path` (and directly by `service.py` when the caller already names a `read_only` agent):
+
+```
+[START] → [<d_forecaster | f_auditor>] → [hub_writer] → [END]
+```
+
+Skips the supervisor node entirely for a clean single-agent, `read_only=True` match — the classifier (`agent_registry.heuristic_route`) is shared with the supervisor's own tier-2 keyword router (§`agents/supervisor.py`) so the two can never disagree. Never fires if `context["requested_agent"]` is already set (that's the supervisor's own short-circuit instead), and never fires for a write-capable agent even on a clean keyword match. Compiled with the same checkpointer as the full graph so replay/resume stays consistent.
 
 **Invoice Graph** (`build_invoice_graph()`) — `/intent`:
 
@@ -1198,7 +1211,7 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 |---|---|---|---|
 | GET | `/health` | — | Basic liveness |
 | GET | `/health/live` | — | Liveness alias (dependency-free) |
-| GET | `/health/ready` | — | Readiness (checks Postgres + Redis; 503 on degraded) |
+| GET | `/health/ready` | — | Readiness (actively checks Postgres, Redis, and MongoDB; RabbitMQ is a soft/non-gating check; 503 on degraded). This is Railway's deploy-gating healthcheck (`railway.json`); the Docker/compose-level `HEALTHCHECK` intentionally stays on `/health/live` — a container runtime should restart on process death, not on a transient dependency blip |
 | GET | `/metrics` | Bearer (`METRICS_AUTH_SECRET`) | Prometheus metrics |
 | GET | `/docs` | — | Swagger UI (DEBUG=true only) |
 
@@ -1609,8 +1622,8 @@ RABBITMQ_PASSWORD=finguard
 ## 14. Design Patterns
 
 ### 1. Supervisor / ReAct Loop (LangGraph)
-Every agent unconditionally returns to supervisor after executing. Supervisor terminates by routing to `FINISH`.
-**Files**: `orchestrator.py`, `agents/supervisor.py`
+Every agent unconditionally returns to supervisor after executing. Supervisor terminates by routing to `FINISH`. A clean single-agent match on a `read_only=True` agent (D, F) bypasses the loop entirely via the Fast-Path Graph (§7) — the classifier is shared with the supervisor's own keyword router so the two paths can never diverge.
+**Files**: `orchestrator.py` (`try_fast_path`, `build_fast_path_graph`), `agents/supervisor.py`, `agent_registry.py` (`read_only`, `heuristic_route`)
 
 ### 2. Native Structured Output + Provider Failover
 `generate_structured_content(prompt, ResponseSchema)` sends the schema via Fireworks' `response_format={"type":"json_schema",...}` (constrained decoding) — no fallback parsing needed. All call sites go through the provider-neutral `BaseLLMClient` surface (`generate_structured`, `generate_text`, `generate_vision_structured`, `generate_chat`, `embed`); `llm_client.py` is a facade over it. The client is a **failover** composition: a Fireworks (Gemma 4) primary with an always-warm Featherless backup of the same model family — a primary cold-start (the scale-to-zero deployment takes ~3 min to warm) or timeout transparently routes to the backup (`finguard_llm_failover_total`), which uses `json_object` mode + markdown-fence-stripping since Featherless does not enforce `json_schema`. Gemma's thinking mode is disabled per-call so free-form replies aren't swallowed by hidden reasoning. Every method accepts an optional `temperature` kwarg, and deterministic agents pin it (`temperature=0.0` for classification, reconciliation scoring, receipt OCR, and the CoVe draft/explain/audit passes; `0.2` for regime analysis) so structured financial extraction does not drift between runs.
@@ -1637,15 +1650,15 @@ KRA regulation chunks stored with 768-dim nomic embeddings (`nomic-embed-text-v1
 **File**: `domains/intelligence/services/tax_rag_service.py`
 
 ### 8. Verifiable Credentials Audit Trail
-Before Agent E writes a budget alert, an **Ed25519-signed** VC is issued (agent identity + payload hash + timestamp) and stored in MongoDB `trust_log`. The VC is a compact `header.payload.signature` token signed by the internal CA (`key_manager.py`), so it is independently verifiable with the CA public key and not forgeable by holders of the symmetric app secret. The legacy HS256/`SECRET_KEY` verification fallback has been **removed** (`HS256_VC_SUNSET`) — verification is EdDSA-only, so a leaked `SECRET_KEY` can no longer forge a verifiable VC. Pre-sunset `trust_log` entries were re-signed with Ed25519 by the one-time `scripts.migrate_hs256_vcs` migration.
-**Files**: `domains/intelligence/security/vc_issuer.py`, `security/key_manager.py`, `agents/e_watchdog.py`
+Before Agent E writes a budget alert, an **Ed25519-signed** VC is issued (agent identity + payload hash + timestamp) and stored in MongoDB `trust_log`. The VC is a compact `header.payload.signature` token signed by the internal CA (`key_manager.py`), so it is independently verifiable with the CA public key and not forgeable by holders of the symmetric app secret. The legacy HS256/`SECRET_KEY` verification fallback has been **removed** (`HS256_VC_SUNSET`) — verification is EdDSA-only, so a leaked `SECRET_KEY` can no longer forge a verifiable VC. Pre-sunset `trust_log` entries were re-signed with Ed25519 by the one-time `scripts.migrate_hs256_vcs` migration. **Extended beyond Agent E:** `ProposalService.approve()`/`reject()` now issue the same kind of VC after the Postgres decision is durably committed — best-effort (a Mongo hiccup never blocks or rolls back an already-successful decision), calling the identical `issue_vc()` function E already used. The plain, unsigned `audit_logs` row (written separately by the router via `AuditService`) remains the system of record either way; the VC is an additional, tamper-evident copy.
+**Files**: `domains/intelligence/security/vc_issuer.py`, `security/key_manager.py`, `agents/e_watchdog.py`, `proposal_service.py`
 
 ### 9. Deterministic Compute + LLM Narrative
 Agents G and F pre-compute all financial figures deterministically; Gemma 4 only writes the human-readable narrative. Prevents hallucination of financial numbers.
 **Files**: `agents/g_reporter.py`, `agents/f_auditor.py`
 
-### 10. Schema-Masked SQL (Agent D)
-`get_masked_schema(agent_id)` returns DDL only for permitted tables. Agent D never sees `users`, `knowledge_base`, or `outbox_events`.
+### 10. Schema-Masked SQL, Per-Agent Enforced
+`get_masked_schema(agent_id)` returns DDL only for permitted tables — sourced from `agent_registry.allowed_sql_tables(agent_id)` (Pattern 30), not a module-local dict. Agent D never sees `users`, `knowledge_base`, or `outbox_events`. `execute_readonly_sql(query, agent_id=...)` structurally enforces the same per-caller table set at execution time (not just prompt masking) — previously it enforced the *union* of every agent's tables regardless of caller, which meant Agent E had de facto access to D's and K's tables despite never being declared; it's now scoped to exactly `{ledger_entries, invoices}`, the tables E actually queries.
 **File**: `domains/intelligence/tools/sql_executor.py`
 
 ### 11. Async-to-Sync Celery Bridge
@@ -1684,7 +1697,7 @@ Agents D/E/F/G build `CompositeGenUIPayload` with deterministic `props` and LLM-
 **File**: `frontend/src/components/dashboard/intelligence/CompositeInsightSkeleton.tsx`
 
 ### 20. SSRF Prevention (Agent I / External HTTP)
-`_resolve_and_pin()` in `http_caller.py` DNS-resolves the target hostname once and rejects the call if **any** resolved address is private, loopback, link-local, reserved, multicast, or unspecified. It then returns a single cleared IP, and the request runs through a pinned transport (`_PinnedTransport` / `_PinnedIPBackend`) that dials exactly that IP — so the socket cannot re-resolve to an internal address between the check and the connect (DNS-rebinding TOCTOU). TLS SNI and certificate verification still use the original hostname, so HTTPS stays correctly validated. `follow_redirects=False` blocks redirect-based bypass.
+`_resolve_and_pin()` in `http_caller.py` DNS-resolves the target hostname once and rejects the call if **any** resolved address is private, loopback, link-local, reserved, multicast, or unspecified. It then returns a single cleared IP, and the request runs through a pinned transport (`_PinnedTransport` / `_PinnedIPBackend`) that dials exactly that IP — so the socket cannot re-resolve to an internal address between the check and the connect (DNS-rebinding TOCTOU). TLS SNI and certificate verification still use the original hostname, so HTTPS stays correctly validated. `follow_redirects=False` blocks redirect-based bypass. Layered on top (never in place of it): `make_http_caller(agent_id=...)` additionally checks the hostname against that agent's own grant (`agent_registry.allowed_http_hosts`, Pattern 30) — a host that clears the public-IP check can still be rejected if it isn't one this agent is declared to call.
 **File**: `domains/intelligence/tools/http_caller.py`
 
 ### 21. IDOR Guard on Conversation Status
@@ -1722,6 +1735,14 @@ A durable `audit_logs` table records meaningful system activity (who/what/when/o
 ### 29. Per-Request Context (request id + client IP correlation)
 `RequestContextMiddleware` (`core/request_context.py`) stamps every request with a `request_id` (honouring an inbound `X-Request-ID` from nginx / a caller, else a fresh uuid4) and the resolved client IP, stored in `contextvars` so any code deep in the stack — notably `AuditService.record` — can read them without parameter threading. The id is bound into structlog (so every operational log line in the request carries it) **and** persisted on each audit row, so JSON logs and durable audit entries share one correlatable `request_id`. It is also echoed back in the response `X-Request-ID` header for client-side correlation. Added **last** in `main.py` so it runs outermost — context is set before any other layer needs it. The client-IP resolver mirrors `identity.router._client_ip` (left-most `X-Forwarded-For`, else direct peer) so audit rows and the login-lockout key agree on "the client" (see Pattern 23 — Trusted Client IP).
 **Files**: `core/request_context.py`, `src/main.py`
+
+### 30. Tool-Capability Registry (per-agent SQL/HTTP/event grants)
+`agent_registry.TOOL_GRANTS: dict[str, tuple[ToolGrant, ...]]` declares which agent may use which tool and under what constraint (SQL tables / HTTP hostnames / RabbitMQ exchanges), generalizing the pattern `sql_executor.py` previously had narrowly for one tool. `allowed_sql_tables`/`allowed_http_hosts`/`allowed_event_exchanges` are the accessors; an agent absent from a grant gets nothing back (fail-closed). Every enforcement point is additive to an existing safety check, never a replacement: `execute_readonly_sql`'s sqlglot AST walk is unchanged, only the table set passed in is now per-caller; `http_caller`'s hostname check runs strictly after the SSRF/DNS-pinning guard (Pattern 20); `event_publisher`'s per-agent exchange check narrows, never widens, the hardcoded `ALLOWED_EXCHANGES` ceiling. Closed a real gap found while generalizing: Agent E previously had de facto SQL access to every agent's declared tables via a global-union enforcement bug, though it never queried outside `ledger_entries`/`invoices`.
+**Files**: `domains/intelligence/agent_registry.py`, `tools/sql_executor.py`, `tools/http_caller.py`, `tools/event_publisher.py`
+
+### 31. Post-Step Hook Registry (hub_writer)
+`hub_writer_node`'s three behaviors (message compaction, GenUI persistence, insight persistence) are independent `HubWriterStep` functions run against a shared, read-only `_StepContext`, registered in an ordered `HUB_WRITER_STEPS` list rather than inlined as one growing function body. Each step reads only from the shared context — never another step's result — so a new cross-cutting concern (e.g. future telemetry) attaches as one more registry entry without touching the existing steps. Includes a message-compaction step: `state["messages"]` is append-only with no built-in limit (bounded previously only by the 25-hop recursion ceiling); past a 12-message threshold, redundant repeat-visits from the same agent are pruned via LangGraph's `RemoveMessage`, keeping every `HumanMessage` and the latest message per agent name so the supervisor's cycle guard (which keys off exactly that set of names) is unaffected. A pruned message remains reconstructible from LangGraph checkpoint history as long as checkpointing is enabled — `test_message_reconstructibility_invariant.py` proves this and documents the precondition.
+**File**: `domains/intelligence/agents/hub_writer.py`
 
 ---
 
@@ -1786,6 +1807,8 @@ Runs on push to `main` (gated by `DEPLOY_ENABLED=true` repository variable).
 | `build` | Builds Docker image; tags as `:latest` and `:{git_sha}` |
 | `scan` | **Trivy** image scan — fails on fixable CRITICAL vulnerabilities |
 | `deploy` | Runs `alembic upgrade head` → deploys container → smoke-tests `GET /health/ready` (must return 200) |
+
+Railway's own deploy-gating healthcheck (`railway.json`'s `healthcheckPath`) also points at `/health/ready` — a new deployment only receives traffic once dependencies actually check out, not merely once the process is alive. The container-level `Dockerfile HEALTHCHECK` intentionally stays on `/health/live` (a container runtime should restart on process death, not on a transient DB/cache blip).
 
 ---
 
@@ -1871,8 +1894,9 @@ ENABLE_OUTBOX_PROJECTOR=true         # Starts PostgreSQL outbox → MongoDB proj
 | F | Tax Auditor | ✅ Complete | Deterministic Kenya tax + pgvector RAG + AML flag | `tax_audit_result` | `TaxLiabilityDonut` | 1d |
 | G | Credit Strategist | ✅ Complete | Holt-Winters + bankability score + Gemma 4 NLG | `credit_strategy_result` | `BankabilityScoreRadar` | 1d |
 | H | Financial Advisor | ✅ Complete | Gemma 4 multi-step reasoning + RBAC clip; structured `AgentHOutput` + allowlisted GenUI widgets | `advice` | `MiniTrendSparkline` / `TransactionHistoryList` / `SemiCircleGaugeCard` (allowlisted) | 1h |
-| I | External Integrator | ✅ Complete | httpx M-Pesa (sandbox) / free FX provider / Metropol / KRA + SSRF guard; explicit per-source status (live/manual/mock/unavailable) | `external_data` | — | 1h |
+| I | External Integrator | ✅ Complete | httpx M-Pesa (sandbox) / free FX provider / Metropol / KRA + SSRF guard + per-agent host allowlist; explicit per-source status (live/manual/mock/unavailable) | `external_data` | — | 1h |
 | J | Executive Summarizer | ✅ Complete | Gemma 4 context distillation ≤5 bullets + locale-aware | `executive_summary` | — | 30m |
+| K | Stock Steward | ✅ Complete | Deterministic inventory tools + CoVe-audited stock-adjustment proposals; only write path is human-in-the-loop (`ProposalService`) | `stock_steward` | — | 30m |
 
 ---
 

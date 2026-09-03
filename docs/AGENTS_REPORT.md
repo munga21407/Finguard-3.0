@@ -9,7 +9,10 @@ each agent is built, and the pros/cons of the chosen approach.*
 
 Finguard's intelligence layer is a **LangGraph `StateGraph`** running a
 **supervisor / ReAct loop**. A Gemini-backed supervisor inspects conversation
-state and routes to one of ten lettered agents (A–J); every agent writes its
+state and routes to one of eleven lettered agents (A–K) *(K — Stock Steward —
+was added after this report's original pass; see its own section below)*; a
+fast path (added later, see §3/§4) bypasses the supervisor entirely for a
+clean single-agent, read-only match on D or F. Every agent writes its
 output to shared `context`, routes unconditionally through `hub_writer`
 (MongoDB upsert), and returns control to the supervisor, which decides whether to
 continue or `FINISH`.
@@ -40,8 +43,8 @@ Two smaller standalone graphs exist alongside the main loop:
 ### Supervisor — the router
 **How:** Gemini structured output picks the next node from a hard `VALID_NEXT` allowlist. Loop-escape is delegated entirely to LangGraph's native `recursion_limit=25`; a `requested_agent` short-circuit skips the LLM call when the first hop is already known. Windows the routing prompt to *first message + last 4* (capped at 600 chars each) to bound token cost.
 
-- **Pros:** Allowlist prevents routing to hallucinated nodes; every failure path (validation error, unknown route, any exception) routes to `FINISH` rather than crashing; windowing avoids O(hops) prompt growth and lost-in-the-middle.
-- **Cons:** Every hop costs a Gemini call (latency + $); routing quality depends on prompt/model; no manual hop counter means a subtly-cycling supervisor only stops at the recursion ceiling (508).
+- **Pros:** Allowlist prevents routing to hallucinated nodes; every failure path (validation error, unknown route, any exception) routes to `FINISH` rather than crashing; windowing avoids O(hops) prompt growth and lost-in-the-middle. *(DeepSeek-harness-inspired hardening:)* a clean single-agent match on a `read_only=True` agent (D, F) now skips the supervisor **node** entirely (`orchestrator.try_fast_path`), not just its LLM call — the common read-only case pays zero supervisor round-trips.
+- **Cons:** Every hop still costs a Gemini call for multi-agent/ambiguous intents and any non-read-only single-agent route (B, C, E, G, H, I, J, K); routing quality depends on prompt/model; the cycle guard (Sprint 6, S6-4) terminates a benign stall gracefully before the recursion ceiling, but a genuinely pathological loop still hits 508 as the last resort.
 
 ### Agent A — Invoice Generator / Extractor
 **How:** Extracts a structured `ExtractedInvoice` from raw document text via Gemini `response_schema`. **Fast-path:** if the OCR Celery task already populated `ocr_extracted_fields`, it validates that dict and skips the second Gemini call.
@@ -65,7 +68,7 @@ Two smaller standalone graphs exist alongside the main loop:
 **How:** Hybrid. (1) **Holt-Winters** exponential smoothing on ≤12 months of daily net flow, adaptive by data volume (flat < 3 pts, trend 3–13, +weekly seasonal ≥14); invoice due-dates overlaid as known outflows. (2) **Gemini regime detector** classifies into Boom/Normal/Stress/Crunch/Recovery. (3) Optional **Chain-of-Verification Text-to-SQL** (Drafter → Explainer → Auditor) gated at confidence ≥ 0.70, executed via the read-only SQL guard. Emits a `CashFlowChart` GenUI payload.
 
 - **Pros:** Numbers are statistical, not hallucinated; graceful model downgrade chain (seasonal → trend → linear → flat); CoVe adds a verification layer before any SQL runs; runway estimate + composite widget for the UI.
-- **Cons:** Three LLM calls when CoVe is active (drafter/explainer/auditor) → cost & latency; HW assumes some regularity SME data may lack; CoVe auditor is itself an LLM (self-grading, not a formal proof); statsmodels import deferred but still heavy.
+- **Cons:** Two LLM calls when CoVe is active (Sprint 3 folded drafter+explainer into one; auditor is the second) → cost & latency; HW assumes some regularity SME data may lack; CoVe auditor is itself an LLM (self-grading, not a formal proof — the same pattern Agent K's stock-adjustment audit now uses, see below); statsmodels import deferred but still heavy.
 
 ### Agent E — Budget Watchdog
 **How:** The most algorithm-dense agent. Fits a 3-state **HMM** (HEALTHY/STABLE/CRITICAL) over spending ratios — log-space **Forward** algorithm for the state distribution + **Viterbi** for the sequence — plus **IsolationForest** anomaly scoring and **rapidfuzz** duplicate detection. Loads a per-customer weekly-retrained IsolationForest from `finguard.agent_e_models`; a brand-new customer degrades to an on-the-fly fit and enqueues a background fit. In `actions` mode: issues a Verifiable Credential to `trust_log` (SOC-2), publishes a RabbitMQ anomaly event, and exports Prometheus gauges. Emits a `BudgetWatchdogMeter` widget.
@@ -109,11 +112,17 @@ Two smaller standalone graphs exist alongside the main loop:
 - **Pros:** Human-in-the-loop fallback (never a 500 — returns a fillable form); categories match the UI exactly; clean separation from invoice extraction.
 - **Cons:** Two sequential Gemini calls per receipt; OCR accuracy is the ceiling for everything downstream; tiny fixed category set.
 
+### Agent K — Stock Steward
+**How:** Deterministic inventory snapshot (valuation, low-stock, reorder plans) via typed tools, optionally folding in Agent D's cash-flow regime (soft `consumes`). Gemma 4 narrates only — figures never touch the model. A stock **ADJUSTMENT** (write-up/write-off) is never applied inline: it's previewed deterministically (`propose_stock_movement(apply=False)`), then independently audited by a second Gemma 4 call against the same evidence (`_cove_verify_stock_action` — mirrors Agent D's CoVe pattern, but verifies rather than drafts, since the adjustment itself is deterministic caller input, not model output) before being queued to `agent_action_proposals` for a second authorised human to release. An unsupported audit verdict is folded into the proposal's `rationale` as a flag, never used to silently drop it — the human reviewer always makes the final call.
+
+- **Pros:** Numbers are tool-computed, never LLM-authored; mandatory two-human release (segregation of duties, exactly-once apply) for the only write path; the CoVe-style audit surfaces an unsupported adjustment to the reviewer before they approve it, rather than relying on the reviewer to catch it unaided; routine receipts/issues keep a faster inline path.
+- **Cons:** The audit is itself an LLM checking a request, not a formal proof (same self-grading caveat as D/F, see §4); adds one Gemma call to the adjustment path (opt-out via `k_cove_verify=false`); no eval/back-test yet for the audit's own accuracy (mirrors the D/F gap in §4).
+
 ### hub_writer — persistence node
 **How:** Not an "agent" but the shared sink. Inspects `context` in dependency priority order, wraps the recognized payload in an `InsightArtifact`, and upserts to Mongo `intelligence_hub` under an idempotent `<agent_id>:<intent>` key with **per-agent TTLs** (10 min – 24 h). Persists GenUI payloads separately (`genui:<session>:<component>`, 1 h TTL).
 
-- **Pros:** Idempotent keys prevent duplicates; per-agent TTL matches data volatility; write failures increment a metric + log but don't abort the graph.
-- **Cons:** Priority-ordered `if` chain is implicit coupling — adding an agent means editing this dispatcher (and the TTL maps, and Agent J's key lists); one context can only surface one insight artifact per pass (first match wins).
+- **Pros:** Idempotent keys prevent duplicates; per-agent TTL matches data volatility; write failures increment a metric + log but don't abort the graph. *(Since Sprint 2, extended:)* the node's own behavior is now `HUB_WRITER_STEPS`, an ordered registry of independent steps (message compaction, GenUI persistence, insight persistence) — a new cross-cutting concern registers as one more step without editing the existing ones (`test_agent_hub_writer.py::test_registering_a_fourth_step_does_not_touch_the_built_in_three`).
+- **Cons:** *(Resolved, Sprint 2 — see `AGENTS_REMEDIATION_SPRINTS.md`)* ~~Priority-ordered `if` chain is implicit coupling...~~ one context can only surface one insight artifact per pass — also resolved (every present artifact persists per pass). Remaining: `state["messages"]` is append-only and was previously unbounded — a compaction step now prunes redundant per-agent repeat-visits past a threshold, but this depends on LangGraph checkpointing being enabled to remain fully reconstructible (`test_message_reconstructibility_invariant.py` documents the precondition explicitly).
 
 ---
 
@@ -125,6 +134,8 @@ Two smaller standalone graphs exist alongside the main loop:
 | **Graceful degradation** everywhere — no LLM outage crashes the graph | all |
 | **Structured output** via Gemini `response_schema`, not JSON-in-prompt | all LLM agents |
 | **Security boundaries** — read-only SQL role, SSRF-guarded HTTP, RBAC clipping, VC audit trail | B, D, E, F, H, I |
+| **Per-agent tool-capability grants** — SQL tables / HTTP hosts / event exchanges scoped per caller, not a global ceiling (`agent_registry.TOOL_GRANTS`) | D, E, I, K |
+| **Signed audit trail on human decisions, not just agent actions** — proposal approve/reject now issues an Ed25519 VC to `trust_log`, alongside the existing plain `audit_logs` row | K (proposals) |
 | **Provider-agnostic LLM layer** — swap Gemini in one place (`get_llm_client()`) | `llm/` |
 | **Per-agent observability** — contextvar-attributed latency/token/cost metrics | `_tracked()` |
 | **Honest provenance** — external data never faked in prod | I |
@@ -135,9 +146,10 @@ Two smaller standalone graphs exist alongside the main loop:
 | Risk | Detail |
 |---|---|
 | **Hard-coded domain constants** | Tax rates/thresholds (F), HMM priors (E), scoring weights (G), match thresholds (C) are baked in — will drift from reality and aren't config-driven or learned. |
-| **Per-hop LLM cost** | Supervisor calls Gemini every hop; D can fire 4 calls; multi-agent sessions accumulate latency and spend. |
-| **hub_writer / J coupling** | Adding an agent touches the hub_writer dispatcher, its TTL maps, and J's key allowlists — no single registration point. |
-| **Self-grading verification** | CoVe (D) and compliance analysis (F) use an LLM to check an LLM — mitigates but doesn't eliminate hallucination. |
+| **Per-hop LLM cost** | *(Partially resolved)* Supervisor now skips its own node entirely for a clean single-agent `read_only` intent (D, F); every other route (multi-agent, ambiguous, or a write-capable agent) still costs a Gemini call per hop, and multi-agent sessions still accumulate latency/spend. |
+| **hub_writer / J coupling** | *(Resolved, Sprint 2)* `agent_registry.AGENT_REGISTRY` is the single registration point; hub_writer's own internal steps are now an extensible registry too (`HUB_WRITER_STEPS`). |
+| **Self-grading verification** | CoVe (D), compliance analysis (F), and now the stock-adjustment audit (K) each use an LLM to check an LLM (or check deterministic input) — mitigates but doesn't eliminate hallucination; each also has a deterministic secondary gate that can override the LLM verdict. |
+| **Unbounded message history** *(new since this report)* | `state["messages"]` is append-only with no built-in limit — bounded today by a compaction step (prunes redundant per-agent repeat-visits past a threshold) and the 25-hop recursion ceiling, not by design; reconstructability of pruned messages depends on LangGraph checkpointing being enabled. |
 | **Model/accuracy validation gap** | Bankability (G), HMM (E), classification (B) have no visible back-test/eval against ground truth in the agent code (some evals exist for F). |
 | **Single-jurisdiction** | Tax and financial logic are Kenya-specific; generalizing is non-trivial. |
 | **Stubbed integrations** | Metropol & KRA (I) are manual/unavailable pending commercial APIs — real-time credit/compliance data is not yet live. |
@@ -153,4 +165,9 @@ Two smaller standalone graphs exist alongside the main loop:
 ---
 
 *Generated from a read of `agents/*.py` and `orchestrator.py` on the
-`chore/remove-dummy-data-phase-0` branch.*
+`chore/remove-dummy-data-phase-0` branch. Inline notes marked "since"/"resolved"/
+"new since this report" were added later, tracking `AGENTS_REMEDIATION_SPRINTS.md`
+Sprints 1–6 plus a DeepSeek-harness-inspired hardening pass (fast-path routing,
+hub_writer step registry, Agent K CoVe audit, tool-capability registry, VC-signed
+proposal decisions) — the per-agent tables above are otherwise the original
+point-in-time assessment.*
