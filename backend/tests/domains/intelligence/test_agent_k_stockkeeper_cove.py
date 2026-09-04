@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from src.domains.intelligence.agents import k_stockkeeper as k
-from src.domains.intelligence.agents.k_stockkeeper import _StockActionAudit
+from src.domains.intelligence.services import stockkeeper_service as k
+from src.domains.intelligence.services.stockkeeper_service import _StockActionAudit
 
 _ACTION = {
     "product_ref": "SKU-1",

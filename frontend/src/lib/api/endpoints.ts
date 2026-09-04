@@ -85,6 +85,8 @@ export const ENDPOINTS = {
     CONVERSATION: "/api/v1/intelligence/conversation",
     CONVERSATION_STATUS: (sessionId: string) =>
       `/api/v1/intelligence/conversation/${sessionId}/status`,
+    CONVERSATION_RESUME: (sessionId: string) =>
+      `/api/v1/intelligence/conversation/${sessionId}/resume`,
     GENUI_ERROR: "/api/v1/intelligence/genui/error",
     // Human-in-the-loop approval queue for value-changing agent actions.
     PROPOSALS: "/api/v1/intelligence/proposals",

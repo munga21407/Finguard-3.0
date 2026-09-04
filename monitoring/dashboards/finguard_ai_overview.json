@@ -1000,6 +1000,136 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Task-scoped VCs minted+self-validated per agent on live write paths (C reconciliation.apply, E watchdog.anomaly_publish/watchdog.model_retrain, K/C *.create_proposal, B classify.batch_persist) — agent_task_vc_issued_total. Zero data until a given path actually runs with traffic; independent of TASK_VC_ENFORCEMENT_ENABLED, which only gates whether a failure blocks the write (see the next panel) — this one increments in shadow mode too. Part of the staging bake (docs/TASK_VC_STAGING_BAKE.md).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 62
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Task VC Issued (rate)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (agent_id, operation) (rate(agent_task_vc_issued_total[5m]))",
+          "legendFormat": "{{agent_id}} / {{operation}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Task-scoped VC mint/validate failures (agent_task_vc_validate_fail_total), broken out by reason. With TASK_VC_ENFORCEMENT_ENABLED=true a non-zero rate here means a real write was skipped/blocked, not just logged — reason=PermissionError specifically means verify_own_card failed (a CA-key/signing issue, not a VC-logic bug). The go/no-go signal for the staging bake (docs/TASK_VC_STAGING_BAKE.md).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 62
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Task VC Validate Fail (rate)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (reason) (rate(agent_task_vc_validate_fail_total[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "30s",
@@ -1008,7 +1138,7 @@
     "finguard",
     "sre",
     "ai-agents",
-    "d3"
+    "d4"
   ],
   "templating": {
     "list": [
@@ -1034,6 +1164,6 @@
   "timezone": "browser",
   "title": "FinGuard AI — Agent Overview",
   "uid": "finguard-ai-overview-d3",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }

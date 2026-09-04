@@ -32,7 +32,7 @@ from src.domains.identity.models import User
 from src.domains.identity.permissions import Permission
 from src.domains.intelligence.agent_registry import mutation_kinds
 from src.domains.intelligence.models import AgentActionProposal, ProposalStatus
-from src.domains.intelligence.security.vc_issuer import issue_vc, payload_hash
+from src.domains.intelligence.security.vc_issuer import issue_vc, payload_hash, require_task_vc
 from src.domains.intelligence.tools.inventory_tools import propose_stock_movement
 from src.domains.notifications.reviewers import notify_reviewers
 
@@ -113,7 +113,14 @@ class ProposalService:
 
         Deliberately inert — the value-changing write is deferred to
         :meth:`approve`, so a proposal awaiting a second human never mutates stock
-        (or burns budget, for finance action types) before sign-off.
+        (or burns budget, for finance action types) before sign-off. A task-scoped
+        VC (audit/defense-in-depth, shadow mode by default — see
+        ``vc_issuer.require_task_vc``) attests that *this creation call* was
+        authorized — a different claim from ``payload_hash`` below, which attests
+        the payload wasn't altered *after* creation. Never wired into
+        :meth:`approve`/:meth:`reject`: those stay on ``payload_hash`` alone, per
+        the Sprint 8 reasoning (a 5-minute task VC cannot span an hours-to-days
+        human review window).
         """
         agent_id = _ACTION_AGENT_ID.get(action_type, agent_label)
         if "proposal" not in mutation_kinds(agent_id):
@@ -126,7 +133,15 @@ class ProposalService:
                 f"agent_registry, but create_proposal was called for "
                 f"action_type {action_type!r}."
             )
+        proposal_id = uuid.uuid4()
+        await require_task_vc(
+            agent_id=agent_id,
+            transaction_id=str(proposal_id),
+            operation=f"{action_type}.create_proposal",
+            payload=payload,
+        )
         proposal = AgentActionProposal(
+            id=proposal_id,
             agent_label=agent_label,
             action_type=action_type,
             payload=payload,
@@ -136,7 +151,9 @@ class ProposalService:
             status=ProposalStatus.PROPOSED,
         )
         self._session.add(proposal)
-        await self._session.flush()  # assign proposal.id before notifying
+        await self._session.flush()  # persist the row before notify_reviewers'
+        # resource_id=proposal.id reference (id is already known — set explicitly
+        # above for require_task_vc — but the row itself must exist in the DB).
         # Notify reviewers who can release this action class (inventory:adjust for
         # a stock adjustment, finance:reconcile for a reconciliation match), except
         # whoever triggered the agent. Enqueue-only.

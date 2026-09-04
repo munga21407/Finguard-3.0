@@ -38,6 +38,7 @@ from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.ml.model_store import save_model, train_isolation_forest
 from src.domains.intelligence.prompts.b_classifier import CLASSIFIER_SYSTEM, TRANSACTION_TAXONOMY
 from src.domains.intelligence.schemas import BatchClassificationResult, TransactionClassification
+from src.domains.intelligence.security.vc_issuer import require_task_vc
 from src.infrastructure.database.mongodb import init_mongo
 from src.infrastructure.database.postgres import AsyncSessionLocal
 from src.workers.tasks.celery_app import celery_app
@@ -161,9 +162,10 @@ async def _run_batch_classification() -> dict[str, Any]:
     Full pipeline executed inside asyncio.run():
       1. Fetch up to _BATCH_SIZE rows with FOR UPDATE SKIP LOCKED.
       2. Classify via model.
-      3. Persist categories to ledger_entries.
-      4. Publish domain event.
-      5. Write artifact to intelligence_hub.
+      3. Task-scoped VC check (audit/defense-in-depth) gating the persist.
+      4. Persist categories to ledger_entries.
+      5. Publish domain event.
+      6. Write artifact to intelligence_hub.
     """
     await init_mongo()
     async with AsyncSessionLocal() as session:
@@ -198,6 +200,33 @@ async def _run_batch_classification() -> dict[str, Any]:
         except Exception as exc:
             logger.error("Batch classification: the model call failed", error=str(exc))
             return {"status": "llm_error", "classified": 0, "error": str(exc)}
+
+        # Task-scoped VC check (audit/defense-in-depth, shadow mode by default
+        # — see vc_issuer.require_task_vc). Minted and validated *here*, inside
+        # the worker's own invocation, right before the persist it gates — not
+        # at node-dispatch time (the node only enqueues this task via .delay();
+        # a VC minted there would sit through an unbounded queue delay and
+        # could easily outlive its 5-minute TTL before this code ever ran).
+        # Scoped to a fresh batch id, not per-row: the whole persist below
+        # commits as one unit, so "the write" this gates is the batch, not any
+        # one entry. A failure means nothing is persisted this run — safe, the
+        # FOR UPDATE SKIP LOCKED rows release on session close without a
+        # commit, so the next poll picks them back up.
+        batch_id = uuid.uuid4()
+        try:
+            await require_task_vc(
+                agent_id="B",
+                transaction_id=str(batch_id),
+                operation="classify.batch_persist",
+                payload={"entry_ids": [e["entry_id"] for e in entries]},
+            )
+        except Exception as exc:
+            logger.warning(
+                "Batch classification: task VC check failed — batch not persisted",
+                batch_id=str(batch_id),
+                error=str(exc),
+            )
+            return {"status": "vc_failed", "classified": 0}
 
         # Step 3 — persist.  CAST(:id AS uuid) not :id::uuid — text()'s bind
         # scanner mis-parses a ``:name`` immediately followed by ``::``.
@@ -496,6 +525,104 @@ def enforce_data_retention() -> dict[str, Any]:
     return asyncio.run(_run_data_retention_async())
 
 
+# ── Checkpoint-retention pipeline ─────────────────────────────────────────────
+# checkpoints/checkpoint_blobs/checkpoint_writes (migration 0025) have no
+# TTL/cleanup of their own — unlike e.g. trust_log's 90-day TTL index, nothing
+# ever removes old conversation checkpoint history. Only load-bearing once
+# LANGGRAPH_CHECKPOINTING_ENABLED is actually on somewhere.
+
+# Threads (not rows) purged per invocation — each thread can own many rows
+# across all three tables, so this bounds work differently than
+# _RETENTION_BATCH_SIZE above, which counts rows directly.
+_CHECKPOINT_RETENTION_BATCH_SIZE = 500
+
+
+async def _run_checkpoint_retention_async() -> dict[str, Any]:
+    """
+    Delete checkpoint history for threads whose most recent checkpoint is
+    older than ``settings.CHECKPOINT_RETENTION_DAYS``, across all three
+    LangGraph checkpointer tables.
+
+    The checkpoint tables have no ``created_at`` column; the ``checkpoint``
+    JSONB payload's ``ts`` field (required by
+    ``langgraph.checkpoint.base.Checkpoint`` — confirmed in the installed
+    ``langgraph-checkpoint`` source) is the only timestamp available, so
+    retention keys off ``(checkpoint->>'ts')::timestamptz`` rather than a
+    plain column comparison.
+
+    Deletes whole threads at a time, never partial checkpoint rows within a
+    thread — a thread's checkpoints form a replay chain; removing some but
+    not all of a not-yet-expired thread's rows would corrupt that chain for
+    ``AsyncPostgresSaver``. Bounded to ``_CHECKPOINT_RETENTION_BATCH_SIZE``
+    threads per invocation so a large backlog drains incrementally, same
+    rationale as ``_run_data_retention_async``'s row-based bound.
+
+    Returns:
+        {"status": "ok" | "no_work", "deleted_threads": int}
+    """
+    find_old_threads_sql = text(f"""
+        SELECT thread_id
+        FROM checkpoints
+        GROUP BY thread_id
+        HAVING MAX((checkpoint->>'ts')::timestamptz)
+             < NOW() - INTERVAL '{settings.CHECKPOINT_RETENTION_DAYS} days'
+        LIMIT {_CHECKPOINT_RETENTION_BATCH_SIZE}
+    """)
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(find_old_threads_sql)
+        thread_ids = [row[0] for row in result.fetchall()]
+
+        if not thread_ids:
+            logger.info("Checkpoint retention: no threads eligible for deletion")
+            return {"status": "no_work", "deleted_threads": 0}
+
+        # Leaf tables first — no FK constraints tie these together, but
+        # deleting in dependency order matches the "never leave a partial
+        # state visible" discipline the rest of this module follows.
+        for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+            await session.execute(
+                text(f"DELETE FROM {table} WHERE thread_id = ANY(:thread_ids)"),  # noqa: S608
+                {"thread_ids": thread_ids},
+            )
+        await session.commit()
+
+    logger.info(
+        "Checkpoint retention: purge complete",
+        deleted_threads=len(thread_ids),
+        batch_limit=_CHECKPOINT_RETENTION_BATCH_SIZE,
+        retention_days=settings.CHECKPOINT_RETENTION_DAYS,
+    )
+    return {"status": "ok", "deleted_threads": len(thread_ids)}
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name="batch.enforce_checkpoint_retention",
+    queue="batch_processing",
+    max_retries=2,
+    default_retry_delay=300,
+)
+def enforce_checkpoint_retention() -> dict[str, Any]:
+    """
+    Scheduled LangGraph checkpoint retention sweep.
+
+    Removes checkpoint history (``checkpoints``/``checkpoint_blobs``/
+    ``checkpoint_writes``) for threads whose most recent checkpoint is older
+    than ``settings.CHECKPOINT_RETENTION_DAYS`` (default 30), in batches of up
+    to ``_CHECKPOINT_RETENTION_BATCH_SIZE`` threads per invocation. Celery
+    beat fires this weekly; run it manually to drain an accumulated backlog:
+
+        celery -A src.workers.tasks.celery_app call batch.enforce_checkpoint_retention
+
+    No-op (returns ``no_work``) when ``LANGGRAPH_CHECKPOINTING_ENABLED`` is
+    off anywhere this runs — the tables just stay empty.
+
+    Returns:
+        {"status": "ok" | "no_work", "deleted_threads": int}
+    """
+    return asyncio.run(_run_checkpoint_retention_async())
+
+
 # ── Celery task ────────────────────────────────────────────────────────────────
 
 @celery_app.task(  # type: ignore[untyped-decorator]
@@ -595,13 +722,43 @@ async def _fetch_customer_debit_amounts(session: Any, customer_id: str) -> list[
 async def _train_and_upsert_customer(session: Any, customer_id: str) -> bool:
     """Fit IsolationForest(contamination='auto') for one customer and upsert it.
 
-    Returns ``True`` when a model was trained+stored, ``False`` when the customer
-    had too few samples (left to the watchdog's on-the-fly fallback).
+    Returns ``True`` when a model was trained+stored, ``False`` when the
+    customer had too few samples (left to the watchdog's on-the-fly fallback)
+    *or* the task-scoped VC check below failed — either way this one customer
+    is skipped, not the whole retrain run (see callers: ``_retrain_agent_e_async``
+    loops over many customers, ``_fit_one_agent_e_async`` fits just one). The
+    two ``False`` cases are conflated in this return value but not in
+    observability: a VC failure specifically increments
+    ``agent_task_vc_validate_fail_total`` and logs its own warning below,
+    unlike an insufficient-samples skip.
+
+    Unlike E's live event publish or B's batch persist, there's no live
+    request this runs alongside — Agent E's model retrain is a Celery-beat
+    cron with no per-request agent trigger to hang a task VC on, so this
+    function mints and validates its own VC immediately before its own write
+    (audit/defense-in-depth, shadow mode by default — see
+    ``vc_issuer.require_task_vc``), scoped to the customer being trained.
     """
     amounts = await _fetch_customer_debit_amounts(session, customer_id)
     model = train_isolation_forest(amounts)
     if model is None:
         return False
+
+    try:
+        await require_task_vc(
+            agent_id="E",
+            transaction_id=customer_id,
+            operation="watchdog.model_retrain",
+            payload={"customer_id": customer_id, "sample_count": len(amounts)},
+        )
+    except Exception as exc:
+        logger.warning(
+            "Agent E retrain: task VC check failed — model not saved",
+            customer_id=customer_id,
+            error=str(exc),
+        )
+        return False
+
     await save_model(session, uuid.UUID(customer_id), model, len(amounts))
     return True
 

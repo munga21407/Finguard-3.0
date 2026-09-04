@@ -14,6 +14,7 @@ from src.domains.intelligence.schemas import (
     ExecutiveSummary,
     SummaryBullet,
 )
+from src.domains.intelligence.services import advisor_service as h_service
 from src.domains.intelligence.services import classification_feedback_service as fb
 
 
@@ -79,7 +80,7 @@ async def test_j_keeps_source_when_translation_drops_numbers() -> None:
 async def test_h_flags_limited_data_when_no_upstream() -> None:
     node = h.make_h_advisor_node()
     advisor = AgentHOutput(narrative_response="General guidance.", ui_widgets=[])
-    with patch.object(h, "generate_structured_content", new=AsyncMock(return_value=advisor)):
+    with patch.object(h_service, "generate_structured_content", new=AsyncMock(return_value=advisor)):
         # user_role in ctx avoids the DB role lookup; empty upstream → completeness "none"
         result = await node(_state({"user_role": "owner", "crm_profile": {}}))
     advice = result["context"]["advice"]
@@ -98,7 +99,7 @@ async def test_h_full_data_no_disclaimer() -> None:
         "credit_strategy_result": {"bankability_score": 70},
         "audit_result": {"tax_type": "VAT"},
     }
-    with patch.object(h, "generate_structured_content", new=AsyncMock(return_value=advisor)):
+    with patch.object(h_service, "generate_structured_content", new=AsyncMock(return_value=advisor)):
         result = await node(_state(ctx))
     advice = result["context"]["advice"]
     assert advice["data_completeness"] == "full"

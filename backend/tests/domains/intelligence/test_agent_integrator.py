@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-from src.domains.intelligence.agents import i_integrator
-from src.domains.intelligence.agents.i_integrator import (
+from src.domains.intelligence.services import integrator_service as i_integrator
+from src.domains.intelligence.services.integrator_service import (
     LIVE,
     MANUAL,
     MOCK,

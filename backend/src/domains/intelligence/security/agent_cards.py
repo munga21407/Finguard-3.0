@@ -15,8 +15,18 @@ Sprint 6 additions
   ``agents/planner.py``), not a call across a trust boundary this would
   guard. It's the right primitive for a *genuine* agent-to-agent exchange —
   e.g. if agent execution ever moves to a separate service from write
-  execution — not for today's single-process orchestration. Exercised only
-  by unit tests until that boundary exists.
+  execution — not for today's single-process orchestration. Has no test
+  coverage of its own today (unlike the task-scoped VC functions in
+  ``vc_issuer.py``, which do); add one if this is ever wired to a live
+  caller.
+- **Own-card verification:** ``verify_own_card(agent_id)`` — added alongside
+  the "Task-scoped VC end-to-end" work (see
+  ``AGENTS_REMEDIATION_SPRINTS.md``). A one-party check (this agent's own
+  card is validly signed), not ``exchange_cards``'s two-party handoff — the
+  same audit/defense-in-depth posture as task-scoped VCs, and called from
+  *within* ``vc_issuer.require_task_vc`` so every task-VC-gated write site
+  gets it without a separate call. This one is wired in and tested;
+  ``exchange_cards`` above is not, and this doesn't change that.
 
 Cards are signed lazily on first access and cached for the process lifetime.
 """
@@ -125,6 +135,28 @@ def exchange_cards(sender: AgentCard, receiver: AgentCard) -> None:
         sender_did=sender.did,
         receiver_did=receiver.did,
     )
+
+
+def verify_own_card(agent_id: str) -> None:
+    """
+    Verify ``agent_id``'s own signed card immediately before it mutates —
+    audit/defense-in-depth (mirrors ``vc_issuer.require_task_vc``'s posture),
+    called from within that function so every task-VC-gated write site gets
+    it for free. Not ``exchange_cards``: this checks one agent's own identity,
+    not a two-party handoff — there's still no genuine cross-process boundary
+    for ``exchange_cards`` to guard (see the module docstring); this doesn't
+    change that or call it.
+
+    Raises:
+        PermissionError: if the card fails CA signature verification.
+        KeyError: if ``agent_id`` isn't in the registry (``get_card``'s
+            existing contract — propagates unchanged).
+    """
+    card = get_card(agent_id)
+    if not verify_card(card):
+        raise PermissionError(
+            f"Agent card verification failed for {card.did} (agent_id={agent_id!r})"
+        )
 
 
 # ---------------------------------------------------------------------------

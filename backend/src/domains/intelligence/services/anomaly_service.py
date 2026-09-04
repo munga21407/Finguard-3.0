@@ -52,7 +52,7 @@ from src.domains.intelligence.ml.model_store import (
 )
 from src.domains.intelligence.prompts.e_watchdog import WATCHDOG_SYSTEM
 from src.domains.intelligence.schemas import KeyFinding, WatchdogAnalysis
-from src.domains.intelligence.security.vc_issuer import issue_vc
+from src.domains.intelligence.security.vc_issuer import issue_vc, require_task_vc
 from src.domains.intelligence.tools.event_publisher import make_event_publisher
 from src.domains.intelligence.tools.sql_executor import execute_readonly_sql
 from src.domains.intelligence.tuning import get_watchdog_tuning
@@ -541,20 +541,32 @@ async def run_watchdog_analysis(
     # — no separate check needed here.
     event_published = False
     if (anomaly_detected or iso_is_anomaly or iso_score > 0.7) and mode == "actions":
+        event_payload = {
+            "account_id": account_id,
+            "anomaly_score": anomaly_score,
+            "isolation_score": iso_score,
+            "current_state": current_state,
+            "is_duplicate": is_dup,
+            "vc_id": vc_id,
+            "period_days": period_days,
+        }
         try:
+            # Task-scoped VC check (audit/defense-in-depth, shadow mode by
+            # default — see vc_issuer.require_task_vc). A single fresh UUID
+            # scopes mint+validate to this one publish attempt; a failure here
+            # degrades exactly like a broker-unavailable publish failure below
+            # (event_published stays False, the watchdog run still completes).
+            await require_task_vc(
+                agent_id="E",
+                transaction_id=str(uuid.uuid4()),
+                operation="watchdog.anomaly_publish",
+                payload=event_payload,
+            )
             publisher = make_event_publisher(mode, agent_id="E")
             await publisher.ainvoke({
                 "exchange": "finguard.intelligence",
                 "routing_key": "intelligence.watchdog.anomaly",
-                "payload": {
-                    "account_id": account_id,
-                    "anomaly_score": anomaly_score,
-                    "isolation_score": iso_score,
-                    "current_state": current_state,
-                    "is_duplicate": is_dup,
-                    "vc_id": vc_id,
-                    "period_days": period_days,
-                },
+                "payload": event_payload,
             })
             event_published = True
         except Exception as exc:

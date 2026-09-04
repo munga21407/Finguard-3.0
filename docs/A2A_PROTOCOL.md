@@ -12,15 +12,26 @@ LLM re-deciding one hop at a time. Companion to
 > context; the `Send`-based planner (behind `settings.A2A_PLANNER_ENABLED`,
 > default **off**, so the compiled graph is unchanged until switched on); and the
 > registry-generated supervisor agent table + planner node map. The
-> consumer-*read* refactor has landed for the canonical consumer: **Agent G reads
-> `context["forecast"]` (D) and `context["audit_result"]` (F) when the planner
-> ran them first**, folding their signals into the credit narrative + findings
-> and recording provenance (`credit_forecast.consumed_upstream`) — defensively,
-> so single-agent flows are unchanged and the bankability score stays
-> ledger-derived. **Agent H** also declares soft `consumes` edges on `forecast`
-> (D) and `audit_result` (F) — it already folded them in ad hoc
-> (`ctx.get("forecast")` / `ctx.get("audit_result")`, both defaulting to `{}`),
-> so this made an existing behavior plan-visible rather than adding a new one.
+> consumer-*read* refactor has landed for three consumers, each folding an
+> upstream signal in differently:
+>
+>   * **Agent G** (hard `forecast`, soft `audit_result`) reads
+>     `context["forecast"]` (D) and `context["audit_result"]` (F) when the
+>     planner ran them first, folding their signals into the credit narrative
+>     + findings and recording provenance (`credit_forecast.consumed_upstream`)
+>     — defensively, so single-agent flows are unchanged and the bankability
+>     score stays ledger-derived. This remains the deepest integration: G is
+>     the only agent whose `consumes` includes a *hard* (`required=True`)
+>     dependency, so it's genuinely skipped, not just degraded, if D produces
+>     nothing.
+>   * **Agent H** (soft `forecast`, soft `audit_result`) already folded these
+>     in ad hoc (`ctx.get("forecast")` / `ctx.get("audit_result")`, both
+>     defaulting to `{}`) — declaring them made an existing behavior
+>     plan-visible rather than adding a new one.
+>   * **Agent K** (soft `forecast`) optionally folds D's cash-flow regime into
+>     reorder urgency (a restock is a cash outflow) — narrower than G/H's
+>     narrative folding, but the same soft-dependency mechanism.
+>
 > Every other agent declares no `consumes`. Every phase is backward-compatible
 > with the existing single-agent flows.
 >
@@ -507,6 +518,11 @@ D+F→G dependency explicit and type-checked.
 ---
 
 ## 6. Phased rollout
+
+*For the actual staging bake procedure, test intents, observation queries,
+and go/no-go decision template, see
+[`A2A_PLANNER_STAGING_BAKE.md`](./A2A_PLANNER_STAGING_BAKE.md) — this section
+covers the phased design, that doc covers running the experiment.*
 
 | Phase | Deliverable | Risk | Backward-compat |
 |---|---|---|---|

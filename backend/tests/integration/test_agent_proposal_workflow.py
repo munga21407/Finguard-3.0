@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import ForbiddenError, UnprocessableError
 from src.domains.identity.models import User, UserRole
+from src.domains.intelligence import proposal_service
 from src.domains.intelligence.models import ProposalStatus
 from src.domains.intelligence.proposal_service import (
     ACTION_STOCK_ADJUSTMENT,
@@ -190,7 +191,9 @@ async def test_node_helper_queues_adjustment_instead_of_applying(
     db_session: AsyncSession,
 ) -> None:
     """Agent K's gating helper routes an ADJUSTMENT to the queue, not an inline write."""
-    from src.domains.intelligence.agents.k_stockkeeper import _queue_adjustment_proposal
+    from src.domains.intelligence.services.stockkeeper_service import (
+        _queue_adjustment_proposal,
+    )
 
     product = await _product_with_stock(db_session, on_hand="10")
     action = {
@@ -215,7 +218,9 @@ async def test_node_helper_does_not_queue_a_rejected_adjustment(
     db_session: AsyncSession,
 ) -> None:
     """An adjustment the guard rejects (zero delta) is surfaced, never queued."""
-    from src.domains.intelligence.agents.k_stockkeeper import _queue_adjustment_proposal
+    from src.domains.intelligence.services.stockkeeper_service import (
+        _queue_adjustment_proposal,
+    )
 
     product = await _product_with_stock(db_session)
     action = {
@@ -258,6 +263,97 @@ async def test_create_proposal_notifies_adjust_reviewers(db_session: AsyncSessio
     assert row is not None
     assert row.template == "approval_needed"
     assert row.to_email == reviewer.email
+
+
+# ── Task-scoped VC on proposal *creation* (P1 of "Task-scoped VC end-to-end",
+# audit/defense-in-depth — never wired into approve()/reject(), see
+# create_proposal's own docstring) ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_proposal_mints_a_task_scoped_vc(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    product = await _product_with_stock(db_session)
+    calls: list[dict[str, object]] = []
+
+    async def fake_require(**kwargs: object) -> None:
+        calls.append(kwargs)
+    monkeypatch.setattr(proposal_service, "require_task_vc", fake_require)
+
+    proposal = await ProposalService(db_session).create_proposal(
+        agent_label="k_stockkeeper",
+        action_type=ACTION_STOCK_ADJUSTMENT,
+        payload=_adjustment_payload(product.id, "5"),
+        triggered_by=uuid.uuid4(),
+    )
+
+    assert len(calls) == 1
+    # agent_id is the registry id ("K"), not the display label — same
+    # _ACTION_AGENT_ID mapping _issue_decision_vc uses for approve/reject.
+    assert calls[0]["agent_id"] == "K"
+    assert calls[0]["operation"] == "stock.adjustment.create_proposal"
+    assert calls[0]["transaction_id"] == str(proposal.id)
+
+
+async def _fail_if_task_vc_called(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fail_if_called(**_kwargs: object) -> None:
+        raise AssertionError("require_task_vc must not be called here")
+    monkeypatch.setattr(proposal_service, "require_task_vc", fail_if_called)
+
+
+@pytest.mark.asyncio
+async def test_approve_never_calls_require_task_vc(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hard constraint: task VCs never gate approve() — it stays on
+    payload_hash alone (a 5-minute TTL cannot span an hours-to-days review).
+    require_task_vc is patched to a no-op for creation (already covered by
+    test_create_proposal_mints_a_task_scoped_vc above) then made to fail loudly
+    for the approve() call that follows."""
+    product = await _product_with_stock(db_session)
+    reviewer = await _persisted_user(db_session, UserRole.MANAGER)
+
+    async def noop(**_kwargs: object) -> None:
+        return None
+    monkeypatch.setattr(proposal_service, "require_task_vc", noop)
+
+    proposal = await ProposalService(db_session).create_proposal(
+        agent_label="k_stockkeeper",
+        action_type=ACTION_STOCK_ADJUSTMENT,
+        payload=_adjustment_payload(product.id, "5"),
+        triggered_by=uuid.uuid4(),
+    )
+
+    await _fail_if_task_vc_called(monkeypatch)
+    approved = await ProposalService(db_session).approve(
+        proposal.id, reviewer, expected_action_type=ACTION_STOCK_ADJUSTMENT
+    )
+    assert approved.status is ProposalStatus.APPLIED
+
+
+@pytest.mark.asyncio
+async def test_reject_never_calls_require_task_vc(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    product = await _product_with_stock(db_session)
+    reviewer = await _persisted_user(db_session, UserRole.MANAGER)
+
+    async def noop(**_kwargs: object) -> None:
+        return None
+    monkeypatch.setattr(proposal_service, "require_task_vc", noop)
+
+    proposal = await ProposalService(db_session).create_proposal(
+        agent_label="k_stockkeeper",
+        action_type=ACTION_STOCK_ADJUSTMENT,
+        payload=_adjustment_payload(product.id, "5"),
+        triggered_by=uuid.uuid4(),
+    )
+
+    await _fail_if_task_vc_called(monkeypatch)
+    rejected = await ProposalService(db_session).reject(
+        proposal.id, reviewer, expected_action_type=ACTION_STOCK_ADJUSTMENT
+    )
+    assert rejected.status is ProposalStatus.REJECTED
 
 
 # ── Trust protocol: payload integrity + action-type binding (remediation A1) ──

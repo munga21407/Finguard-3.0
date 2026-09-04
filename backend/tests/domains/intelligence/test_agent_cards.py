@@ -56,3 +56,22 @@ def test_get_card_resolves_every_registered_letter() -> None:
 def test_get_card_unknown_id_raises_keyerror() -> None:
     with pytest.raises(KeyError):
         agent_cards.get_card("k_stockkeeper")
+
+
+# ── verify_own_card (P2 of "Task-scoped VC end-to-end") ────────────────────────
+
+def test_verify_own_card_passes_for_a_valid_registered_agent() -> None:
+    agent_cards.verify_own_card("C")  # must not raise
+
+
+def test_verify_own_card_raises_for_unknown_agent() -> None:
+    with pytest.raises(KeyError):
+        agent_cards.verify_own_card("not-a-real-agent")
+
+
+def test_verify_own_card_raises_when_signature_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agent_cards, "verify_card", lambda card: False)
+    with pytest.raises(PermissionError, match="card verification failed"):
+        agent_cards.verify_own_card("C")

@@ -15,9 +15,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.domains.intelligence.agents import h_advisor
-from src.domains.intelligence.agents.h_advisor import _resolve_user_role, make_h_advisor_node
+from src.domains.intelligence.agents.h_advisor import make_h_advisor_node
 from src.domains.intelligence.schemas import AgentHOutput, GenUIPayload
+from src.domains.intelligence.services import advisor_service as h_advisor
+from src.domains.intelligence.services.advisor_service import _resolve_user_role
 
 
 @pytest.mark.asyncio

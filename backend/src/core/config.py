@@ -157,6 +157,31 @@ class Settings(BaseSettings):
     # routers/conversations.py's /conversation/{session_id}/resume). Off by
     # default: compiles the graph without a checkpointer exactly as before.
     LANGGRAPH_CHECKPOINTING_ENABLED: bool = False
+    # How long a conversation thread's checkpoint history survives before
+    # workers.tasks.batch.enforce_checkpoint_retention deletes it (checkpoints
+    # / checkpoint_blobs / checkpoint_writes have no other TTL/cleanup — see
+    # that task's docstring). Tunable, not hardcoded like ledger_entries' 7
+    # years: this is a new, still-being-calibrated policy. No effect while
+    # LANGGRAPH_CHECKPOINTING_ENABLED is off — the tables just stay empty.
+    CHECKPOINT_RETENTION_DAYS: int = 30
+
+    # Task-scoped Verifiable Credentials (security/vc_issuer.py's
+    # issue_task_scoped_vc/validate_task_vc) on live, in-process write paths —
+    # audit/defense-in-depth on top of the existing guarded-tool checks, not a
+    # cross-process trust boundary (there isn't one yet; see
+    # docs/AGENTS_REMEDIATION_SPRINTS.md's "Task-scoped VC end-to-end" section).
+    # Off by default: security.vc_issuer.require_task_vc still mints, validates,
+    # and records metrics either way (shadow mode) but only *blocks* the write
+    # when this is true — see that function's docstring.
+    TASK_VC_ENFORCEMENT_ENABLED: bool = False
+    # How long a task-scoped VC's trust_log document survives — independent of
+    # the 90-day trust_log_ttl_90d index that governs audit VCs (issue_vc).
+    # Task-scoped docs additionally set `retain_until` (a real BSON Date, not
+    # the VC token's own 5-minute `exp` claim) so a second, separate TTL index
+    # can expire them on this longer, differently-calibrated schedule without
+    # touching the existing audit-VC retention. See
+    # vc_issuer.ensure_trust_log_ttl_index.
+    TASK_VC_RETENTION_DAYS: int = 365
     # Per-agent LLM cost attribution is now model-keyed and externally
     # configurable via the LLM_PRICING_JSON env var — see
     # src/domains/intelligence/llm/pricing.py. The old hardcoded single-rate

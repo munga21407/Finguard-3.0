@@ -219,6 +219,23 @@ PLANNER_REPLANS = Counter(
     "Planner replans triggered by a consumer's _replan_targets",
 )
 
+# ── Task-scoped VC rollout (security/vc_issuer.py::require_task_vc) ───────────
+# Gated behind TASK_VC_ENFORCEMENT_ENABLED for *blocking* — these two counters
+# increment in shadow mode too (flag off), so the rollout can be observed
+# before anything is actually enforced.
+
+TASK_VC_ISSUED = Counter(
+    "agent_task_vc_issued_total",
+    "Task-scoped VCs minted and successfully self-validated",
+    labelnames=["agent_id", "operation"],
+)
+
+TASK_VC_VALIDATE_FAIL = Counter(
+    "agent_task_vc_validate_fail_total",
+    "Task-scoped VC mint or validate failures",
+    labelnames=["agent_id", "operation", "reason"],
+)
+
 # ── Helper: LLM call timer ─────────────────────────────────────────────────────
 
 

@@ -8,27 +8,30 @@ Two credential types
    to record every significant operation / human decision in a tamper-evident
    audit trail. This one is live and load-bearing.
 
-2. **Task-scoped VCs** (``issue_task_scoped_vc`` / ``validate_task_vc``) —
-   short-lived (5 minutes), bound to a specific ``transaction_id``; designed
-   to be issued and immediately validated, right before a write, by a caller
-   proving it holds a fresh, in-scope credential for that exact transaction.
-   **Not currently wired into any live write path.** The one place that looks
-   like an obvious fit — ``ProposalService`` gating a human-reviewed
-   write — deliberately does *not* use it: a proposal can sit pending for
-   hours to days awaiting a reviewer, which the 5-minute TTL cannot span, and
-   since issuance and validation would both happen inside the same trusted
-   process either way, a self-issued-and-self-validated token adds no
-   protection against an external attacker today. ``ProposalService`` instead
-   pins a ``payload_hash`` (this module's ``payload_hash``) at proposal
-   creation and re-checks it at approval — the right primitive for a
-   *long-window integrity* guarantee, which is what that flow actually needs
-   (see ``AGENTS_REMEDIATION_SPRINTS.md`` Sprint 8 for the full reasoning).
-   These two functions remain the right tool for a *different* problem: if
-   agent execution and write execution ever become separate trust domains
-   (they aren't today — one process, one trust boundary), a caller in the
-   agent domain would mint one of these right before asking the write domain
-   to act, and validation happens there. Exercised only by
-   ``test_vc_issuer.py`` until that boundary exists.
+2. **Task-scoped VCs** (``issue_task_scoped_vc`` / ``validate_task_vc``, wrapped
+   as one unit by ``require_task_vc``) — short-lived (5 minutes), bound to a
+   specific ``transaction_id``; designed to be issued and immediately
+   validated, right before a write, by a caller proving it holds a fresh,
+   in-scope credential for that exact transaction. Wired into
+   ``reconciliation_service``'s Pass 1 (deterministic, in-process auto-apply)
+   as of the "Task-scoped VC end-to-end" work — gated behind
+   ``TASK_VC_ENFORCEMENT_ENABLED`` (off by default; shadow mode mints +
+   validates + records metrics without blocking). This is a deliberate
+   audit/defense-in-depth choice, not a claim that a real trust-domain split
+   exists yet (it doesn't — one process, one trust boundary today; see
+   ``AGENTS_REMEDIATION_SPRINTS.md``'s "Task-scoped VC end-to-end" section for
+   the full reasoning and rollout plan).
+
+   ``ProposalService`` gating a human-reviewed write is a **deliberate
+   non-goal** for this credential type: a proposal can sit pending for hours
+   to days awaiting a reviewer, which the 5-minute TTL cannot span.
+   ``ProposalService`` instead pins a ``payload_hash`` (this module's
+   ``payload_hash``) at proposal creation and re-checks it at approval — the
+   right primitive for a *long-window integrity* guarantee, which is what
+   that flow actually needs (see ``AGENTS_REMEDIATION_SPRINTS.md`` Sprint 8).
+   Task-scoped VCs may still be minted at proposal *creation* time (a
+   different claim — "this creation call was authorized," not "this payload
+   is still fresh") without touching ``approve()``/``reject()`` at all.
 
 Signing (Ed25519, asymmetric — EdDSA only)
 ------------------------------------------
@@ -62,8 +65,12 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from pymongo.errors import OperationFailure
+
+from src.core.config import settings
 from src.core.logging import logger
-from src.domains.intelligence.security.agent_cards import get_card
+from src.core.metrics import TASK_VC_ISSUED, TASK_VC_VALIDATE_FAIL
+from src.domains.intelligence.security.agent_cards import get_card, verify_own_card
 from src.domains.intelligence.security.key_manager import sign_data, verify_signature
 from src.infrastructure.database.mongodb import get_mongo_db
 
@@ -323,9 +330,17 @@ async def issue_task_scoped_vc(
         "claims": claims,
         "vc_type": "task_scoped",
         "transaction_id": transaction_id,
+        # The VC token's own 5-minute cryptographic expiry (informational only
+        # — not what governs this document's lifetime in trust_log).
         "expires_at": exp.isoformat(),
-        # Native datetime so the TTL index (90-day retention) applies correctly.
+        # Native datetime so the trust_log_ttl_90d index applies correctly.
         "created_at": now,
+        # A second, longer-lived retention deadline distinct from the token's
+        # own 5-minute exp — native BSON Date so trust_log_task_vc_retain_until
+        # (see ensure_trust_log_ttl_index) can expire this document on its own
+        # schedule (TASK_VC_RETENTION_DAYS) without touching audit VCs, which
+        # never set this field.
+        "retain_until": now + timedelta(days=settings.TASK_VC_RETENTION_DAYS),
     }
     db = get_mongo_db()
     result = await db[COLLECTION].insert_one(doc)
@@ -343,31 +358,74 @@ async def issue_task_scoped_vc(
     return token
 
 
+async def _create_or_replace_index(
+    coll: Any, keys: str, *, expire_after_seconds: int, name: str, partial_filter: dict[str, Any]
+) -> None:
+    """``create_index``, replacing an existing same-named index whose definition
+    has drifted (MongoDB raises IndexOptionsConflict/IndexKeySpecsConflict
+    rather than silently updating it — this makes ``ensure_trust_log_ttl_index``
+    idempotent even across a definition change, e.g. adding the partial filter
+    below to an index that predates it)."""
+    try:
+        await coll.create_index(
+            keys,
+            expireAfterSeconds=expire_after_seconds,
+            name=name,
+            partialFilterExpression=partial_filter,
+        )
+    except OperationFailure as exc:
+        if exc.code not in (85, 86):  # IndexOptionsConflict, IndexKeySpecsConflict
+            raise
+        await coll.drop_index(name)
+        await coll.create_index(
+            keys,
+            expireAfterSeconds=expire_after_seconds,
+            name=name,
+            partialFilterExpression=partial_filter,
+        )
+
+
 async def ensure_trust_log_ttl_index() -> None:
     """
-    Create (or confirm) a 90-day TTL index on ``trust_log.created_at``.
+    Create (or confirm) ``trust_log``'s two TTL indexes — audit VCs (90 days)
+    and task-scoped VCs (``TASK_VC_RETENTION_DAYS``, 365 by default) — on their
+    own independent schedules.
 
-    Safe to call on every application startup — MongoDB is idempotent for
-    ``create_index`` calls when the index definition is unchanged.
+    Safe to call on every application startup.
 
-    The index instructs MongoDB's TTL background thread to automatically
-    delete documents where ``created_at`` is older than 7 776 000 seconds
-    (90 days), preventing unbounded audit-log storage growth.
+    Audit VCs (``issue_vc``) and task-scoped VCs (``issue_task_scoped_vc``)
+    share one collection but need different retention: without the partial
+    filters below, the 90-day ``created_at`` index (which every document sets)
+    would delete a task-scoped document before its own longer-lived
+    ``retain_until`` index ever got a chance to — TTL indexes are independent
+    background sweeps, not a priority-ordered chain, so whichever condition a
+    document meets first wins. Filtered on ``vc_type`` (an equality match —
+    MongoDB partial-index filters don't support ``$exists: false``, only a
+    narrow operator set including ``$eq``, which every document's ``vc_type``
+    already satisfies).
 
-    IMPORTANT: ``created_at`` must be stored as a native BSON Date (Python
-    ``datetime``), not an ISO string.  Both ``issue_vc`` and
-    ``issue_task_scoped_vc`` have been updated to enforce this.
+    IMPORTANT: both ``created_at`` and ``retain_until`` must be stored as
+    native BSON Dates (Python ``datetime``), not ISO strings — MongoDB's TTL
+    background thread silently ignores string-valued fields.
     """
-    db = get_mongo_db()
-    await db[COLLECTION].create_index(
-        "created_at",
-        expireAfterSeconds=7_776_000,   # 90 days
+    coll = get_mongo_db()[COLLECTION]
+    await _create_or_replace_index(
+        coll, "created_at",
+        expire_after_seconds=7_776_000,   # 90 days
         name="trust_log_ttl_90d",
+        partial_filter={"vc_type": "audit"},
+    )
+    await _create_or_replace_index(
+        coll, "retain_until",
+        expire_after_seconds=0,   # expire exactly at the stored timestamp
+        name="trust_log_task_vc_retain_until",
+        partial_filter={"vc_type": "task_scoped"},
     )
     logger.info(
-        "trust_log TTL index confirmed",
+        "trust_log TTL indexes confirmed",
         collection=COLLECTION,
-        expire_after_seconds=7_776_000,
+        audit_expire_after_seconds=7_776_000,
+        task_vc_retention_days=settings.TASK_VC_RETENTION_DAYS,
     )
 
 
@@ -416,3 +474,52 @@ def validate_task_vc(
         )
 
     return claims
+
+
+async def require_task_vc(
+    *, agent_id: str, transaction_id: str, operation: str, payload: dict[str, Any]
+) -> None:
+    """
+    Mint and immediately validate a task-scoped VC for one write — audit /
+    defense-in-depth on a live, in-process write path (single trust boundary
+    today; see the module docstring and ``core.config.TASK_VC_ENFORCEMENT_ENABLED``).
+
+    **Shadow mode** (default, ``TASK_VC_ENFORCEMENT_ENABLED=False``): always
+    mints, validates, and records the ``agent_task_vc_*`` metrics, but never
+    raises on failure — only logs a warning — so the write proceeds unblocked
+    while the rollout is observed.
+
+    **Enforce mode** (``TASK_VC_ENFORCEMENT_ENABLED=True``): re-raises the
+    underlying failure (own-card verification, mint error, or
+    ``VCError``/``ValueError`` from ``validate_task_vc``) so the caller can
+    react per its own fail-closed policy — e.g. skip just this one item
+    rather than aborting an entire batch (see ``reconciliation_service``'s
+    per-match loop).
+
+    Deliberately one function, not separable mint/validate calls: a caller
+    that mints for one id and validates against another by mistake is a real
+    (if unlikely) mistake this shape rules out structurally. Also verifies
+    ``agent_id``'s own signed card (``agent_cards.verify_own_card``) first —
+    every task-VC-gated write site gets that check without calling it
+    separately.
+    """
+    try:
+        verify_own_card(agent_id)
+        token = await issue_task_scoped_vc(agent_id, transaction_id, operation, payload)
+        validate_task_vc(token, transaction_id=transaction_id, agent_id=agent_id)
+    except Exception as exc:
+        TASK_VC_VALIDATE_FAIL.labels(
+            agent_id=agent_id, operation=operation, reason=type(exc).__name__
+        ).inc()
+        logger.warning(
+            "Task-scoped VC check failed",
+            agent_id=agent_id,
+            operation=operation,
+            transaction_id=transaction_id,
+            error=str(exc),
+        )
+        if settings.TASK_VC_ENFORCEMENT_ENABLED:
+            raise
+        return
+
+    TASK_VC_ISSUED.labels(agent_id=agent_id, operation=operation).inc()

@@ -9,16 +9,20 @@ that the symmetric ``SECRET_KEY`` is no longer a valid VC trust root.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from jose import jwt
+from prometheus_client import Counter
 
 from src.core.config import settings
+from src.core.metrics import TASK_VC_ISSUED, TASK_VC_VALIDATE_FAIL
 from src.domains.intelligence.security import vc_issuer
 from src.domains.intelligence.security.vc_issuer import (
     VCError,
     _build_audit_vc_claims,
     _encode_vc,
+    require_task_vc,
     validate_task_vc,
     verify_vc,
 )
@@ -113,3 +117,105 @@ def test_validate_task_vc_scope_and_agent_binding() -> None:
     # Wrong agent binding.
     with pytest.raises(ValueError, match="agent mismatch"):
         validate_task_vc(token, transaction_id=txid, agent_id="F")
+
+
+# ── require_task_vc: shadow vs. enforce, mint+validate as one unit ────────────
+# ``issue_task_scoped_vc`` itself writes to MongoDB (get_mongo_db().insert_one),
+# which no unit test in this file touches (see the module docstring) — mocked
+# here, as everywhere else the codebase tests VC issuance (e.g.
+# test_proposal_vc_audit.py mocks issue_vc the same way). The signing/decoding
+# path (_encode_vc/validate_task_vc) is real, exercised via the fake's returned
+# token, not stubbed out — only the Mongo write is faked.
+
+def _sample(counter: Counter, **labels: str) -> float:
+    return counter.labels(**labels)._value.get()
+
+
+def _fake_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace issue_task_scoped_vc with a fake that signs+returns a real token
+    (via the module's own _encode_vc) but never touches Mongo."""
+    async def fake_issue(
+        agent_id: str, transaction_id: str, operation: str, payload: dict[str, Any]
+    ) -> str:
+        return _encode_vc({
+            "sub": agent_id,
+            "jti": transaction_id,
+            "vc_type": "task_scoped",
+            "transaction_id": transaction_id,
+            "exp": _future_exp(),
+        })
+    monkeypatch.setattr(vc_issuer, "issue_task_scoped_vc", fake_issue)
+
+
+@pytest.mark.asyncio
+async def test_require_task_vc_success_increments_issued_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "TASK_VC_ENFORCEMENT_ENABLED", False)
+    _fake_issuer(monkeypatch)
+    before = _sample(TASK_VC_ISSUED, agent_id="C", operation="test.op")
+
+    await require_task_vc(
+        agent_id="C", transaction_id="txn-1", operation="test.op", payload={"a": 1}
+    )
+
+    assert _sample(TASK_VC_ISSUED, agent_id="C", operation="test.op") == before + 1
+
+
+@pytest.mark.asyncio
+async def test_require_task_vc_shadow_mode_swallows_mint_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "TASK_VC_ENFORCEMENT_ENABLED", False)
+
+    async def failing_issue(*_a: object, **_k: object) -> str:
+        raise RuntimeError("mongo unavailable")
+    monkeypatch.setattr(vc_issuer, "issue_task_scoped_vc", failing_issue)
+    before = _sample(
+        TASK_VC_VALIDATE_FAIL, agent_id="C", operation="test.op", reason="RuntimeError"
+    )
+
+    await require_task_vc(  # must not raise — shadow mode
+        agent_id="C", transaction_id="txn-1", operation="test.op", payload={}
+    )
+
+    assert _sample(
+        TASK_VC_VALIDATE_FAIL, agent_id="C", operation="test.op", reason="RuntimeError"
+    ) == before + 1
+
+
+@pytest.mark.asyncio
+async def test_require_task_vc_enforce_mode_raises_on_mint_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "TASK_VC_ENFORCEMENT_ENABLED", True)
+
+    async def failing_issue(*_a: object, **_k: object) -> str:
+        raise RuntimeError("mongo unavailable")
+    monkeypatch.setattr(vc_issuer, "issue_task_scoped_vc", failing_issue)
+
+    with pytest.raises(RuntimeError, match="mongo unavailable"):
+        await require_task_vc(
+            agent_id="C", transaction_id="txn-1", operation="test.op", payload={}
+        )
+
+
+@pytest.mark.asyncio
+async def test_require_task_vc_enforce_mode_raises_on_scope_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A VC minted for one transaction must never validate for another — the
+    scope-binding property require_task_vc exists to enforce end-to-end."""
+    monkeypatch.setattr(settings, "TASK_VC_ENFORCEMENT_ENABLED", True)
+    _fake_issuer(monkeypatch)
+
+    real_validate = vc_issuer.validate_task_vc
+
+    def _validate_against_wrong_txn(token: str, **_k: object) -> dict[str, Any]:
+        return real_validate(token, transaction_id="a-different-txn", agent_id="C")
+    monkeypatch.setattr(vc_issuer, "validate_task_vc", _validate_against_wrong_txn)
+
+    with pytest.raises(ValueError, match="transaction scope mismatch"):
+        await require_task_vc(
+            agent_id="C", transaction_id="txn-1", operation="test.op", payload={}
+        )

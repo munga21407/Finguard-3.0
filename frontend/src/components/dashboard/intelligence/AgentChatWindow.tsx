@@ -37,6 +37,7 @@ import { useRole } from "@/lib/hooks/useRole";
 import {
   dispatchConversation,
   checkConversationStatus,
+  resumeConversation,
   type ConversationStatusResponse,
   type GenUIPayload,
 } from "@/lib/api/intelligence";
@@ -60,6 +61,11 @@ export interface ChatMessage {
   /** Structured UI payloads from gen_ui_payloads[]. When present and
    *  content is empty, the text renderer is skipped entirely. */
   genUiPayloads?: GenUIPayload[];
+  /** Set only when this message ended in a failed, checkpoint-resumable run
+   *  (status.resumable === true) — the session_id to resume. Renders a
+   *  Resume action; absent (not disabled) entirely otherwise, since a
+   *  non-resumable failure has nothing useful to offer here. */
+  resumableSessionId?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -287,7 +293,13 @@ export function AgentChatWindow() {
         statusData.gen_ui_payloads ?? []
       );
     } else if (statusData.status === "failed") {
-      commitAgentMessage(resolveError(statusData), false, true);
+      commitAgentMessage(
+        resolveError(statusData),
+        false,
+        true,
+        [],
+        statusData.resumable ? statusData.session_id : undefined
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusData?.status]);
@@ -298,14 +310,15 @@ export function AgentChatWindow() {
       content: string,
       verifiedByCove: boolean,
       isError = false,
-      genUiPayloads: GenUIPayload[] = []
+      genUiPayloads: GenUIPayload[] = [],
+      resumableSessionId?: string
     ) => {
       const msgId = pendingMsgIdRef.current;
       if (msgId) {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === msgId
-              ? { ...m, content, verifiedByCove, isError, genUiPayloads }
+              ? { ...m, content, verifiedByCove, isError, genUiPayloads, resumableSessionId }
               : m
           )
         );
@@ -316,6 +329,40 @@ export function AgentChatWindow() {
       setCurrentCovePhase(-1);
     },
     []
+  );
+
+  // ── Resume mutation ────────────────────────────────────────────────────────
+  // Continues a failed, checkpointed run from its last completed node instead
+  // of re-submitting the query from scratch. Reuses the same agent message
+  // bubble (pendingMsgIdRef points back at it) and the existing polling
+  // machinery above — a resumed run is handled identically to a fresh one
+  // once stage is back to "polling".
+  const resumeMutation = useMutation({
+    mutationFn: (sessionId: string) => resumeConversation(sessionId),
+    onSuccess: (_data, sessionId) => {
+      setActiveSessionId(sessionId);
+      setStage("polling");
+    },
+    onError: (err, sessionId) => {
+      const msg = err instanceof Error ? err.message : "Network error";
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.resumableSessionId === sessionId
+            ? { ...m, content: `${m.content}\n\n⚠️ Resume failed: ${msg}` }
+            : m
+        )
+      );
+    },
+  });
+
+  const handleResume = useCallback(
+    (msgId: string, sessionId: string) => {
+      if (stage !== "idle") return; // already busy with something else
+      pendingMsgIdRef.current = msgId;
+      resumeMutation.mutate(sessionId);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stage]
   );
 
   // ── Submit handlers ────────────────────────────────────────────────────────
@@ -397,6 +444,8 @@ export function AgentChatWindow() {
             message={msg}
             isPending={msg.id === pendingMsgIdRef.current && stage === "polling"}
             canAct={canAct}
+            onResume={handleResume}
+            isBusy={isBusy}
           />
         ))}
 
@@ -502,9 +551,11 @@ interface MessageBubbleProps {
   message: ChatMessage;
   isPending: boolean;
   canAct: boolean;
+  onResume: (msgId: string, sessionId: string) => void;
+  isBusy: boolean;
 }
 
-function MessageBubble({ message, isPending, canAct }: MessageBubbleProps) {
+function MessageBubble({ message, isPending, canAct, onResume, isBusy }: MessageBubbleProps) {
   const isAgent = message.role === "agent";
   return (
     <div className={cn("flex gap-3", isAgent ? "self-start max-w-[92%]" : "self-end max-w-[70%] flex-row-reverse")}>
@@ -515,7 +566,7 @@ function MessageBubble({ message, isPending, canAct }: MessageBubbleProps) {
         {isAgent ? <Bot size={15} className="text-lf-primary" /> : <User size={15} className="text-lf-on-surface-variant" />}
       </div>
       {isAgent ? (
-        <AgentBubble message={message} isPending={isPending} canAct={canAct} />
+        <AgentBubble message={message} isPending={isPending} canAct={canAct} onResume={onResume} isBusy={isBusy} />
       ) : (
         <div className="bg-lf-primary text-lf-on-primary rounded-xl rounded-tr-sm px-4 py-2.5 text-sm leading-relaxed shadow-sm">
           {message.content}
@@ -527,7 +578,19 @@ function MessageBubble({ message, isPending, canAct }: MessageBubbleProps) {
 
 // ── AgentBubble ────────────────────────────────────────────────────────────────
 
-function AgentBubble({ message, isPending, canAct }: { message: ChatMessage; isPending: boolean; canAct: boolean }) {
+function AgentBubble({
+  message,
+  isPending,
+  canAct,
+  onResume,
+  isBusy,
+}: {
+  message: ChatMessage;
+  isPending: boolean;
+  canAct: boolean;
+  onResume: (msgId: string, sessionId: string) => void;
+  isBusy: boolean;
+}) {
   const hasGenUi = !!(message.genUiPayloads && message.genUiPayloads.length > 0);
   const hasText  = !!message.content;
 
@@ -536,12 +599,22 @@ function AgentBubble({ message, isPending, canAct }: { message: ChatMessage; isP
       {/* CoVe badge */}
       {message.verifiedByCove && !isPending && !message.isError && <VerifiedBadge />}
 
-      {/* Error badge */}
+      {/* Error badge (+ Resume, only when the failed run is checkpoint-resumable) */}
       {message.isError && !isPending && (
         <div className="flex items-center gap-1.5 self-start">
           <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wider text-lf-error bg-lf-error-container/40 border border-lf-error/20 px-2 py-0.5 rounded-full">
             <AlertTriangle size={9} />Error
           </span>
+          {message.resumableSessionId && (
+            <button
+              type="button"
+              onClick={() => onResume(message.id, message.resumableSessionId!)}
+              disabled={isBusy}
+              className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wider text-lf-primary bg-lf-primary-fixed/30 hover:bg-lf-primary-fixed/60 border border-lf-primary/20 px-2 py-0.5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <RefreshCw size={9} />Resume
+            </button>
+          )}
         </div>
       )}
 

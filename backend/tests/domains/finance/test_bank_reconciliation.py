@@ -20,11 +20,13 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from src.core.config import settings
 from src.core.exceptions import ForbiddenError
 from src.domains.finance.models import (
     BANK_REVIEW_APPROVED,
@@ -39,6 +41,7 @@ from src.domains.finance.schemas import BankStatementLineImport, InvoiceCreate
 from src.domains.finance.service import FinanceService
 from src.domains.finance.types import VaultType
 from src.domains.identity.models import User, UserRole
+from src.domains.intelligence.security import vc_issuer
 from src.domains.intelligence.services.reconciliation_service import (
     run_bank_reconciliation,
     run_reconciliation,
@@ -236,6 +239,117 @@ async def test_mpesa_reconciliation_creates_linked_payment(
 
         txn = await session.get(MpesaTransaction, txn_id)
         assert txn is not None and txn.is_reconciled is True
+
+
+# ── Task-scoped VC gate on Pass 1 (audit/defense-in-depth) ────────────────────
+# issue_task_scoped_vc writes to MongoDB — mocked here as everywhere else the
+# codebase tests VC issuance (see test_vc_issuer.py's require_task_vc tests);
+# validate_task_vc itself is real, so these still prove the actual scope
+# check runs against a real match's transaction_id before the real DB write.
+
+def _patch_task_vc_mint(monkeypatch: pytest.MonkeyPatch, *, fail_for: set[str]) -> None:
+    async def fake_issue(
+        agent_id: str, transaction_id: str, operation: str, payload: dict[str, Any]
+    ) -> str:
+        if transaction_id in fail_for:
+            raise RuntimeError("mongo unavailable (test)")
+        return vc_issuer._encode_vc({
+            "sub": agent_id,
+            "jti": transaction_id,
+            "vc_type": "task_scoped",
+            "transaction_id": transaction_id,
+            "exp": int(datetime.now(UTC).timestamp()) + 300,
+        })
+    monkeypatch.setattr(vc_issuer, "issue_task_scoped_vc", fake_issue)
+
+
+@pytest.mark.asyncio
+async def test_task_vc_enforced_mint_validate_write_succeeds(
+    seed_customer: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0 success criterion: with TASK_VC_ENFORCEMENT_ENABLED on, a clean match
+    still mints + validates a task-scoped VC and the real write goes through
+    exactly as in the unenforced happy path above."""
+    monkeypatch.setattr(settings, "TASK_VC_ENFORCEMENT_ENABLED", True)
+    _patch_task_vc_mint(monkeypatch, fail_for=set())
+
+    invoice_id, invoice_number = await _make_sent_invoice(seed_customer, subtotal="750")
+    async with TestingSessionLocal() as session:
+        txn = MpesaTransaction(
+            trans_id=f"R{uuid.uuid4().hex[:9].upper()}",
+            amount=Decimal("750"),
+            phone="254700000000",
+            bill_ref=invoice_number,
+            is_reconciled=False,
+        )
+        session.add(txn)
+        await session.commit()
+        txn_id = txn.id
+
+    async with TestingSessionLocal() as session:
+        report = await run_reconciliation(session)
+    assert report.matched_exact == 1
+
+    async with TestingSessionLocal() as session:
+        payments = (
+            await session.execute(select(Payment).where(Payment.invoice_id == invoice_id))
+        ).scalars().all()
+        assert len(payments) == 1
+        assert payments[0].vault == VaultType.MPESA
+        assert payments[0].mpesa_trans_id == txn_id
+
+        txn = await session.get(MpesaTransaction, txn_id)
+        assert txn is not None and txn.is_reconciled is True
+
+
+@pytest.mark.asyncio
+async def test_task_vc_failure_skips_only_that_match(
+    seed_customer: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A task-VC mint/validate failure on one match must not roll back the
+    whole batch — the other, unrelated clean match still settles."""
+    monkeypatch.setattr(settings, "TASK_VC_ENFORCEMENT_ENABLED", True)
+
+    invoice_id_bad, invoice_number_bad = await _make_sent_invoice(seed_customer, subtotal="750")
+    invoice_id_good, invoice_number_good = await _make_sent_invoice(seed_customer, subtotal="500")
+
+    async with TestingSessionLocal() as session:
+        txn_bad = MpesaTransaction(
+            trans_id=f"R{uuid.uuid4().hex[:9].upper()}",
+            amount=Decimal("750"),
+            phone="254700000000",
+            bill_ref=invoice_number_bad,
+            is_reconciled=False,
+        )
+        txn_good = MpesaTransaction(
+            trans_id=f"R{uuid.uuid4().hex[:9].upper()}",
+            amount=Decimal("500"),
+            phone="254700000000",
+            bill_ref=invoice_number_good,
+            is_reconciled=False,
+        )
+        session.add_all([txn_bad, txn_good])
+        await session.commit()
+        txn_bad_id, txn_good_id = txn_bad.id, txn_good.id
+
+    _patch_task_vc_mint(monkeypatch, fail_for={str(txn_bad_id)})
+
+    async with TestingSessionLocal() as session:
+        report = await run_reconciliation(session)
+    # Only the good match settled — the batch was not rolled back wholesale.
+    assert report.matched_exact == 1
+    assert report.unmatched == 1
+
+    async with TestingSessionLocal() as session:
+        bad_invoice = await session.get(Invoice, invoice_id_bad)
+        assert bad_invoice is not None and bad_invoice.status == InvoiceStatus.SENT
+        bad_txn = await session.get(MpesaTransaction, txn_bad_id)
+        assert bad_txn is not None and bad_txn.is_reconciled is False
+
+        good_invoice = await session.get(Invoice, invoice_id_good)
+        assert good_invoice is not None and good_invoice.status == InvoiceStatus.PAID
+        good_txn = await session.get(MpesaTransaction, txn_good_id)
+        assert good_txn is not None and good_txn.is_reconciled is True
 
 
 @pytest.mark.asyncio

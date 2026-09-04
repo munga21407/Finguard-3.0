@@ -92,6 +92,7 @@ from src.domains.intelligence.schemas import (
     ReconciliationReport,
     ReconciliationScoringResult,
 )
+from src.domains.intelligence.security.vc_issuer import require_task_vc
 from src.domains.intelligence.tuning import get_reconciler_tuning
 
 logger = structlog.get_logger(__name__)
@@ -557,9 +558,8 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
                 matched_txn_ids.add(m.transaction_id)
                 matched_inv_ids.add(m.invoice_id)
 
-            all_matches = exact_matches + semantic_matches
-
-            # ── Persist Pass 1 (deterministic) — all writes or none ────────────
+            # ── Persist Pass 1 (deterministic) — all writes or none, modulo a
+            # per-match task-VC skip (see below) ───────────────────────────────
             # Only exact matches auto-apply here. Pass 2 (fuzzy/semantic — an LLM
             # judgment call) is queued for human sign-off *after* this transaction
             # commits, not applied inline — see _propose_semantic_matches.
@@ -567,7 +567,35 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
             # rolls back the entire batch automatically; no partial state commits.
             _assert_direct_write_capable("C")
             txn_dates = {t["id"]: t["created_at"] for t in transactions}
+            applied_exact_matches: list[ReconciliationMatch] = []
             for match in exact_matches:
+                # Task-scoped VC check (audit/defense-in-depth, shadow mode by
+                # default — see vc_issuer.require_task_vc). A failure here is
+                # this one match's problem, never the whole batch's: skip and
+                # move on rather than letting it propagate to session.begin()'s
+                # rollback, which would undo every other already-good match.
+                # The skipped match must also drop out of matched_txn_ids/
+                # matched_inv_ids so the report's `unmatched` count and
+                # `matches` list don't claim a settlement that never happened.
+                try:
+                    await require_task_vc(
+                        agent_id="C",
+                        transaction_id=match.transaction_id,
+                        operation="reconciliation.apply",
+                        payload=match.model_dump(mode="json"),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "reconciliation_service: task VC check failed — "
+                        "skipping this match only",
+                        invoice_id=match.invoice_id,
+                        transaction_id=match.transaction_id,
+                        error=str(exc),
+                    )
+                    matched_txn_ids.discard(match.transaction_id)
+                    matched_inv_ids.discard(match.invoice_id)
+                    continue
+
                 try:
                     await apply_confirmed_match(
                         session, match, txn_dates.get(match.transaction_id) or datetime.now(UTC)
@@ -587,6 +615,10 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
                         exc_info=True,
                     )
                     raise  # propagates to session.begin() → full batch ROLLBACK
+                applied_exact_matches.append(match)
+
+            exact_matches = applied_exact_matches
+            all_matches = exact_matches + semantic_matches
         else:
             exact_matches = []
             matched_txn_ids = set()
@@ -698,18 +730,39 @@ async def run_bank_reconciliation(session: AsyncSession) -> ReconciliationReport
                 matched_txn_ids.add(m.transaction_id)
                 matched_inv_ids.add(m.invoice_id)
 
-            all_matches = exact_matches + semantic_matches
-            # Tag every match so apply_confirmed_match records Payment(vault=BANK).
-            for m in all_matches:
+            # Tag every match so apply_confirmed_match records Payment(vault=BANK)
+            # — must happen before the apply loop reads match.source below.
+            for m in exact_matches + semantic_matches:
                 m.source = "bank"
 
-            # ── Persist Pass 1 (deterministic) — all writes or none ────────────
+            # ── Persist Pass 1 (deterministic) — all writes or none, modulo a
+            # per-match task-VC skip (see run_reconciliation's matching comment) ──
             # Pass 2 (fuzzy/semantic) is queued for human sign-off after this
             # transaction commits, not applied inline — see run_reconciliation's
             # matching comment and _propose_semantic_matches.
             _assert_direct_write_capable("C")
             line_dates = {t["id"]: t["created_at"] for t in transactions}
+            applied_exact_matches: list[ReconciliationMatch] = []
             for match in exact_matches:
+                try:
+                    await require_task_vc(
+                        agent_id="C",
+                        transaction_id=match.transaction_id,
+                        operation="reconciliation.apply",
+                        payload=match.model_dump(mode="json"),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "reconciliation_service: task VC check failed — "
+                        "skipping this match only",
+                        invoice_id=match.invoice_id,
+                        bank_line_id=match.transaction_id,
+                        error=str(exc),
+                    )
+                    matched_txn_ids.discard(match.transaction_id)
+                    matched_inv_ids.discard(match.invoice_id)
+                    continue
+
                 try:
                     await apply_confirmed_match(
                         session, match, line_dates.get(match.transaction_id) or datetime.now(UTC)
@@ -726,6 +779,10 @@ async def run_bank_reconciliation(session: AsyncSession) -> ReconciliationReport
                         exc_info=True,
                     )
                     raise
+                applied_exact_matches.append(match)
+
+            exact_matches = applied_exact_matches
+            all_matches = exact_matches + semantic_matches
         else:
             exact_matches = []
             matched_txn_ids = set()

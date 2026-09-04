@@ -138,6 +138,13 @@ export interface ConversationStatusResponse {
   /** Structured GenUI payloads ready to mount in the chat window. */
   gen_ui_payloads: GenUIPayload[];
   detail: string | null;
+  /**
+   * True only when `status === "failed"` and the run can be continued via
+   * `resumeConversation` instead of re-submitting from scratch — requires
+   * the backend's LANGGRAPH_CHECKPOINTING_ENABLED flag. Always false
+   * otherwise (including while that flag is off).
+   */
+  resumable: boolean;
   answer?: string;
 }
 
@@ -257,6 +264,23 @@ export async function checkConversationStatus(
 ): Promise<ConversationStatusResponse> {
   const { data } = await httpClient.get<ConversationStatusResponse>(
     ENDPOINTS.INTELLIGENCE.CONVERSATION_STATUS(sessionId)
+  );
+  return data;
+}
+
+/**
+ * Resume a failed conversation from its last LangGraph checkpoint instead of
+ * re-submitting the request (and re-paying every prior LLM/tool call) from
+ * scratch. Only valid when the session's last status was "failed" with
+ * `resumable: true` (see `ConversationStatusResponse`); the backend returns
+ * 409 otherwise. Returns immediately with status "pending" — callers should
+ * resume polling via `checkConversationStatus`, same as after `dispatchConversation`.
+ */
+export async function resumeConversation(
+  sessionId: string
+): Promise<ConversationStatusResponse> {
+  const { data } = await httpClient.post<ConversationStatusResponse>(
+    ENDPOINTS.INTELLIGENCE.CONVERSATION_RESUME(sessionId)
   );
   return data;
 }

@@ -167,9 +167,16 @@ Backend uses **`uv`**. To run a single test:
    **mandatory in production** (hard fail). Don't loosen the guard; the AST walk is
    the authoritative gate.
 
-5. **Verifiable Credentials are Ed25519**, signed by the internal CA in
-   `security/key_manager.py`. Legacy HS256 tokens still verify via a fallback in
-   `vc_issuer.py` — keep the `alg`-header branch when touching VC code.
+5. **Verifiable Credentials are Ed25519-only**, signed by the internal CA in
+   `security/key_manager.py`. The legacy HS256/`SECRET_KEY` fallback was
+   removed at `HS256_VC_SUNSET` — `vc_issuer.py` hard-rejects any HS256 token
+   presented after that date (re-sign pre-sunset `trust_log` entries via
+   `scripts.migrate_hs256_vcs`). Keep verification EdDSA-only when touching VC
+   code; do not reintroduce the symmetric fallback. Two credential types share
+   this signing: long-lived audit VCs (`issue_vc`) and short-lived
+   task-scoped VCs (`issue_task_scoped_vc`/`validate_task_vc`, wrapped by
+   `require_task_vc` — wired into Agent C/E/K/B write paths behind
+   `TASK_VC_ENFORCEMENT_ENABLED`, off by default).
 
 ---
 

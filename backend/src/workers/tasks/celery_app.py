@@ -68,6 +68,13 @@ celery_app.conf.update(
             # IsolationForest from the trailing 90 days of categorized debits.
             "schedule": crontab(hour=3, minute=0, day_of_week="sunday"),
         },
+        "enforce-checkpoint-retention": {
+            "task": "batch.enforce_checkpoint_retention",
+            # Weekly on Sunday at 04:00 UTC — after the other two Sunday jobs,
+            # same low-traffic window. No-op (tables stay empty) wherever
+            # LANGGRAPH_CHECKPOINTING_ENABLED is off.
+            "schedule": crontab(hour=4, minute=0, day_of_week="sunday"),
+        },
         "flush-email-outbox": {
             "task": "email.flush_outbox",
             # Drain the transactional email outbox; cadence is operator-tunable via

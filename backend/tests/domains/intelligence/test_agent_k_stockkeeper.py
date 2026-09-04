@@ -203,7 +203,7 @@ async def test_node_attaches_deterministic_proposals_and_owns_only_its_key() -> 
         "gen_ui_payloads": [], "error_messages": [], "handoffs": [], "next": "",
         "context": {"user_role": "owner"}, "session_id": "s1", "user_id": None, "mode": "insights",
     }
-    mod = "src.domains.intelligence.agents.k_stockkeeper"
+    mod = "src.domains.intelligence.services.stockkeeper_service"
     with patch(f"{mod}.AsyncSessionLocal", return_value=_FakeSession()), \
          patch(f"{mod}.inventory_valuation",
                new=AsyncMock(return_value=ValuationReport(total_value=Decimal("1000"), categories=[]))), \

@@ -432,10 +432,13 @@ is a *long-window integrity* guarantee, not a *short-window freshness* one, so
 `vc_issuer.payload_hash` — made public, was `_payload_hash`) set at
 `create_proposal` and re-checked at `approve()` before the write replays.
 `validate_task_vc`/
-`issue_task_scoped_vc` remain test-only after this — that's the correct
-outcome of using the right tool for the actual invariant, not a leftover gap;
-they'd get a real caller if agent execution and write execution ever become
-separate trust domains (they aren't today — one process, one trust boundary).
+`issue_task_scoped_vc` remained test-only as of this sprint — the correct
+outcome of using the right tool for the actual invariant here, not a leftover
+gap; `approve()`/`reject()` still never touch them, unchanged by the later
+"Task-scoped VC end-to-end" work below, which gave them a real caller on a
+different class of write (live, in-process, audit/defense-in-depth) — not
+because agent execution and write execution became separate trust domains
+(they still aren't).
 Migration `0026_agent_proposal_payload_hash.py`.
 
 Separately, `approve()`/`reject()` now take a required `expected_action_type`
@@ -518,7 +521,7 @@ Postgres + Redis (not the project's shared dev stack) rather than assumed.
 |---|---|---|
 | S9-1 | Align `vc_issuer.py` / `agent_cards.py` docstrings with the `payload_hash` reality — no functional change. | DONE |
 | S9-2 | Declarative, *enforced* mutation-capability matrix (`AgentDescriptor.mutations` / `mutation_kinds`) — same posture as `TOOL_GRANTS`. | DONE |
-| S9-3 | Split `d_forecaster.py` into `services/forecast_service.py` + a thin node — last of the four fat agents. | DONE |
+| S9-3 | Split `d_forecaster.py` into `services/forecast_service.py` + a thin node — the fourth agent split this way (C/E/G in Sprint 8). | DONE |
 | S9-4 | Integration test exercising the planner through the *real* `orchestrator.build_graph()` (not a stub graph) with `A2A_PLANNER_ENABLED` flipped on. | DONE |
 
 **S9-1 detail.** No code behavior changed — `issue_task_scoped_vc`/
@@ -528,7 +531,13 @@ modules' docstrings to state plainly: not wired into any live path today;
 `ProposalService`'s `payload_hash` check is what actually gates a write, and
 why (5-minute TTL vs. a review queue spanning hours to days); these functions
 remain the right primitive for a genuine agent-execution/write-execution
-trust-domain split, which doesn't exist yet.
+trust-domain split, which doesn't exist yet. (As of the later "Task-scoped VC
+end-to-end" work below, `issue_task_scoped_vc`/`validate_task_vc` did get a
+real caller — `require_task_vc`, on C/E/K/B's write paths — but for
+audit/defense-in-depth, not because that trust-domain split happened; it
+still hasn't. `exchange_cards` is unaffected either way — still uncalled, see
+`agent_cards.py`'s own docstring for `verify_own_card`, its narrower
+same-purpose sibling that did get wired in.)
 
 **S9-2 detail — a real enforcement layer, not just documentation.** Added
 `AgentDescriptor.mutations: frozenset[MutationKind]`
@@ -597,17 +606,34 @@ these for gaps still to close, or code-review them as accidents):
   something a sprint can resolve from inside the repo. S9-4's integration
   test only makes that decision safer to make later, whenever it's made; see
   §6 (Phased rollout) above.
-- **`exchange_cards()` / task-scoped VCs** — kept, not deleted. Real, tested,
-  currently uncalled. The right primitive if agent execution and write
-  execution ever split into separate trust domains; revisit deletion only if
-  that still hasn't happened in a few more sprints.
+- **`exchange_cards()`** — kept, not deleted (reaffirmed 2026-09-04; see
+  "optional wave — item 7 revisit" below). Still uncalled and untested as of
+  this writing — the right primitive if agent execution and write execution
+  ever split into separate trust domains; revisit deletion only if that still
+  hasn't happened in a few more sprints. Its narrower same-purpose sibling,
+  `verify_own_card()` (one-party, not exchange_cards' two-party handoff), did
+  get wired in and tested as part of the later "Task-scoped VC end-to-end"
+  work below — that doesn't change this bullet's status for `exchange_cards`
+  itself. **Task-scoped VCs** (`issue_task_scoped_vc`/`validate_task_vc`,
+  wrapped by `require_task_vc`) were genuinely uncalled and test-only when
+  this bullet was first written (2026-09-04); as of 2026-09-05 they have a
+  real caller on Agent C/E/K/B's write paths for audit/defense-in-depth — see
+  "Task-scoped VC end-to-end" below for the full reasoning. That still isn't
+  the agent-execution/write-execution trust-domain split this bullet
+  describes; it hasn't happened.
 - **B and E's writes stay ungated by human review** — a risk-based choice via
   `AgentDescriptor.mutations` (S9-2), not an inconsistency to fix later. B
   mislabels a category (metadata, correctable); E publishes an alert or
   triggers an ML retrain (no direct financial/inventory effect). Neither is
   in the same risk class as C's Pass 2 or K's stock write-offs, which *are*
   proposal-gated. Reclassify a specific agent by editing its `mutations` set
-  if that risk judgment changes.
+  if that risk judgment changes. **Reaffirmed 2026-09-04** (item 8 of the
+  optional wave, explicitly revisited): B's write is still a background
+  Celery task persisting `ledger_entries.category` (metadata); E's are still
+  a live RabbitMQ CRITICAL-state publish plus a weekly background per-customer
+  IsolationForest retrain (notification + ML hygiene, not a financial/
+  inventory action). Nothing about either write's blast radius has changed
+  since S9-2 — no code change made.
 - **C's Pass 1 (deterministic exact match) still auto-applies** — no LLM in
   the loop, and `FinanceService.apply_reconciled_payment`'s `FOR UPDATE` +
   balance-clamp is the actual safety gate (see the Agent C entry in
@@ -619,6 +645,317 @@ these for gaps still to close, or code-review them as accidents):
   populated speculatively.
 - **Checkpointing / conversation resume** and **the SQL candidate-join
   pushdown** — see §7 (Backlog) below; neither was ever in S8/S9's scope.
+
+### Sprint 9 addendum — Agent I split (optional modularity, ad hoc)
+
+> **Status: DONE.** Not part of Sprint 9's original scope (which split D as
+> "the fourth agent" — see S9-3 above) — picked up separately afterward as
+> the first of the optional "modularity wave 2" items (I/K/H were flagged as
+> the remaining fat nodes; all three are now done — see the K and H
+> addenda below).
+
+Same pattern as C/E/G/D: `agents/i_integrator.py` (444 lines) → 90-line thin
+node + `services/integrator_service.py` (fetch/normalise FX, M-Pesa, Metropol,
+KRA, plus one `fetch_external_data()` orchestrating entry point the node
+calls). Simpler than D's split — every existing test (`test_agent_integrator.py`)
+calls the private fetch functions directly rather than the full node, so
+there was no risk of D's node-calls-service-directly test-patching bug
+recurring; still used the one-entry-point design for consistency. No
+Celery/worker caller exists for Agent I (verified before starting), so no
+`use_cases.py` entrypoint was added — nothing to serve.
+
+Tests: 814 passed, 5 skipped (unchanged count — pure refactor, no new/lost
+tests), `ruff check` clean.
+
+**Files:** `agents/i_integrator.py`, `services/integrator_service.py` (new),
+`tests/domains/intelligence/test_agent_integrator.py` (import path only).
+
+### Sprint 9 addendum — Agent K split (optional modularity, ad hoc)
+
+> **Status: DONE.** Second of the "modularity wave 2" items (I done above;
+> H done below).
+
+Same pattern as I: `agents/k_stockkeeper.py` (402 lines) → 53-line thin node
++ `services/stockkeeper_service.py` (RBAC role resolution, the write-authority
+gate, the deterministic snapshot, the CoVe audit of a proposed adjustment,
+`_queue_adjustment_proposal`, plus one `run_stock_analysis()` orchestrating
+entry point the node calls). K had more test fan-out than I
+(`test_agent_k_stockkeeper.py`, `test_agent_k_stockkeeper_cove.py`, and
+`tests/integration/test_agent_proposal_workflow.py` all import private
+helpers directly), and one test —
+`test_node_attaches_deterministic_proposals_and_owns_only_its_key` — patches
+`AsyncSessionLocal`/`inventory_valuation`/`low_stock_report`/
+`reorder_recommendation`/`generate_structured_content` on the module path
+directly, exactly the shape that caused D's node-calls-service-directly
+test-patching bug the first time; the one-entry-point design was mandatory
+here, not just for consistency, and all three test files' patch targets/
+import paths were repointed at `services.stockkeeper_service` accordingly. No
+Celery/worker caller exists for Agent K beyond those three test files and
+`orchestrator.py` (verified before starting), so no `use_cases.py` entrypoint
+was added.
+
+Tests: 814 passed, 5 skipped (unchanged count — pure refactor, no new/lost
+tests), `ruff check` clean.
+
+**Files:** `agents/k_stockkeeper.py`, `services/stockkeeper_service.py` (new),
+`tests/domains/intelligence/test_agent_k_stockkeeper.py` (patch target only),
+`tests/domains/intelligence/test_agent_k_stockkeeper_cove.py` (import path
+only), `tests/integration/test_agent_proposal_workflow.py` (import path only).
+
+### Sprint 9 addendum — Agent H split (optional modularity, ad hoc)
+
+> **Status: DONE.** Last of the "modularity wave 2" items — I, K, and H are
+> now all split; the wave is closed.
+
+Same pattern as I/K: `agents/h_advisor.py` (309 lines) → 53-line thin node +
+`services/advisor_service.py` (RBAC role resolution, the CRM profile lookup,
+the RBAC-clipped evidence prompt, the model call, widget allow-listing, and
+the S6-5 disclaimer/review-gate guardrails, plus one `build_advice()`
+orchestrating entry point the node calls). Both existing test files
+(`test_agent_advisor.py`, `test_sprint5.py`) patch `generate_structured_content`
+directly on the `agents.h_advisor` module path — the same shape that required
+the D/K test-target fix — so both were repointed at `services.advisor_service`;
+`test_sprint5.py` needed a second alias (`h_service`) since it also imports
+`h_advisor` for `make_h_advisor_node`, which stays in the agent module.
+`test_agent_advisor.py`'s standalone `_resolve_user_role` unit tests were
+likewise repointed to import from the service module directly. No
+Celery/worker caller exists for Agent H beyond those two test files and
+`orchestrator.py` (verified before starting), so no `use_cases.py` entrypoint
+was added.
+
+Tests: 814 passed, 5 skipped (unchanged count — pure refactor, no new/lost
+tests), `ruff check` clean.
+
+**Files:** `agents/h_advisor.py`, `services/advisor_service.py` (new),
+`tests/domains/intelligence/test_agent_advisor.py` (import path + patch
+target), `tests/domains/intelligence/test_sprint5.py` (patch target only).
+
+### Optional wave — item 7 revisit: unused crypto (2026-09-04)
+
+> **Status: DONE.** Revisited `exchange_cards()` / `issue_task_scoped_vc()` /
+> `validate_task_vc()` per S9-1's "revisit only if the trust-domain split
+> still hasn't happened" note. It hasn't — still one process, one trust
+> boundary — so the disposition is unchanged: **keep, not delete.**
+
+While re-verifying before asking, found `agent_cards.py`'s docstring claimed
+`exchange_cards()` is "exercised only by unit tests" — false; grepped
+`tests/` and confirmed zero coverage for it (the task-scoped VC functions in
+`vc_issuer.py` *are* genuinely tested, `test_vc_issuer.py::
+test_validate_task_vc_scope_and_agent_binding`). Fixed the docstring to state
+this accurately rather than leave a second stale-test claim in the repo (the
+first was S9-1's "these are mandatory" claim, already fixed). No behavior
+change, no test change — comment-only.
+
+**Superseded the next day, partially:** this entry's "keep, not delete"
+disposition is unchanged, but "currently uncalled" stopped being true for the
+task-scoped VC functions specifically — see "Task-scoped VC end-to-end"
+below (2026-09-05), which gave `issue_task_scoped_vc`/`validate_task_vc` a
+real caller (`require_task_vc`) for audit/defense-in-depth, not because the
+trust-domain split this entry was waiting on happened (it hasn't).
+`exchange_cards()` itself is unaffected — still uncalled, still untested.
+
+**Files:** `security/agent_cards.py` (docstring only).
+
+### Task-scoped VC end-to-end (2026-09-05) — P0 + P1 + P2
+
+> **Status: P0, P1, and P2 DONE.** Full discovery/blueprint/ticket sequence
+> went through Phase 0 (clarifying questions) → Phase 1 (discovery report) →
+> Phase 2 (blueprint, 9 tickets P0-P2), then all 9 tickets implemented. P0:
+> `require_task_vc()` + flag + metrics, wired into Agent C's Pass 1. P1: E's
+> event publish, K/C proposal-creation mint, the Mongo TTL split. P2: B's
+> Celery persist (with the TTL-race fix), E's ML retrain self-issuance,
+> `verify_own_card()`, and this docs pass. All five write paths named in
+> Phase 0's scope answer are now wired; `exchange_cards()` itself remains
+> deliberately untouched (still no genuine cross-process boundary for it to
+> guard) — see its P2 entry below for the narrower primitive that took its
+> place at these call sites.
+
+**Decision (Phase 0):** single-process today, one trust boundary — task VCs
+buy audit/defense-in-depth, not a real cross-process guarantee (there isn't
+one yet). Default off (`TASK_VC_ENFORCEMENT_ENABLED=False`); shadow mode
+mints + validates + records metrics without ever blocking a write, so the
+rollout can be observed before anything is enforced.
+
+**What shipped.** `security/vc_issuer.py::require_task_vc()` wraps
+`issue_task_scoped_vc`/`validate_task_vc` as one unit (deliberately not two
+separable calls — a caller minting for one id and validating against another
+by mistake is a real, if unlikely, error this shape rules out structurally).
+Wired into both `reconciliation_service.run_reconciliation` (M-Pesa) and
+`run_bank_reconciliation` (bank statements) — one `require_task_vc` call per
+exact match, inside the existing per-match loop, **before**
+`apply_confirmed_match`. A failure skips only that match (and correctly drops
+it from `matched_txn_ids`/`matched_inv_ids`/the final `all_matches`, so the
+report never claims a settlement that didn't happen) rather than propagating
+into `session.begin()`'s existing whole-batch rollback — a real risk flagged
+in Phase 1 (a single bad VC could otherwise have undone every other
+already-good match in the same run).
+
+New Prometheus counters: `agent_task_vc_issued_total` /
+`agent_task_vc_validate_fail_total{agent_id,operation,reason}` (Grafana panels
+not added yet — P1 scope per the blueprint).
+
+Tests: `test_vc_issuer.py` gained 4 tests for `require_task_vc` itself (shadow
+swallows a mint failure, enforce raises on mint failure, enforce raises on a
+real scope mismatch via the actual `validate_task_vc`, success increments the
+counter) — Mongo-touching `issue_task_scoped_vc` is mocked, matching how every
+other VC-issuance test in this codebase avoids live Mongo;
+`validate_task_vc`'s real crypto path is exercised, not stubbed.
+`test_bank_reconciliation.py` gained the P0 success-criterion integration
+test (enforcement on, a clean match still mints→validates→writes exactly as
+the unenforced happy path) plus the batch-isolation test (two matches, one
+forced to fail its VC check, only the good one settles — proves the
+rollback-blast-radius risk is actually closed, not just designed around).
+
+Full suite: 820 passed, 5 skipped (up from 814 — 6 new tests), `ruff check`
+clean on every touched file. `mypy --explicit-package-bases src` clean (the
+actual CI gate — confirmed it only checks `src/`, not `tests/`, so two
+pre-existing `tests/domains/finance/test_bank_reconciliation.py` mypy gaps
+predating this change, and one more of the same already-established shape
+introduced by the new tests, are outside the gate and left as-is rather than
+fixed opportunistically here).
+
+**Files (P0):** `core/config.py`, `core/metrics.py`,
+`security/vc_issuer.py`, `services/reconciliation_service.py`,
+`tests/domains/intelligence/test_vc_issuer.py`,
+`tests/domains/finance/test_bank_reconciliation.py`.
+
+**P1 — E event publish, K/C proposal-creation mint, Mongo TTL split.**
+
+*E event publish* (`services/anomaly_service.py`): one `require_task_vc` call
+right before `make_event_publisher(...).ainvoke(...)`, inside the same
+try/except the publish call already sat in — a VC failure degrades exactly
+like a broker-unavailable publish failure (`event_published` stays `False`,
+the watchdog run still completes). Scoped to a fresh `uuid4()` per call
+(there's no existing per-invocation identifier to reuse — unlike C's
+`match.transaction_id`, `run_watchdog_analysis` doesn't carry one).
+
+*K/C proposal-creation mint* (`proposal_service.py::create_proposal`): mints
++ validates before the `AgentActionProposal` is even constructed, scoped to
+the proposal's own id (generated client-side with `uuid.uuid4()` up front, so
+it's available for both the VC and the row itself, rather than waiting on a
+DB-assigned default). A distinct claim from `payload_hash` — "this creation
+call was authorized" vs. "the payload wasn't altered after creation" — and,
+per the hard constraint, **never** touches `approve()`/`reject()`; two new
+tests (`test_approve_never_calls_require_task_vc`,
+`test_reject_never_calls_require_task_vc`) patch `require_task_vc` to raise
+if called during either and assert both still complete normally.
+
+*Mongo TTL split* (`security/vc_issuer.py`): audit VCs (`issue_vc`) and
+task-scoped VCs (`issue_task_scoped_vc`) share `trust_log` but now need
+different retention (90 days vs. `TASK_VC_RETENTION_DAYS`, 365 by default).
+Discovered while implementing that TTL indexes are independent background
+sweeps, not a priority chain — simply adding a second index on a new
+`retain_until` field wouldn't have worked, since the existing 90-day
+`created_at` index (which every document sets) would still delete a
+task-scoped document at 90 days regardless. Fixed with **partial** indexes
+keyed on `vc_type` (`{"vc_type": "audit"}` / `{"vc_type": "task_scoped"}`) —
+first attempt used `retain_until: {"$exists": false}`, which MongoDB's
+partial-index filters reject (`$exists: false` compiles to an unsupported
+`$not`; only `$exists: true` and a narrow operator set are allowed).
+`ensure_trust_log_ttl_index()` also now replaces a same-named index whose
+definition has drifted (`IndexOptionsConflict`/`IndexKeySpecsConflict`,
+codes 85/86) rather than erroring, so it stays safe to call on every startup
+even against an environment that already had the old (non-partial)
+`trust_log_ttl_90d` index. Verified against a throwaway MongoDB 7 container
+(not mocked — index creation/partial-filter/conflict-handling are server
+behaviors a mock can't validate): seeded the old-style index, ran the
+function, confirmed both final index definitions via `list_indexes()`,
+confirmed a second run is idempotent, and confirmed `issue_task_scoped_vc`
+writes `retain_until` as a real BSON Date (not the ISO string `expires_at`
+already was) via a real mint+validate roundtrip. No automated test added —
+the codebase has no live-Mongo test infra by design (see AGENTS.md §5.3) and
+no prior test existed for `ensure_trust_log_ttl_index` either; the container
+was torn down after verification.
+
+Tests (P1): `test_agent_watchdog_task_vc.py` (new, 2 tests — E's publish calls
+`require_task_vc` first and is skipped when it fails, hermetic since
+`run_watchdog_analysis` is session-free by design);
+`tests/integration/test_agent_proposal_workflow.py` gained 3 tests
+(`create_proposal` mints a task VC scoped to the proposal's own id; `approve`/
+`reject` never call it). Full suite: 825 passed, 5 skipped (up from 814 before
+P0/P1 — 11 new tests total), `ruff check` and `mypy --explicit-package-bases
+src` both clean.
+
+**Files (P1, additional):** `services/anomaly_service.py`,
+`proposal_service.py`,
+`tests/domains/intelligence/test_agent_watchdog_task_vc.py` (new),
+`tests/integration/test_agent_proposal_workflow.py`.
+
+**P2 — B's Celery persist, E's ML retrain, `verify_own_card()`, docs pass.**
+
+*B's Celery persist* (`workers/tasks/batch.py::_run_batch_classification`):
+closes the TTL-race gap Phase 1 flagged — the VC is minted **inside this
+function**, right before the per-row `UPDATE` loop, not at node-dispatch
+time (the node only enqueues `.delay()`; a VC minted there would sit through
+an unbounded queue delay and could easily outlive its 5-minute TTL before a
+worker ever picked the job up). Scoped to a fresh `batch_id`, not per-row —
+the whole persist commits as one unit, so that's the natural write
+granularity here (unlike C's per-match loop). A failure means nothing is
+persisted this run (`status: "vc_failed"`); safe, since the `FOR UPDATE SKIP
+LOCKED` rows release on session close without a commit and the next poll
+retries. No existing test covered this function at all before this — new
+`tests/workers/test_batch_classification_task_vc.py` (2 tests, real Postgres
+via `TestingSessionLocal` repointed onto `batch.AsyncSessionLocal`, same fix
+`test_checkpoint_retention.py` needed for the same reason).
+
+*E's ML retrain self-issuance* (`workers/tasks/batch.py::_train_and_upsert_customer`):
+unlike E's live event publish or B's dispatch, the weekly retrain is a Celery
+beat cron with no per-request agent trigger at all — there's no "agent
+mints, someone validates" moment to hang a task VC on the usual way, so this
+function mints and validates its own VC immediately before its own
+`save_model` write, scoped to the customer being trained. A VC failure and an
+insufficient-samples skip share the same `False` return (not disambiguated
+there), but not in observability — a VC failure specifically increments
+`agent_task_vc_validate_fail_total` and gets its own warning log. No existing
+test covered this function either — new
+`tests/workers/test_agent_e_retrain_task_vc.py` (3 tests: passes, fails, and
+confirms no VC is minted at all when there's no model to save).
+
+*`verify_own_card()`* (`security/agent_cards.py`): Phase 0 approved wiring
+card verification into the same mutating call sites as task VCs ("agent →
+its own mutating tool call") — not into `exchange_cards()` itself, which has
+no sender/receiver pair at any of these single-agent call sites and stays
+exactly as documented (two-party, for a genuine future cross-process
+handoff). Added a one-party sibling, `verify_own_card(agent_id)`, and called
+it from **inside** `require_task_vc()` (first, before minting) so all five
+wired call sites get it for free — zero additional call-site changes needed.
+3 new tests in `test_agent_cards.py`.
+
+*Docs pass*: fixed `AGENTS.md` §5's HS256 gotcha, which still described a
+legacy fallback that was actually removed at `HS256_VC_SUNSET` (S9-1's own
+docstring rewrite said as much — the top-level AGENTS.md just hadn't been
+updated to match). Added forward-pointers from the S8-1/S8-2 and S9-1
+historical narratives above, and from the item-7-revisit backlog bullet, to
+this entry — none of their *historical* claims were wrong (task-scoped VCs
+genuinely were unused at every point those sections describe), only their
+present-tense framing needed a "this changed later, here's where" pointer,
+consistent with how the Agent I/K/H "last of four" claims were handled
+earlier in this document rather than rewritten in place.
+
+Tests (P2): 5 new (2 batch, 3 retrain) + 3 new (`verify_own_card`). Full
+suite: 833 passed, 5 skipped (up from 825 after P1 — 8 new tests),
+`ruff check` and `mypy --explicit-package-bases src` both clean.
+
+**Files (P2, additional):** `workers/tasks/batch.py`,
+`security/agent_cards.py`, `security/vc_issuer.py` (docstring only — calls
+`verify_own_card`), `AGENTS.md`,
+`tests/workers/test_batch_classification_task_vc.py` (new),
+`tests/workers/test_agent_e_retrain_task_vc.py` (new),
+`tests/domains/intelligence/test_agent_cards.py`.
+
+**Staging rollout prep (2026-09-05, post-P2).** Two Grafana panels added to
+`monitoring/dashboards/finguard_ai_overview.json` (dashboard `version` 3→4,
+tag `d3`→`d4`, `uid` unchanged): "Task VC Issued (rate)"
+(`agent_task_vc_issued_total` by `agent_id`/`operation`) and "Task VC
+Validate Fail (rate)" (`agent_task_vc_validate_fail_total` by `reason`) —
+same panel-pair style as the planner's "Stage Outcome"/"Replan Rate". New
+runbook doc, [`TASK_VC_STAGING_BAKE.md`](./TASK_VC_STAGING_BAKE.md), mirrors
+`A2A_PLANNER_STAGING_BAKE.md`'s structure but for five wired write paths
+instead of three chat intents — notably, shadow mode already mints on every
+request regardless of the flag, so the bake's job is watching for a real
+*failure* under staging traffic, not proving issuance works (that's already
+running). No code changed; `TASK_VC_ENFORCEMENT_ENABLED` is still `False`
+everywhere.
 
 ---
 
