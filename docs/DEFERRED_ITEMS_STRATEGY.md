@@ -31,11 +31,11 @@ how-to-land-them plan, grounded in the existing code patterns.*
 > **C + E landed.** C: `ReceiptExtraction` gained a `suggested_category` field
 > (schema-validated to the 5-value taxonomy, now shared in `schemas.py`); the
 > `extract_receipt` vision prompt classifies in the **same call**; the classifier
-> node is now a no-LLM guard → **1 Gemini call per scan (was 2)**. Human-in-loop
+> node is now a no-LLM guard → **1 LLM call per scan (was 2)**. Human-in-loop
 > fallback preserved. Verified: `test_receipt_scan.py` 4/4 pass (ran locally, no
 > DB needed). E: added two panels to `monitoring/dashboards/finguard_ai_overview.json`
 > — "Supervisor Routing Method (rate)" and the headline "Routing Calls Skipping
-> Gemini (%)" stat — over `agent_supervisor_routes_total` (per-agent LLM cost
+> LLM (%)" stat — over `agent_supervisor_routes_total` (per-agent LLM cost
 > panel already existed). Only **D** (Agent C SQL pushdown) remains, and it needs
 > a live DB + settlement-locking care.
 
@@ -118,7 +118,7 @@ deferred item because it makes the rest of the DB work trustworthy.
 
 ## C. Receipt scanner → single vision call (S3-3)
 
-**Goal:** collapse the receipt pipeline's two Gemini calls (vision OCR, then a
+**Goal:** collapse the receipt pipeline's two LLM calls (vision OCR, then a
 text classify) into one, halving latency/cost per scan.
 
 **Key insight:** `tools/vision_ocr.extract_receipt` **already** uses
@@ -211,9 +211,9 @@ Celery task and node call sites are untouched.
 it already has 9 panels with PromQL `expr`s over `agent_llm_processing_seconds`,
 `agent_llm_tokens_total`, etc.):
 - **Routing method breakdown** (stacked): `sum by (method) (rate(agent_supervisor_routes_total[5m]))`.
-- **% routing calls that skipped Gemini** (stat/gauge — the headline Sprint-3 number):
+- **% routing calls that skipped the LLM** (stat/gauge — the headline Sprint-3 number):
   ```promql
-  sum(rate(agent_supervisor_routes_total{method!="gemini"}[5m]))
+  sum(rate(agent_supervisor_routes_total{method!="llm"}[5m]))
     / sum(rate(agent_supervisor_routes_total[5m]))
   ```
 - **Per-agent LLM cost/hr**: `sum by (agent_id) (rate(agent_llm_cost_usd_total[5m])) * 3600`

@@ -78,7 +78,7 @@ trusts `X-Forwarded-For` from nginx — keep the backend port unpublished
 
 Prometheus scrapes `/metrics` (Bearer-protected via `METRICS_AUTH_SECRET`);
 Grafana dashboards live in `infrastructure/grafana/`. Wire Alertmanager for
-error rate, p95 latency, the Gemini timeout counter, outbox lag, and DB
+error rate, p95 latency, the LLM timeout counter, outbox lag, and DB
 connection saturation (see `PRODUCTION_READINESS.md` Phase 7).
 
 **Request correlation.** `RequestContextMiddleware` stamps every request with a
@@ -99,8 +99,10 @@ by activity volume, so plan for time-based archival rather than truncation.
 
 ## Incident quick-reference
 
-- **Gemini down:** agents degrade (circuit breaker) and return a `degraded_ai`
-  status rather than failing the request — expected behavior.
+- **LLM provider down** (Fireworks or Gemini, whichever is primary — and its
+  Featherless backup, if configured): agents degrade (circuit breaker) and
+  return a `degraded_ai` status rather than failing the request — expected
+  behavior.
 - **Broker (RabbitMQ) down:** finance events stay in the outbox (`published=false`)
   and the projector retries; no events are lost. Check projector logs / outbox
   backlog gauge.

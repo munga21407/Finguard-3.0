@@ -8,7 +8,7 @@ each agent is built, and the pros/cons of the chosen approach.*
 ## 1. Architecture at a glance
 
 Finguard's intelligence layer is a **LangGraph `StateGraph`** running a
-**supervisor / ReAct loop**. A Gemini-backed supervisor inspects conversation
+**supervisor / ReAct loop**. An LLM-backed supervisor inspects conversation
 state and routes to one of eleven lettered agents (A–K) *(K — Stock Steward —
 was added after this report's original pass; see its own section below)*; a
 fast path (added later, see §3/§4) bypasses the supervisor entirely for a
@@ -30,9 +30,9 @@ Two smaller standalone graphs exist alongside the main loop:
 - **`build_receipt_graph()`** — `START → receipt_ocr → receipt_classifier → END` (the `/receipts/scan` endpoint).
 
 **Common design idiom across every agent:**
-- A `make_*_node()` factory returning an async LangGraph node (`llm` arg kept only for signature compatibility — agents call the Gemini client internally via `llm_client`).
-- **Deterministic maths first, LLM second** — numbers are computed in Python; Gemini writes only narrative/classification text (`response_schema` structured output, not JSON-in-prompt).
-- **Graceful degradation** — every LLM call is wrapped in `try/except` with a deterministic fallback, so a Gemini outage never crashes the graph.
+- A `make_*_node()` factory returning an async LangGraph node (`llm` arg kept only for signature compatibility — agents call the LLM client internally via `llm_client`).
+- **Deterministic maths first, LLM second** — numbers are computed in Python; LLM writes only narrative/classification text (`response_schema` structured output, not JSON-in-prompt).
+- **Graceful degradation** — every LLM call is wrapped in `try/except` with a deterministic fallback, so an LLM outage never crashes the graph.
 - **Own DB session** — data-touching agents open their own `AsyncSessionLocal()` (thread-isolated); read paths increasingly use the read-only role.
 - **`_tracked()` wrapper** in the orchestrator sets a contextvar so all LLM calls inside a node attribute per-agent latency/token/cost to Prometheus.
 
@@ -41,16 +41,16 @@ Two smaller standalone graphs exist alongside the main loop:
 ## 2. Per-agent breakdown
 
 ### Supervisor — the router
-**How:** Gemini structured output picks the next node from a hard `VALID_NEXT` allowlist. Loop-escape is delegated entirely to LangGraph's native `recursion_limit=25`; a `requested_agent` short-circuit skips the LLM call when the first hop is already known. Windows the routing prompt to *first message + last 4* (capped at 600 chars each) to bound token cost.
+**How:** LLM structured output picks the next node from a hard `VALID_NEXT` allowlist. Loop-escape is delegated entirely to LangGraph's native `recursion_limit=25`; a `requested_agent` short-circuit skips the LLM call when the first hop is already known. Windows the routing prompt to *first message + last 4* (capped at 600 chars each) to bound token cost.
 
 - **Pros:** Allowlist prevents routing to hallucinated nodes; every failure path (validation error, unknown route, any exception) routes to `FINISH` rather than crashing; windowing avoids O(hops) prompt growth and lost-in-the-middle. *(DeepSeek-harness-inspired hardening:)* a clean single-agent match on a `read_only=True` agent (D, F) now skips the supervisor **node** entirely (`orchestrator.try_fast_path`), not just its LLM call — the common read-only case pays zero supervisor round-trips.
-- **Cons:** Every hop still costs a Gemini call for multi-agent/ambiguous intents and any non-read-only single-agent route (B, C, E, G, H, I, J, K); routing quality depends on prompt/model; the cycle guard (Sprint 6, S6-4) terminates a benign stall gracefully before the recursion ceiling, but a genuinely pathological loop still hits 508 as the last resort.
+- **Cons:** Every hop still costs an LLM call for multi-agent/ambiguous intents and any non-read-only single-agent route (B, C, E, G, H, I, J, K); routing quality depends on prompt/model; the cycle guard (Sprint 6, S6-4) terminates a benign stall gracefully before the recursion ceiling, but a genuinely pathological loop still hits 508 as the last resort.
 
 ### Agent A — Invoice Generator / Extractor
-**How:** Extracts a structured `ExtractedInvoice` from raw document text via Gemini `response_schema`. **Fast-path:** if the OCR Celery task already populated `ocr_extracted_fields`, it validates that dict and skips the second Gemini call.
+**How:** Extracts a structured `ExtractedInvoice` from raw document text via LLM `response_schema`. **Fast-path:** if the OCR Celery task already populated `ocr_extracted_fields`, it validates that dict and skips the second LLM call.
 
 - **Pros:** OCR fast-path saves a whole LLM round-trip; native structured output — no JSON parsing hacks; falls through to text extraction if the OCR dict fails validation.
-- **Cons:** No confidence gating on the fast-path (an OCR dict that *validates* but is wrong is accepted); extraction quality bounded by Gemini vision/OCR upstream.
+- **Cons:** No confidence gating on the fast-path (an OCR dict that *validates* but is wrong is accepted); extraction quality bounded by LLM vision/OCR upstream.
 
 ### Agent B — Transaction Classifier
 **How:** Reads up to 50 unclassified ledger entries (`category IS NULL`) via its own read-only session, zero-shot classifies them against a fixed taxonomy (temperature 0.0). In `actions` mode it dispatches a Celery task to persist — the node itself stays side-effect-free.
@@ -59,13 +59,13 @@ Two smaller standalone graphs exist alongside the main loop:
 - **Cons:** Fixed 50-row batch — large backlogs need repeated invocations; zero-shot (no few-shot examples / fine-tuning), so accuracy on ambiguous narratives is capped; no feedback loop from user corrections.
 
 ### Agent C — Reconciliation Detective
-**How:** Two-pass matching of M-Pesa / bank-statement lines to open invoices. **Pass 1** deterministic (amount ±KES 1, date ±2 days, ref substring). **Pass 2** `rapidfuzz` pre-filter (token-sort ≥ 65) → Gemini semantic confirmation (score ≥ 0.60). Writes are event-sourced `Payment`s via `FinanceService.apply_reconciled_payment`, all inside a single `session.begin()` with `FOR UPDATE SKIP LOCKED`. Core `run_reconciliation()` is reused by the Celery batch task.
+**How:** Two-pass matching of M-Pesa / bank-statement lines to open invoices. **Pass 1** deterministic (amount ±KES 1, date ±2 days, ref substring). **Pass 2** `rapidfuzz` pre-filter (token-sort ≥ 65) → LLM semantic confirmation (score ≥ 0.60). Writes are event-sourced `Payment`s via `FinanceService.apply_reconciled_payment`, all inside a single `session.begin()` with `FOR UPDATE SKIP LOCKED`. Core `run_reconciliation()` is reused by the Celery batch task.
 
-- **Pros:** Deterministic pass handles the common case with no LLM cost; whole-batch atomicity (any failure → full rollback, locks released); rapidfuzz pre-filter keeps Gemini payloads small; bank + M-Pesa share the matcher; maker-checker (`review_status='approved'`) on bank lines.
-- **Cons:** Most complex agent (~560 lines) — high maintenance surface; O(txn × invoice) nested loops could scale poorly at high volume; Gemini candidate list capped at 50 (residuals silently unscored); thresholds (65/0.60/0.90) are hand-tuned magic numbers.
+- **Pros:** Deterministic pass handles the common case with no LLM cost; whole-batch atomicity (any failure → full rollback, locks released); rapidfuzz pre-filter keeps LLM payloads small; bank + M-Pesa share the matcher; maker-checker (`review_status='approved'`) on bank lines.
+- **Cons:** Most complex agent (~560 lines) — high maintenance surface; O(txn × invoice) nested loops could scale poorly at high volume; LLM candidate list capped at 50 (residuals silently unscored); thresholds (65/0.60/0.90) are hand-tuned magic numbers.
 
 ### Agent D — Cash-Flow Forecaster
-**How:** Hybrid. (1) **Holt-Winters** exponential smoothing on ≤12 months of daily net flow, adaptive by data volume (flat < 3 pts, trend 3–13, +weekly seasonal ≥14); invoice due-dates overlaid as known outflows. (2) **Gemini regime detector** classifies into Boom/Normal/Stress/Crunch/Recovery. (3) Optional **Chain-of-Verification Text-to-SQL** (Drafter → Explainer → Auditor) gated at confidence ≥ 0.70, executed via the read-only SQL guard. Emits a `CashFlowChart` GenUI payload.
+**How:** Hybrid. (1) **Holt-Winters** exponential smoothing on ≤12 months of daily net flow, adaptive by data volume (flat < 3 pts, trend 3–13, +weekly seasonal ≥14); invoice due-dates overlaid as known outflows. (2) **LLM regime detector** classifies into Boom/Normal/Stress/Crunch/Recovery. (3) Optional **Chain-of-Verification Text-to-SQL** (Drafter → Explainer → Auditor) gated at confidence ≥ 0.70, executed via the read-only SQL guard. Emits a `CashFlowChart` GenUI payload.
 
 - **Pros:** Numbers are statistical, not hallucinated; graceful model downgrade chain (seasonal → trend → linear → flat); CoVe adds a verification layer before any SQL runs; runway estimate + composite widget for the UI.
 - **Cons:** Two LLM calls when CoVe is active (Sprint 3 folded drafter+explainer into one; auditor is the second) → cost & latency; HW assumes some regularity SME data may lack; CoVe auditor is itself an LLM (self-grading, not a formal proof — the same pattern Agent K's stock-adjustment audit now uses, see below); statsmodels import deferred but still heavy.
@@ -77,19 +77,19 @@ Two smaller standalone graphs exist alongside the main loop:
 - **Cons:** HMM emission/transition params are hard-coded priors (not learned per business) — a strong modelling assumption; heavy dependency surface (numpy, sklearn, rapidfuzz, statsmodels-adjacent); highest complexity → hardest to reason about; on-the-fly fit path is a silent accuracy degradation for new customers.
 
 ### Agent F — Tax Auditor
-**How:** Deterministic Kenya tax engine (VAT 16% above KES 5M annual threshold, CIT 30% on net profit, ETR) → **RAG** over the KRA knowledge base (top-3 sections) → Gemini produces `compliance_flags` + `kra_references` grounded in the retrieved excerpts. An AML flag (single tx ≥ KES 1M) is **injected deterministically** regardless of what Gemini says.
+**How:** Deterministic Kenya tax engine (VAT 16% above KES 5M annual threshold, CIT 30% on net profit, ETR) → **RAG** over the KRA knowledge base (top-3 sections) → LLM produces `compliance_flags` + `kra_references` grounded in the retrieved excerpts. An AML flag (single tx ≥ KES 1M) is **injected deterministically** regardless of what LLM says.
 
-- **Pros:** Tax *numbers* are code, not LLM (auditable, correct); RAG grounds citations in real KRA text with an instruction not to invent titles; the machine-verified AML flag can never be silently dropped; deterministic fallback on Gemini failure.
-- **Cons:** Tax constants (rates/thresholds) are hard-coded and will drift as Kenyan law changes; RAG quality bounded by KB coverage/freshness; Gemini can still miss or over-flag non-AML compliance issues; single-jurisdiction (Kenya only).
+- **Pros:** Tax *numbers* are code, not LLM (auditable, correct); RAG grounds citations in real KRA text with an instruction not to invent titles; the machine-verified AML flag can never be silently dropped; deterministic fallback on LLM failure.
+- **Cons:** Tax constants (rates/thresholds) are hard-coded and will drift as Kenyan law changes; RAG quality bounded by KB coverage/freshness; LLM can still miss or over-flag non-AML compliance issues; single-jurisdiction (Kenya only).
 
 ### Agent G — Credit Strategist / Report Generator
-**How:** Holt-Winters forecast of revenue & opex (4 quarters) → **deterministic bankability score** (0–100, four weighted sub-components: trend/expense-ratio/consistency/solvency) → Gemini writes only the `strategic_narrative` (numbers passed as read-only context) → generates a **reportlab PDF** and **openpyxl Excel**, base64-encoded for hub_writer to persist. Emits a `BankabilityScoreRadar` widget.
+**How:** Holt-Winters forecast of revenue & opex (4 quarters) → **deterministic bankability score** (0–100, four weighted sub-components: trend/expense-ratio/consistency/solvency) → LLM writes only the `strategic_narrative` (numbers passed as read-only context) → generates a **reportlab PDF** and **openpyxl Excel**, base64-encoded for hub_writer to persist. Emits a `BankabilityScoreRadar` widget.
 
-- **Pros:** Score is fully deterministic and explainable (sub-scores exposed); Gemini can't fabricate financial figures; real downloadable PDF/Excel artifacts; graceful export + narrative fallbacks.
+- **Pros:** Score is fully deterministic and explainable (sub-scores exposed); LLM can't fabricate financial figures; real downloadable PDF/Excel artifacts; graceful export + narrative fallbacks.
 - **Cons:** Scoring weights/tiers are heuristic and unvalidated against real default data; PDF/Excel generation adds heavy deps (reportlab/pandas/openpyxl) inline; base64 blobs in Mongo/context are bulky; forecast reliability depends on ≥4 months of data.
 
 ### Agent H — Financial Advisor
-**How:** Resolves the user's RBAC role (context or DB fallback), gathers upstream outputs (E/D/G/F) + CRM profile, builds an evidence-grounded prompt including a **GenUI component catalog**, and calls Gemini structured output (`AgentHOutput`, temp 0.0). **RBAC clip:** viewer/accountant → high-level; manager/admin/owner → actionable (specific instruments, KES targets). Emitted `ui_widgets` are **allowlist-filtered** — hallucinated component IDs are dropped before rendering.
+**How:** Resolves the user's RBAC role (context or DB fallback), gathers upstream outputs (E/D/G/F) + CRM profile, builds an evidence-grounded prompt including a **GenUI component catalog**, and calls LLM structured output (`AgentHOutput`, temp 0.0). **RBAC clip:** viewer/accountant → high-level; manager/admin/owner → actionable (specific instruments, KES targets). Emitted `ui_widgets` are **allowlist-filtered** — hallucinated component IDs are dropped before rendering.
 
 - **Pros:** Grounded in pre-computed evidence ("do NOT alter numbers"); RBAC-aware disclosure prevents leaking specifics to low-privilege roles; widget allowlist stops the model injecting unknown UI; secure DB role fallback (defaults to `viewer`).
 - **Cons:** Output quality depends heavily on which upstream agents ran (thin context → generic advice); actionable tier can surface concrete financial recommendations from an LLM (advice-quality/liability risk); locale/nuance not deeply handled here (deferred to J).
@@ -101,16 +101,16 @@ Two smaller standalone graphs exist alongside the main loop:
 - **Cons:** Two of four sources (Metropol, KRA) are effectively stubs pending commercial onboarding — real coverage is FX + M-Pesa sandbox; sandbox M-Pesa balance probe isn't a real transaction feed; external latency/timeouts add to session time.
 
 ### Agent J — Executive Summarizer
-**How:** Collects only *populated* agent-output sections (skips scaffolding keys), sends them to Gemini Flash for exactly 3–5 labelled bullets, optionally **translated to the CRM's preferred locale** (Swahili/Sheng) while preserving KES figures. Deterministic per-section fallback if Gemini fails.
+**How:** Collects only *populated* agent-output sections (skips scaffolding keys), sends them to the LLM for exactly 3–5 labelled bullets, optionally **translated to the CRM's preferred locale** (Swahili/Sheng) while preserving KES figures. Deterministic per-section fallback if the LLM call fails.
 
 - **Pros:** Only non-empty sections sent (token-efficient); Flash is the cost-right model for summarization; locale support for Kenyan users; structured deterministic fallback preserves key numbers.
 - **Cons:** Purely derivative — garbage-in/garbage-out from upstream; bold-label bullet format is brittle to prompt drift; translation correctness is unverified (trusts the model).
 
 ### Receipt Scanner (`receipt_ocr` + `receipt_classifier`)
-**How:** Standalone 2-node graph. Gemini vision OCR → `ReceiptExtraction`; then category suggestion constrained to a 5-value list aligned with the frontend `<select>`. Deliberately decoupled from Agent A (receipt = proof of spend → Expense; invoice = request for payment). Each node degrades to an empty/low-confidence form for human completion.
+**How:** Standalone 2-node graph. LLM vision OCR → `ReceiptExtraction`; then category suggestion constrained to a 5-value list aligned with the frontend `<select>`. Deliberately decoupled from Agent A (receipt = proof of spend → Expense; invoice = request for payment). Each node degrades to an empty/low-confidence form for human completion.
 
 - **Pros:** Human-in-the-loop fallback (never a 500 — returns a fillable form); categories match the UI exactly; clean separation from invoice extraction.
-- **Cons:** Two sequential Gemini calls per receipt; OCR accuracy is the ceiling for everything downstream; tiny fixed category set.
+- **Cons:** Two sequential LLM calls per receipt; OCR accuracy is the ceiling for everything downstream; tiny fixed category set.
 
 ### Agent K — Stock Steward
 **How:** Deterministic inventory snapshot (valuation, low-stock, reorder plans) via typed tools, optionally folding in Agent D's cash-flow regime (soft `consumes`). Gemma 4 narrates only — figures never touch the model. A stock **ADJUSTMENT** (write-up/write-off) is never applied inline: it's previewed deterministically (`propose_stock_movement(apply=False)`), then independently audited by a second Gemma 4 call against the same evidence (`_cove_verify_stock_action` — mirrors Agent D's CoVe pattern, but verifies rather than drafts, since the adjustment itself is deterministic caller input, not model output) before being queued to `agent_action_proposals` for a second authorised human to release. An unsupported audit verdict is folded into the proposal's `rationale` as a flag, never used to silently drop it — the human reviewer always makes the final call.
@@ -132,11 +132,11 @@ Two smaller standalone graphs exist alongside the main loop:
 |---|---|
 | **Determinism-first** — money/scores computed in Python, LLM writes prose only | A, C, D, E, F, G |
 | **Graceful degradation** everywhere — no LLM outage crashes the graph | all |
-| **Structured output** via Gemini `response_schema`, not JSON-in-prompt | all LLM agents |
+| **Structured output** via LLM `response_schema`, not JSON-in-prompt | all LLM agents |
 | **Security boundaries** — read-only SQL role, SSRF-guarded HTTP, RBAC clipping, VC audit trail | B, D, E, F, H, I |
 | **Per-agent tool-capability grants** — SQL tables / HTTP hosts / event exchanges scoped per caller, not a global ceiling (`agent_registry.TOOL_GRANTS`) | D, E, I, K |
 | **Signed audit trail on human decisions, not just agent actions** — proposal approve/reject now issues an Ed25519 VC to `trust_log`, alongside the existing plain `audit_logs` row | K (proposals) |
-| **Provider-agnostic LLM layer** — swap Gemini in one place (`get_llm_client()`) | `llm/` |
+| **Provider-agnostic LLM layer** — swap providers in one place (`get_llm_client()`) | `llm/` |
 | **Per-agent observability** — contextvar-attributed latency/token/cost metrics | `_tracked()` |
 | **Honest provenance** — external data never faked in prod | I |
 | **Reusable cores** — `run_reconciliation`, `fit_agent_e_model` shared with Celery | C, E |
@@ -146,7 +146,7 @@ Two smaller standalone graphs exist alongside the main loop:
 | Risk | Detail |
 |---|---|
 | **Hard-coded domain constants** | Tax rates/thresholds (F), HMM priors (E), scoring weights (G), match thresholds (C) are baked in — will drift from reality and aren't config-driven or learned. |
-| **Per-hop LLM cost** | *(Partially resolved)* Supervisor now skips its own node entirely for a clean single-agent `read_only` intent (D, F); every other route (multi-agent, ambiguous, or a write-capable agent) still costs a Gemini call per hop, and multi-agent sessions still accumulate latency/spend. |
+| **Per-hop LLM cost** | *(Partially resolved)* Supervisor now skips its own node entirely for a clean single-agent `read_only` intent (D, F); every other route (multi-agent, ambiguous, or a write-capable agent) still costs an LLM call per hop, and multi-agent sessions still accumulate latency/spend. |
 | **hub_writer / J coupling** | *(Resolved, Sprint 2)* `agent_registry.AGENT_REGISTRY` is the single registration point; hub_writer's own internal steps are now an extensible registry too (`HUB_WRITER_STEPS`). |
 | **Self-grading verification** | CoVe (D), compliance analysis (F), and now the stock-adjustment audit (K) each use an LLM to check an LLM (or check deterministic input) — mitigates but doesn't eliminate hallucination; each also has a deterministic secondary gate that can override the LLM verdict. |
 | **Unbounded message history** *(new since this report)* | `state["messages"]` is append-only with no built-in limit — bounded today by a compaction step (prunes redundant per-agent repeat-visits past a threshold) and the 25-hop recursion ceiling, not by design; reconstructability of pruned messages depends on LangGraph checkpointing being enabled. |

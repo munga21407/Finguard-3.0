@@ -5,7 +5,7 @@ Two layers of end-to-end coverage for the dashboard data + invoice flows.
 ## 1. Automated (Playwright, network-mocked) — runs in CI
 
 All backend calls are intercepted with `page.route()`, so **no backend, DB, or
-Gemini key is required**. Auth is faked via cookies + a mocked `GET /me`
+LLM API key is required**. Auth is faked via cookies + a mocked `GET /me`
 (see `helpers.ts`).
 
 ```bash
@@ -28,7 +28,7 @@ Specs:
 > animation-timing assertions in `chat-composite-flow.spec.ts` are sensitive to
 > the substitute browser's timing and should be confirmed on CI's chromium.
 
-## 2. Manual live-stack click test (requires a real Gemini key)
+## 2. Manual live-stack click test (requires a real LLM API key)
 
 This exercises **Agent A's real extraction** and **real Postgres persistence** —
 the parts the mocked suite intentionally stubs.
@@ -36,8 +36,9 @@ the parts the mocked suite intentionally stubs.
 ### Bring the stack up
 
 ```bash
-# backend env: set a real key
-export GEMINI_API_KEY=sk-...            # real Google Gemini key
+# backend env: set a real key (Fireworks is the default primary; see the root
+# README's "AI Provider" section for the Gemini alternative)
+export FIREWORKS_API_KEY=fw_...
 cd infrastructure && docker compose up --build        # postgres, mongo, redis, rabbitmq, backend, frontend, nginx
 docker compose exec backend uv run alembic upgrade head
 ```

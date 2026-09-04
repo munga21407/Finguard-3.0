@@ -32,7 +32,7 @@ Finguard 3.0 is a full-stack, AI-powered financial operations platform for small
 
 **Core Architecture Pattern**: Domain-driven monorepo with an 11-agent LangGraph Supervisor/ReAct orchestration layer (a fast path bypasses the supervisor for clean single-domain read-only intents — see §7), PostgreSQL as source of truth, MongoDB as read-model cache (intelligence hub), Redis for caching/JWT blacklist/rate-limiting, and RabbitMQ for async inter-service messaging.
 
-**AI Model**: Gemma 4 via Fireworks AI (primary) with a Featherless AI failover of the same model family — all AI tasks including structured extraction, forecasting narratives, RAG, and routing decisions. Embeddings use `nomic-embed-text-v1.5` (768-dim). All access is through the provider-neutral `BaseLLMClient` (OpenAI-compatible API), never a vendor SDK directly.
+**AI Model**: Gemma 4 via Fireworks AI (default primary), or Gemini (Google) if `GEMINI_API_KEY` is set, with an optional Featherless AI failover of the Gemma 4 family — all AI tasks including structured extraction, forecasting narratives, RAG, and routing decisions. Embeddings use `nomic-embed-text-v1.5` (768-dim, Fireworks-only regardless of primary). All access is through the provider-neutral `BaseLLMClient` (OpenAI-compatible API), never a vendor SDK directly.
 
 **Agent Framework**: LangGraph 0.2+ (`StateGraph`, TypedDict state, annotated error accumulation). Supervisor/ReAct loop: Supervisor decides next agent; every agent unconditionally returns to supervisor.
 
@@ -114,8 +114,9 @@ Finguard-3.0/
 │       │   ├── intelligence/          # AI/ML domain
 │       │       ├── llm_client.py      # back-compat facade re-exporting the llm/ package surface
 │       │       ├── llm/               # provider-agnostic LLM layer:
-│       │       │                      #   base.py (BaseLLMClient), openai_compat.py (sole openai SDK importer),
-│       │       │                      #   provider.py (retry/timeout policy), failover.py (Fireworks primary + Featherless backup),
+│       │       │                      #   base.py (BaseLLMClient), openai_compat.py (sole openai SDK importer;
+│       │       │                      #   backs Fireworks, Gemini, and Featherless alike), provider.py (retry/timeout
+│       │       │                      #   policy), failover.py (Fireworks-or-Gemini primary + optional Featherless backup),
 │       │       │                      #   telemetry.py (agent_context/observe_llm_call), pricing.py (model-keyed cost)
 │       │       ├── observability.py   # @traced_tool — per-tool latency/outcome metrics
 │       │       ├── orchestrator.py    # LangGraph StateGraph builder; _tracked node wrapper
@@ -340,7 +341,7 @@ Finguard-3.0/
 | SQL ORM | SQLAlchemy (async) | ≥2.0.0 |
 | SQL Driver | asyncpg | ≥0.29.0 |
 | NoSQL Driver | Motor (async MongoDB) | ≥3.5.0 |
-| AI Model | Gemma 4 via Fireworks (primary) + Featherless (failover) | gemma-4-31b-it |
+| AI Model | Gemma 4 via Fireworks (default primary) or Gemini (alt. primary) + Featherless (optional failover) | gemma-4-31b-it |
 | Embeddings | nomic-embed-text-v1.5 (via Fireworks) | 768-dim |
 | AI Client SDK | openai (OpenAI-compatible) | ≥1.0.0 |
 | Agent Framework | LangGraph | ≥0.2.0 |
@@ -744,6 +745,56 @@ finguard.alerts (
 ```
 
 Agent E's findings reach this table via the watchdog consumer (`workers/consumers/watchdog_consumer.py`), which creates an `Alert` from a watchdog result. Surfaced on `/dashboard/payables/alerts` and exposed via `/api/v1/alerts`.
+
+### PostgreSQL — Inventory Domain
+
+Backs Agent K (Stock Steward, §6) and the `/dashboard/inventory` pages. `stock_movements` is an append-only ledger (mirrors the finance `invoice_events` pattern) — `stock_levels` is a synchronous projection kept in step by `InventoryService.apply_movement` under a per-product row lock, never written directly.
+
+```
+products (                            -- mig 0018
+  id               UUID PK,
+  sku              VARCHAR(64) UNIQUE (indexed),
+  name             VARCHAR(255),
+  description      TEXT,
+  unit             UnitOfMeasure ENUM (each | kg | litre | metre | box | pack) DEFAULT each,
+  category         VARCHAR(100) (indexed, nullable),
+  cost_price       NUMERIC(18,2) DEFAULT 0,
+  selling_price    NUMERIC(18,2) DEFAULT 0,
+  reorder_level    NUMERIC(18,3) DEFAULT 0,
+  reorder_quantity NUMERIC(18,3) DEFAULT 0,
+  barcode          VARCHAR(64) (indexed, nullable),
+  is_active        BOOLEAN DEFAULT true,
+  created_at       TIMESTAMPTZ,  updated_at TIMESTAMPTZ
+)
+
+stock_levels (                        -- mig 0018 — projection, one row per (product, location)
+  id                 UUID PK,
+  product_id         UUID FK → products,
+  location_id        UUID (nullable — single-location deployments leave this null),
+  quantity_on_hand   NUMERIC(18,3) DEFAULT 0  CHECK (>= 0),
+  quantity_reserved  NUMERIC(18,3) DEFAULT 0  CHECK (>= 0),
+  average_cost       NUMERIC(18,2) DEFAULT 0,  -- weighted-average costing
+  updated_at         TIMESTAMPTZ,
+  UNIQUE (product_id, location_id)
+)
+
+stock_movements (                     -- mig 0018 — append-only ledger, source of truth
+  id             UUID PK,
+  product_id     UUID FK → products (indexed),
+  sequence       INT,                 -- per-product monotonic; UNIQUE (product_id, sequence)
+  movement_type  MovementType ENUM (receipt | issue | sale | return_in | adjustment | transfer),
+  movement_reason MovementReason ENUM (purchase | sale | damage | theft | stock_take | expiry | correction | other, nullable),
+  quantity       NUMERIC(18,3) CHECK (> 0),  -- always positive; direction derived from movement_type
+  unit_cost      NUMERIC(18,2) (nullable),
+  balance_after  NUMERIC(18,3),        -- on-hand snapshot right after this movement (audit/fold)
+  reference_type VARCHAR(50) (nullable),  reference_id UUID (nullable, indexed),
+  note           TEXT,  payload JSONB DEFAULT '{}',
+  occurred_at    TIMESTAMPTZ,  created_by UUID (nullable),  created_at TIMESTAMPTZ,
+  INDEX (reference_type, reference_id)
+)
+```
+
+`reference_type`/`reference_id` link a movement back to the finance object that drove it (a receipt-scanner expense, a sale) without inventory depending on finance's models — the dependency stays one-way. Agent K's only write path is `propose_stock_movement` → `InventoryService.apply_movement`; it never emits SQL, and a proposed adjustment queues for human approval rather than applying directly (see §6, Agent K).
 
 ### PostgreSQL — Notifications Domain
 
@@ -1186,6 +1237,24 @@ All routes under `/api/v1/` prefix. RBAC permissions are enforced via `require_p
 | GET | `/kpis` | `intelligence:read` | Alert summary counts for dashboard cards |
 | POST | `/{alert_id}/resolve` | `intelligence:read` | Resolve an alert (records `resolved_by` / `resolved_at` / note) |
 
+### Inventory — `/api/v1/inventory`
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/products` | `inventory:write` | Create a product (SKU, unit, cost/selling price, reorder point) |
+| GET | `/products` | `inventory:read` | List products (paginated) |
+| GET | `/products/{product_id}` | `inventory:read` | Get one product |
+| PATCH | `/products/{product_id}` | `inventory:write` | Update a product |
+| GET | `/products/{product_id}/stock` | `inventory:read` | Current stock level (on-hand/reserved/average cost) for one product |
+| GET | `/products/{product_id}/movements` | `inventory:read` | Paginated movement ledger for one product |
+| POST | `/products/{product_id}/movements` | `inventory:write` | Record a stock movement (receipt/issue/sale/return/transfer) via `InventoryService.apply_movement` |
+| POST | `/products/{product_id}/adjust` | `inventory:adjust` | Record a manual stock adjustment (count correction, damage, etc.) |
+| GET | `/levels` | `inventory:read` | Stock levels across all products (paginated) |
+| GET | `/reports/valuation` | `inventory:read` | Inventory valuation report (`Σ on_hand × average_cost`, optional per-category) |
+| GET | `/reports/low-stock` | `inventory:read` | Products at/below `reorder_level` |
+
+Every mutating route records an `AuditService` entry (`PRODUCT_CREATED`/`PRODUCT_UPDATED`/`STOCK_RECEIVED`/`STOCK_ISSUED`/`STOCK_ADJUSTED`). Agent K's own writes go through the same `InventoryService.apply_movement` path but land as a **proposal** first — see `POST /intelligence/proposals/{id}/approve` (§8, Intelligence) which is what actually commits an agent-originated stock change.
+
 ### Audit — `/api/v1/audit`
 
 | Method | Path | Auth | Description |
@@ -1568,11 +1637,14 @@ MAX_LOGIN_ATTEMPTS=5
 LOCKOUT_DURATION_MINUTES=30
 PASSWORD_MIN_LENGTH=8
 
-# AI — Fireworks (Gemma 4) primary + Featherless failover; nomic embeddings
-FIREWORKS_API_KEY=<your-key>
+# AI — Fireworks (Gemma 4, default primary) or Gemini (alt. primary) + Featherless failover; nomic embeddings
+FIREWORKS_API_KEY=<your-key>                     # required even with Gemini primary — serves embeddings
 LLM_MODEL=accounts/<account>/deployments/<id>    # Gemma 4 deployment (text + vision)
 EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5   # 768-dim, matches the pgvector column
-FEATHERLESS_API_KEY=              # optional always-warm failover (blank = Fireworks-only)
+GEMINI_API_KEY=                   # optional; non-empty makes Gemini the primary instead of Fireworks
+GEMINI_API_BASE=https://generativelanguage.googleapis.com/v1beta/openai/
+GEMINI_MODEL=gemini-3.6-flash     # NOT wired for embeddings — EMBEDDING_MODEL stays Fireworks-only
+FEATHERLESS_API_KEY=              # optional always-warm failover (blank = no failover)
 FEATHERLESS_MODEL=google/gemma-4-31B-it
 # Per-agent cost attribution is model-keyed and externally configurable.
 # Optional JSON override of the built-in price table (USD per 1M tokens):
@@ -1626,7 +1698,7 @@ Every agent unconditionally returns to supervisor after executing. Supervisor te
 **Files**: `orchestrator.py` (`try_fast_path`, `build_fast_path_graph`), `agents/supervisor.py`, `agent_registry.py` (`read_only`, `heuristic_route`)
 
 ### 2. Native Structured Output + Provider Failover
-`generate_structured_content(prompt, ResponseSchema)` sends the schema via Fireworks' `response_format={"type":"json_schema",...}` (constrained decoding) — no fallback parsing needed. All call sites go through the provider-neutral `BaseLLMClient` surface (`generate_structured`, `generate_text`, `generate_vision_structured`, `generate_chat`, `embed`); `llm_client.py` is a facade over it. The client is a **failover** composition: a Fireworks (Gemma 4) primary with an always-warm Featherless backup of the same model family — a primary cold-start (the scale-to-zero deployment takes ~3 min to warm) or timeout transparently routes to the backup (`finguard_llm_failover_total`), which uses `json_object` mode + markdown-fence-stripping since Featherless does not enforce `json_schema`. Gemma's thinking mode is disabled per-call so free-form replies aren't swallowed by hidden reasoning. Every method accepts an optional `temperature` kwarg, and deterministic agents pin it (`temperature=0.0` for classification, reconciliation scoring, receipt OCR, and the CoVe draft/explain/audit passes; `0.2` for regime analysis) so structured financial extraction does not drift between runs.
+`generate_structured_content(prompt, ResponseSchema)` sends the schema via `response_format={"type":"json_schema",...}` (constrained decoding, supported by both Fireworks and Gemini) — no fallback parsing needed. All call sites go through the provider-neutral `BaseLLMClient` surface (`generate_structured`, `generate_text`, `generate_vision_structured`, `generate_chat`, `embed`); `llm_client.py` is a facade over it. The client is a **failover** composition assembled in `llm_client._build_client()`: the primary is Fireworks (Gemma 4) by default, or Gemini if `GEMINI_API_KEY` is set, with an optional always-warm Featherless backup of the Gemma 4 family — a Fireworks primary's cold-start (the scale-to-zero deployment takes ~3 min to warm) or a timeout transparently routes to the backup (`finguard_llm_failover_total`), which uses `json_object` mode + markdown-fence-stripping since Featherless does not enforce `json_schema`. Gemma's thinking mode is disabled per-call on Fireworks/Featherless so free-form replies aren't swallowed by hidden reasoning; Gemini's equivalent request shape isn't verified, so its spec leaves that unset. Embeddings are never routed to Gemini — `EMBEDDING_MODEL` always calls Fireworks, so `FIREWORKS_API_KEY` stays required even when Gemini is primary. Every method accepts an optional `temperature` kwarg, and deterministic agents pin it (`temperature=0.0` for classification, reconciliation scoring, receipt OCR, and the CoVe draft/explain/audit passes; `0.2` for regime analysis) so structured financial extraction does not drift between runs.
 **Files**: `domains/intelligence/llm/base.py` (`BaseLLMClient`), `openai_compat.py` (sole `openai` importer), `provider.py` (retry/timeout/telemetry policy), `failover.py` (primary + backup), `llm_client.py` (facade)
 
 ### 3. Hub-First Read-Through Cache
@@ -1795,7 +1867,7 @@ Runs on every push and pull request (plus a nightly `schedule` for the eval job)
 | `test` | Spins up `pgvector/pgvector:pg16`, MongoDB, RabbitMQ services; creates `finguard_test` DB; runs `pytest` (250+ tests across 49 files); uploads coverage. Includes the **deterministic Agent-F tax eval gate** (`tests/evals/` — golden VAT/CIT/AML scenarios + pinned regulatory constants), so wrong tax math fails the build |
 | `lint` | `ruff check`, `mypy` |
 | `migration-check` | Runs `alembic upgrade head` against the test DB to ensure migrations are not broken |
-| `llm-evals` | **Nightly + non-blocking** (`if: schedule`, `continue-on-error`): runs the LLM-as-judge narrative evals (`pytest tests/evals -m llm_judge`, `RUN_LLM_EVALS=1`, needs `FIREWORKS_API_KEY` secret). Judges narrative grounding only — never gates a PR |
+| `llm-evals` | **Nightly + non-blocking** (`if: schedule`, `continue-on-error`): runs the LLM-as-judge narrative evals (`pytest tests/evals -m llm_judge`, `RUN_LLM_EVALS=1`, needs the `GEMINI_API_KEY` secret — CI runs the judge against Gemini). Judges narrative grounding only — never gates a PR |
 | `security-scan` | **gitleaks** (blocking — fails the build on secrets); **pip-audit** (report only); **bandit** (report only); **npm audit** (report only) |
 
 ### `deploy.yml` — Deployment

@@ -103,8 +103,8 @@ Each agent writes its result under a well-known key: `context["forecast"]`,
 1. **`requested_agent` short-circuit** — caller names the first agent; 0 LLM calls.
 2. **Deterministic keyword router + LRU cache** (`agent_registry.heuristic_route`,
    shared with tier 0 above so the two never diverge) — a strict, tie-free
-   single winner skips Gemini entirely.
-3. **Gemini structured-output router** — ambiguous / multi-agent intents only;
+   single winner skips LLM entirely.
+3. **LLM structured-output router** — ambiguous / multi-agent intents only;
    returns `{next, reason}` validated against `VALID_NEXT`.
 
 Safety rails: the **cycle guard** (`_progress_signature`, FINISH-with-partial
@@ -133,7 +133,7 @@ after `_MAX_STALLED_REPEATS`) and LangGraph's **recursion ceiling** of
   supervisor prompt no longer carries ordering logic.
 - **Deterministic maths first, LLM second.** Consistent with every existing
   agent: the planner should resolve the DAG deterministically where possible and
-  only fall back to Gemini for genuinely ambiguous intents.
+  only fall back to LLM for genuinely ambiguous intents.
 - **Graceful degradation.** A missing dependency or a failed producer yields a
   partial, labelled result — never a crash — exactly like the current cycle-guard
   FINISH-with-partial behaviour.
@@ -323,9 +323,9 @@ fast path untouched.
 ```
 
 - **Detection.** The supervisor already distinguishes clear single-agent intents
-  (heuristic route) from ambiguous ones (Gemini). Multi-domain is the case where
+  (heuristic route) from ambiguous ones (LLM). Multi-domain is the case where
   the router selects **≥2 targets**. Add a `targets: list[str]` field to the
-  Gemini `_SupervisorDecision` schema; a non-empty multi-target set routes to
+  LLM `_SupervisorDecision` schema; a non-empty multi-target set routes to
   `planner` instead of a single agent.
 - **Execution — use the `Send` API, not static edges.** `targets` is *runtime*
   data, so the parallel branches cannot be compiled statically. The idiomatic
@@ -426,7 +426,7 @@ exposure, and our credit-readiness score, summarised."*
 
 | Step | Node | Action |
 |---|---|---|
-| 1 | supervisor | Gemini router returns `targets = ["d_forecaster","f_auditor","g_reporter"]` → route to `planner` |
+| 1 | supervisor | LLM router returns `targets = ["d_forecaster","f_auditor","g_reporter"]` → route to `planner` |
 | 2 | planner | `build_plan` → `[{D,F}, {G}, {J}]` |
 | 3 | stage 0 | **D** and **F** run in parallel; each writes its key via `merge_context`, publishes an `AgentHandoff` |
 | 4 | stage 1 | **G** reads `context["forecast"]` + `context["audit_result"]` (declared in `consumes`), composes the credit strategy |

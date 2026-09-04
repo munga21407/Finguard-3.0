@@ -21,9 +21,9 @@ is by *leverage × dependency*, not hard requirement.
 | 5 | hub_writer `if`-chain implicit coupling | hub_writer | S2 |
 | 6 | J hard-coded key allowlists | J | S2 |
 | 7 | One insight artifact per pass (first match wins) | hub_writer | S2 |
-| 8 | Supervisor calls Gemini every hop (cost/latency) | Supervisor | S3 |
+| 8 | Supervisor calls the LLM every hop (cost/latency) | Supervisor | S3 |
 | 9 | D fires up to 4 LLM calls (CoVe) | D | S3 |
-| 10 | Receipt scanner = 2 sequential Gemini calls | Receipt | S3 |
+| 10 | Receipt scanner = 2 sequential LLM calls | Receipt | S3 |
 | 11 | C: O(txn × invoice) matching, 50-candidate cap | C | S3 |
 | 12 | Heavy inline deps / import cost (statsmodels, reportlab, pandas) | D, E, G | S3 |
 | 13 | No confidence gating on A's OCR fast-path | A | S4 |
@@ -143,13 +143,13 @@ untouched; multi-agent sessions persist every produced artifact; existing tests 
 > **Status: mostly DONE.**
 > - **S3-1 (supervisor):** deterministic keyword router + bounded initial-decision
 >   cache + single-agent FINISH short-circuit → clear single-agent intents cost
->   **0 Gemini routing calls**. New `agent_supervisor_routes_total{method}` metric
+>   **0 LLM routing calls**. New `agent_supervisor_routes_total{method}` metric
 >   sizes the win. (`supervisor.py`, tests in `test_supervisor_router.py`.)
 > - **S3-2 (Agent D CoVe):** Drafter+Explainer folded into one call → verified
 >   path is **2 LLM calls (was 3)**; `ctx["cove_verify"]=false` drops it to 1.
 >   (`test_agent_forecaster_cove.py`.)
 > - **S3-4 (Agent C):** Pass 1 amount-bucketing removes the O(txn×invoice) scan
->   (proven equal to brute force in `test_reconciler_pass1_bucketing.py`); Gemini
+>   (proven equal to brute force in `test_reconciler_pass1_bucketing.py`); the LLM
 >   candidate cap now configurable (`ReconcilerTuning.pass2_candidate_cap`).
 > - **S3-5:** sklearn now lazily imported in `e_watchdog` + `model_store`
 >   (statsmodels/reportlab/pandas were already deferred).
@@ -182,10 +182,10 @@ now configurable) for the routing/heuristic tuning knobs.
 
 | Ticket | Detail | Agent | Est |
 |---|---|---|---|
-| S3-1 | Supervisor: short-circuit common single-agent intents with a deterministic keyword/heuristic router before falling back to Gemini; cache routing decisions per intent signature. Measure LLM-call reduction. | Supervisor | L |
+| S3-1 | Supervisor: short-circuit common single-agent intents with a deterministic keyword/heuristic router before falling back to the LLM; cache routing decisions per intent signature. Measure LLM-call reduction. | Supervisor | L |
 | S3-2 | Agent D: collapse CoVe from 3 calls to 1–2 (combined draft+explain, or skip explainer when draft confidence high); make CoVe opt-in per request. | D | M |
 | S3-3 | Receipt scanner: fold OCR + categorization into a single structured-output vision call (category as a field in `ReceiptExtraction`). | Receipt | M |
-| S3-4 | Agent C: index/pre-bucket invoices by amount band + date window to avoid the full O(txn × invoice) scan; make the 50-candidate Gemini cap configurable and page residuals across runs. | C | L |
+| S3-4 | Agent C: index/pre-bucket invoices by amount band + date window to avoid the full O(txn × invoice) scan; make the 50-candidate LLM cap configurable and page residuals across runs. | C | L |
 | S3-5 | Confirm/standardize lazy imports for statsmodels, reportlab, pandas/openpyxl, sklearn so agents that don't use them pay no import cost; add a startup-time assertion. | D, E, G | S |
 | S3-6 | Add per-session LLM-call-count + cost dashboards (build on `_tracked` metrics) to verify the reductions land. | infra | S |
 
@@ -206,7 +206,7 @@ benchmarked faster at 10× volume; no regression in output quality on the eval s
 > - **S4-3 (G):** bankability calibration over healthy/moderate/distressed
 >   profiles (`test_agent_g_bankability_eval.py`) — tier + monotonic-ordering asserts.
 > - **S4-4 (A):** OCR fast-path now gated by a confidence floor (0.6) — low-confidence
->   reads fall through to Gemini instead of being accepted.
+>   reads fall through to the LLM instead of being accepted.
 > - **S4-5 (E):** `WatchdogAnalysis` + `BudgetWatchdogMeter` now expose
 >   `isolation_model` (`persisted`/`on_the_fly`) + `degraded` so degraded runs are visible.
 > - **S4-6 (D/F):** deterministic gates independent of the LLM — D rejects any
@@ -242,7 +242,7 @@ back-tests the tuned constants should be validated on.
 | S4-1 | Eval harness for Agent B classification (labeled fixture set, accuracy/precision by category), mirroring existing Agent F evals. | B | M |
 | S4-2 | Eval/back-test for Agent E: HMM state decoding + IsolationForest on synthetic labeled anomaly series; assert detection rate/false-positive bounds. | E | L |
 | S4-3 | Calibration test for Agent G bankability score against a labeled outcome set (or a documented synthetic proxy until real default data exists). | G | M |
-| S4-4 | Agent A: add confidence gating to the OCR fast-path — below a configurable threshold, fall through to Gemini text extraction instead of accepting the OCR dict. | A | S |
+| S4-4 | Agent A: add confidence gating to the OCR fast-path — below a configurable threshold, fall through to LLM text extraction instead of accepting the OCR dict. | A | S |
 | S4-5 | Agent E: surface `model_used` / on-the-fly-fit-degradation flag in the output payload + `BudgetWatchdogMeter` widget so users see when results are degraded. | E | S |
 | S4-6 | Harden self-grading (D CoVe auditor, F compliance): add deterministic post-checks (schema/row-sanity for D's SQL results; numeric cross-check for F's flags) so the LLM verdict isn't the only gate. | D, F | M |
 
@@ -314,13 +314,13 @@ locale output preserves all numerals.
 >   `review_status="pending_review"` with a hold notice. Summary tier is
 >   unaffected. (`h_advisor.py`, `test_agent_advisor.py`.)
 > - **S6-6 (OCR ceiling):** low-confidence receipt scans (< `receipt.ocr_min_confidence`)
->   are re-run once with a higher-fidelity vision model (`GEMINI_VISION_RETRY_MODEL`);
+>   are re-run once with a higher-fidelity vision model (`VISION_RETRY_MODEL`);
 >   the more confident read wins, retry failures keep the first read. The receipt
 >   taxonomy is now a config section (`ReceiptTuning.categories`) so operators can
 >   extend it without a deploy; the schema clamp reads the effective set. The
 >   `model` override is threaded through the vision LLM path. (`vision_ocr.py`,
 >   `tuning.py`, `schemas.py`, `test_receipt_multipass.py`.)
-> - **Config:** added `GEMINI_VISION_RETRY_MODEL`, `AGENT_H_REVIEW_GATE`; new
+> - **Config:** added `VISION_RETRY_MODEL`, `AGENT_H_REVIEW_GATE`; new
 >   `receipt` tuning section (env/DB-overridable, in the admin `AgentTuningView`).
 >   `schema.d.ts` regenerated (AgentTuningView.receipt).
 > - Tests: 77 affected intelligence tests pass; ruff + mypy clean on changed files.

@@ -349,7 +349,7 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "description": "Percentile latency of Agent E's Gemini LLM API calls. P99 > 10 s indicates quota pressure or model overload. Compare P50 vs P99 gap to detect tail latency caused by token budget variability.",
+      "description": "Percentile latency of Agent E's LLM API calls. P99 > 10 s indicates quota pressure or model overload. Compare P50 vs P99 gap to detect tail latency caused by token budget variability.",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},

@@ -13,8 +13,10 @@ gotchas that aren't derivable from a quick glance at the tree.
 
 A finance platform: **Next.js 15 frontend** + a **unified async FastAPI backend**
 (Python 3.12) organized as DDD bounded contexts, backed by
-PostgreSQL/MongoDB/Redis/RabbitMQ, with a Gemini-based multi-agent intelligence
-layer (LangGraph). Infra is Docker Compose; observability is Prometheus/Grafana.
+PostgreSQL/MongoDB/Redis/RabbitMQ, with an 11-agent LLM-driven intelligence
+layer (LangGraph; Fireworks Gemma 4 primary, optional Gemini primary +
+Featherless failover — see `llm/` below). Infra is Docker Compose; observability
+is Prometheus/Grafana.
 
 ```
 backend/      FastAPI app, domains, workers, Alembic migrations, tests
@@ -68,25 +70,35 @@ Backend uses **`uv`**. To run a single test:
 ### Intelligence domain (`backend/src/domains/intelligence/`)
 - `orchestrator.py` — LangGraph `StateGraph`: supervisor ↔ agents, every agent
   routes through `hub_writer` (Mongo upsert) before returning to the supervisor.
-- `agents/` — lettered agents A–J + `receipt_scanner`, `hub_writer`, `supervisor`.
-  Each is a `make_*_node()` factory.
+- `agents/` — lettered agents A–K + `planner`, `receipt_scanner`, `hub_writer`,
+  `supervisor`. Each lettered agent is a `make_*_node()` factory. A clean
+  single-agent, read-only intent for D or F skips the supervisor via a fast
+  path in `orchestrator.py`.
 - `llm/` — **provider-agnostic LLM layer**: `base.BaseLLMClient` (interface),
-  `gemini.GeminiLLMClient` (impl), `telemetry.py` (per-agent metric attribution
-  via a contextvar), `pricing.py` (model-keyed cost).
+  `openai_compat.py` (the only file importing the `openai` SDK; used for
+  Fireworks, Gemini, and Featherless — all OpenAI-compatible endpoints),
+  `provider.OpenAICompatLLMClient` (retry/timeout/telemetry policy),
+  `failover.FailoverLLMClient` (primary + backup composition), `telemetry.py`
+  (per-agent metric attribution via a contextvar), `pricing.py` (model-keyed
+  cost).
 - `llm_client.py` — **back-compat facade** re-exporting the public surface
-  (`generate_structured_content`, `generate_text_content`, `get_gemini_client`,
+  (`generate_structured_content`, `generate_text_content`, `get_llm_client`,
   `observe_llm_call`, `agent_context`, `LLMUnavailableError`, metric collectors).
-  Import LLM helpers from here. Swap providers in `get_llm_client()`.
+  Import LLM helpers from here. Provider selection (Fireworks vs. Gemini
+  primary, optional Featherless backup) lives in `llm_client._build_client()`.
 - `routers/` — HTTP split by concern (`insights`, `receipts`, `conversations`,
-  shared `_common`); `router.py` just aggregates them.
+  `proposals`, `admin`, `admin_tuning`, `telemetry`, shared `_common`);
+  `router.py` just aggregates them.
 - `security/` — `key_manager.py` (Ed25519 internal CA), `agent_cards.py`
   (signed agent identities), `vc_issuer.py` (Verifiable Credentials).
 - `tools/` — `sql_executor.py` (read-only Text-to-SQL guard), `http_caller.py`
-  (SSRF-guarded), `vision_ocr.py`.
+  (SSRF-guarded), `vision_ocr.py`, `inventory_tools.py` (Agent K), `mongo_reader.py`,
+  `event_publisher.py` (RabbitMQ, per-agent exchange scoping).
 
 ### Frontend (`frontend/src/`)
 - `app/` — Next.js App Router routes (`(auth)`, `dashboard/*`, `settings`).
-- `components/` — `ui/`, `dashboard/*`, `forms/`, `layouts/`, `charts/`.
+- `components/` — `ui/`, `dashboard/*` (per-domain: `intelligence/`, `inventory/`,
+  `reconciliation/`, `command-center/`, etc.), `forms/`, `layouts/`.
 - `lib/api/` — `http-client.ts` (axios, cookie auth + CSRF), `auth-client.ts`,
   domain clients, and **`generated/schema.d.ts`** (do not hand-edit — see §5).
 - `lib/auth/` — `auth-context.tsx`, `token-manager.ts`.
@@ -102,8 +114,8 @@ Backend uses **`uv`**. To run a single test:
 - **Lint/type are zero-error gates.** ruff (`E,F,I,N,UP,B,SIM`, line length 100;
   `tests/**` ignore `E501`) and **`mypy --strict`** must stay clean. Frontend:
   `tsc --noEmit` and `next lint` clean.
-- **Pydantic v2** for all schemas/settings. Prefer native structured output for
-  Gemini (`response_schema`), not JSON-in-prompt hacks.
+- **Pydantic v2** for all schemas/settings. Prefer native structured output
+  (`response_schema` / `json_schema`), not JSON-in-prompt hacks.
 - **Config is fail-in-prod / warn-in-dev.** `config.py::_validate_production`
   refuses to boot with placeholder secrets, `DEBUG`, `*` CORS, or unset security
   boundaries. The read-only DB engine and schema-migration guards follow the same

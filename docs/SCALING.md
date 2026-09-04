@@ -92,7 +92,7 @@ invoice-write latency from synchronous folding shows up in traces (async project
 - **Faust is effectively abandoned**; the live path is the `faust-streaming` fork, and
   it still wants Kafka.
 - The real latency source is not Celery vs. streams — it is that Agent E boots
-  `IsolationForest` + RapidFuzz + a Gemini narrative + VC issuance per trigger. A
+  `IsolationForest` + RapidFuzz + an LLM narrative + VC issuance per trigger. A
   windowing stream processor front-runs none of that.
 - The useful nugget — windowed **velocity** detection ("N transactions in 10 min for a
   customer") — needs no streaming platform: a **Redis sorted-set sliding window**

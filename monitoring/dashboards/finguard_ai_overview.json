@@ -158,7 +158,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Percentile latency of LLM (Gemini) API calls made by each AI agent. P99 > 10 s indicates quota throttling or prompt token budget pressure. Queries both the canonical D3 metric (agent_llm_processing_seconds) and the legacy finguard_* series — whichever has data will appear.",
+      "description": "Percentile latency of LLM API calls made by each AI agent. P99 > 10 s indicates quota throttling or prompt token budget pressure. Queries both the canonical D3 metric (agent_llm_processing_seconds) and the legacy finguard_* series — whichever has data will appear.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -452,7 +452,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Approximate Gemini spend per agent, extrapolated to USD/hour from token rate × configured list price (GEMINI_*_USD_PER_MTOK). TOTAL is all agents combined. Source: agent_llm_cost_usd_total.",
+      "description": "Approximate LLM spend per agent, extrapolated to USD/hour from token rate × configured list price (LLM_PRICING_JSON, or the built-in per-model defaults). TOTAL is all agents combined. Source: agent_llm_cost_usd_total.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -673,7 +673,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Per-agent LLM call rate split by outcome (error series shown red). A spike in errors points to Gemini throttling / circuit-breaker trips for that agent. Source: agent_llm_calls_total.",
+      "description": "Per-agent LLM call rate split by outcome (error series shown red). A spike in errors points to provider throttling / circuit-breaker trips for that agent. Source: agent_llm_calls_total.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -752,7 +752,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "How each supervisor routing decision was made (agent_supervisor_routes_total). Any method other than 'gemini' is a saved LLM routing call (Sprint 3).",
+      "description": "How each supervisor routing decision was made (agent_supervisor_routes_total). Any method other than 'llm' is a saved LLM routing call (Sprint 3).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -817,7 +817,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Share of supervisor routing decisions made WITHOUT a Gemini call (heuristic / cache / requested / single-agent finish). The Sprint-3 routing-cost win — higher is cheaper.",
+      "description": "Share of supervisor routing decisions made WITHOUT an LLM call (heuristic / cache / requested / single-agent finish). The Sprint-3 routing-cost win — higher is cheaper.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -869,7 +869,7 @@
         "textMode": "auto"
       },
       "pluginVersion": "10.2.0",
-      "title": "Routing Calls Skipping Gemini (%)",
+      "title": "Routing Calls Skipping LLM (%)",
       "type": "stat",
       "targets": [
         {
@@ -877,7 +877,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(agent_supervisor_routes_total{method!=\"gemini\"}[5m])) / clamp_min(sum(rate(agent_supervisor_routes_total[5m])), 1e-9)",
+          "expr": "sum(rate(agent_supervisor_routes_total{method!=\"llm\"}[5m])) / clamp_min(sum(rate(agent_supervisor_routes_total[5m])), 1e-9)",
           "legendFormat": "skipped",
           "refId": "A"
         }

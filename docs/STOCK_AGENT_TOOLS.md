@@ -165,14 +165,14 @@ Being deliberate about the negative space is part of the design:
 2. **Agent node:** `agents/k_stockkeeper.py` — a LangGraph node that (a) resolves
    RBAC role (reuse Agent H's `_resolve_user_role`), (b) binds the read/compute
    tools always and the write tool only when `INTELLIGENCE_ACT` is granted,
-   (c) uses Gemini structured output for the narrative + a structured
+   (c) uses LLM structured output for the narrative + a structured
    `proposed_actions` list, never free-form numbers.
 3. **Registry:** one `AgentDescriptor` in `agent_registry.py`
    (`agent_id="K"`, `context_key="inventory_analysis"`, `intent="inventory"`,
    a TTL + `summary_order`) — `hub_writer` and Agent J then pick it up with no
    further edits (that's the Sprint-2 contract).
 4. **Supervisor routing:** add a `_KEYWORD_ROUTES` entry in `supervisor.py` so
-   clear intents skip the Gemini routing call (0-cost route, per Sprint 3):
+   clear intents skip the supervisor's LLM routing call (0-cost route, per Sprint 3):
    ```python
    ("k_stockkeeper", frozenset({"stock", "inventory", "sku", "reorder",
                                 "stock level", "out of stock", "restock"})),

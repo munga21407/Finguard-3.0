@@ -5,10 +5,10 @@ Evals for the financial agents, split by what's being tested:
 | File | What | Blocking? | Needs |
 |---|---|---|---|
 | `test_agent_f_tax_evals.py` | Agent F **deterministic numbers** (VAT/CIT/AML math, golden KRA scenarios) | **Yes — gates CI** | nothing (pure functions) |
-| `test_agent_f_narrative_judge.py` | Agent F **LLM-written narrative** grounding (LLM-as-judge) | No — nightly/opt-in | `RUN_LLM_EVALS=1` + `FIREWORKS_API_KEY` |
+| `test_agent_f_narrative_judge.py` | Agent F **LLM-written narrative** grounding (LLM-as-judge) | No — nightly/opt-in | `RUN_LLM_EVALS=1` + a configured primary key (`GEMINI_API_KEY` in CI; `FIREWORKS_API_KEY` also works) |
 | `test_supervisor_trajectory.py` | Supervisor **routing contract** (allowlist holds, bad routes → FINISH, errors degrade) | **Yes — gates CI** | nothing (LLM mocked) |
 | `test_supervisor_context_window.py` | Supervisor **routing-context window** (head+tail bounding, truncation, flat cost) | **Yes — gates CI** | nothing (pure function) |
-| `test_supervisor_routing_judge.py` | Supervisor **real-model routing accuracy** over golden `ROUTING_CASES` | No — nightly/opt-in | `RUN_LLM_EVALS=1` + `FIREWORKS_API_KEY` |
+| `test_supervisor_routing_judge.py` | Supervisor **real-model routing accuracy** over golden `ROUTING_CASES` | No — nightly/opt-in | `RUN_LLM_EVALS=1` + a configured primary key (`GEMINI_API_KEY` in CI; `FIREWORKS_API_KEY` also works) |
 | `datasets.py` | Golden scenarios with hand-derived expected outputs (`TAX_CASES`, `AML_CASES`, `ROUTING_CASES`) | — | — |
 
 **Output vs trajectory.** The Agent-F evals check *outputs* (is the final number/narrative right?).
@@ -34,8 +34,8 @@ The deterministic suite is what catches silent drift like a wrong VAT threshold
 # Deterministic gate (what CI runs on every PR, via `pytest tests/`):
 uv run pytest tests/evals/test_agent_f_tax_evals.py -v
 
-# LLM-judge (nightly / local opt-in — costs tokens):
-RUN_LLM_EVALS=1 FIREWORKS_API_KEY=... uv run pytest tests/evals -m llm_judge -v
+# LLM-judge (nightly / local opt-in — costs tokens; CI runs this against Gemini):
+RUN_LLM_EVALS=1 GEMINI_API_KEY=... uv run pytest tests/evals -m llm_judge -v
 ```
 
 In CI the deterministic evals run inside the existing `backend-lint-test` job
