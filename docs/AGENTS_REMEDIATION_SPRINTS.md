@@ -589,6 +589,37 @@ Sprint 8), `ruff check` clean on every touched file.
 `proposal_service.py`, `agents/d_forecaster.py`,
 `services/forecast_service.py` (new).
 
+**What S8/S9 deliberately left open** (so the next reader doesn't mistake
+these for gaps still to close, or code-review them as accidents):
+
+- **A2A planner ship-or-freeze.** `A2A_PLANNER_ENABLED` stays `False`.
+  Flipping it needs staging traffic data and a deployment action — not
+  something a sprint can resolve from inside the repo. S9-4's integration
+  test only makes that decision safer to make later, whenever it's made; see
+  §6 (Phased rollout) above.
+- **`exchange_cards()` / task-scoped VCs** — kept, not deleted. Real, tested,
+  currently uncalled. The right primitive if agent execution and write
+  execution ever split into separate trust domains; revisit deletion only if
+  that still hasn't happened in a few more sprints.
+- **B and E's writes stay ungated by human review** — a risk-based choice via
+  `AgentDescriptor.mutations` (S9-2), not an inconsistency to fix later. B
+  mislabels a category (metadata, correctable); E publishes an alert or
+  triggers an ML retrain (no direct financial/inventory effect). Neither is
+  in the same risk class as C's Pass 2 or K's stock write-offs, which *are*
+  proposal-gated. Reclassify a specific agent by editing its `mutations` set
+  if that risk judgment changes.
+- **C's Pass 1 (deterministic exact match) still auto-applies** — no LLM in
+  the loop, and `FinanceService.apply_reconciled_payment`'s `FOR UPDATE` +
+  balance-clamp is the actual safety gate (see the Agent C entry in
+  `AGENTS_REPORT.md`). Only Pass 2 (LLM-judged) needed the HITL gate S8-3
+  added.
+- **`mongo_reader`'s grant table is empty** — the fail-closed mechanism
+  exists (§4.6/§4.7 of `A2A_PROTOCOL.md`), but no agent is granted `"mongo"`
+  access. Closes the door before anyone walks through it; not meant to be
+  populated speculatively.
+- **Checkpointing / conversation resume** and **the SQL candidate-join
+  pushdown** — see §7 (Backlog) below; neither was ever in S8/S9's scope.
+
 ---
 
 ## 7. Backlog / not-yet-scheduled
@@ -596,6 +627,21 @@ Sprint 8), `ruff check` clean on every touched file.
 - **Multi-jurisdiction tax & credit logic** (F, G). Large, strategic — depends on
   product direction beyond Kenya. Sprint 1's effective-dated config table is the
   enabling foundation; defer the full generalization until it's a committed goal.
+
+- **LangGraph checkpointing / conversation resume** (`LANGGRAPH_CHECKPOINTING_ENABLED`,
+  default off). Surfaced in the architectural review that led to Sprint 8/9 but
+  never selected into either sprint's scope — not a delivery gap in S8/S9, a
+  standalone product decision nobody has made yet: is resumable conversation a
+  committed feature, or should the resume endpoint (`routers/conversations.py`)
+  be treated as experimental until it is? Message-history reconstructability
+  (§2's hub_writer entry, `AGENTS_REPORT.md`'s "Unbounded message history" row)
+  already depends on this flag being on; the resume endpoint itself fails
+  honestly (HTTP 409) when it's off rather than pretending to succeed, so
+  nothing is broken by leaving it off — it's just an unmade decision, not a bug.
+
+- **Agent C's SQL candidate-join pushdown** — see `DEFERRED_ITEMS_STRATEGY.md`
+  item D. Pre-existing, unrelated to S8/S9; indexes shipped (migration `0016`),
+  the query itself needs a live DB to validate before it ships.
 
 ---
 
