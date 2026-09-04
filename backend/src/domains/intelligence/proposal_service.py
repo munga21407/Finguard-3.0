@@ -30,6 +30,7 @@ from src.core.exceptions import ForbiddenError, NotFoundError, UnprocessableErro
 from src.core.logging import logger
 from src.domains.identity.models import User
 from src.domains.identity.permissions import Permission
+from src.domains.intelligence.agent_registry import mutation_kinds
 from src.domains.intelligence.models import AgentActionProposal, ProposalStatus
 from src.domains.intelligence.security.vc_issuer import issue_vc, payload_hash
 from src.domains.intelligence.tools.inventory_tools import propose_stock_movement
@@ -114,6 +115,17 @@ class ProposalService:
         :meth:`approve`, so a proposal awaiting a second human never mutates stock
         (or burns budget, for finance action types) before sign-off.
         """
+        agent_id = _ACTION_AGENT_ID.get(action_type, agent_label)
+        if "proposal" not in mutation_kinds(agent_id):
+            # Registry/code drift, not a business-rule refusal — the caller
+            # (an agent's own code) chose to propose an action_type its
+            # AgentDescriptor doesn't declare "proposal" capability for. See
+            # agent_registry.AgentDescriptor.mutations.
+            raise RuntimeError(
+                f"Agent {agent_id!r} is not declared 'proposal'-capable in "
+                f"agent_registry, but create_proposal was called for "
+                f"action_type {action_type!r}."
+            )
         proposal = AgentActionProposal(
             agent_label=agent_label,
             action_type=action_type,

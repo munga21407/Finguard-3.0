@@ -43,6 +43,7 @@ from src.core.metrics import (
     AGENT_E_ANOMALY_SCORE,
     AGENT_E_STATE_PROBABILITY,
 )
+from src.domains.intelligence.agent_registry import mutation_kinds
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.ml.model_store import (
     load_model,
@@ -480,7 +481,11 @@ async def run_watchdog_analysis(
         )
         iso_score = _isolation_score(amounts)
         iso_is_anomaly = iso_score > 0.7
-        if customer_id is not None and mode == "actions":
+        if (
+            customer_id is not None
+            and mode == "actions"
+            and "direct_write" in mutation_kinds("E")
+        ):
             _trigger_background_fit(customer_id)
 
     # ── rapidfuzz duplicate detection ─────────────────────────────────
@@ -531,7 +536,9 @@ async def run_watchdog_analysis(
     # ── RabbitMQ event ────────────────────────────────────────────────
     # `iso_is_anomaly` is the model's direct `.predict()` verdict; combined
     # with the HMM state and the score threshold so a persisted model's call
-    # alone is enough to raise the anomaly event.
+    # alone is enough to raise the anomaly event. The "event" mutation-kind
+    # check lives inside make_event_publisher itself (tools/event_publisher.py)
+    # — no separate check needed here.
     event_published = False
     if (anomaly_detected or iso_is_anomaly or iso_score > 0.7) and mode == "actions":
         try:

@@ -10,7 +10,13 @@ Sprint 6 additions
   a deterministic canonical JSON serialisation of the card's core fields.
 - **Zero-trust exchange:** ``exchange_cards(sender, receiver)`` verifies
   both cards' CA signatures before allowing state to pass between agents.
-  Call this at the start of any inter-agent data handoff in "actions" mode.
+  **Not currently called anywhere** — the planner's actual inter-agent
+  handoff is in-process (LangGraph's ``Send``, dispatched by
+  ``agents/planner.py``), not a call across a trust boundary this would
+  guard. It's the right primitive for a *genuine* agent-to-agent exchange —
+  e.g. if agent execution ever moves to a separate service from write
+  execution — not for today's single-process orchestration. Exercised only
+  by unit tests until that boundary exists.
 
 Cards are signed lazily on first access and cached for the process lifetime.
 """
@@ -99,7 +105,7 @@ def exchange_cards(sender: AgentCard, receiver: AgentCard) -> None:
     Zero-trust pre-flight identity check between two agents.
 
     Both cards must carry a valid CA signature before state is allowed to pass.
-    Call this before any inter-agent data handoff in "actions" mode.
+    Not currently called by any live handoff — see the module docstring.
 
     Raises:
         PermissionError: if either card fails signature verification.

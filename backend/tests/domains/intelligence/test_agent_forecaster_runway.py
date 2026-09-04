@@ -7,7 +7,7 @@ and negative-drift extrapolation beyond it.
 """
 from __future__ import annotations
 
-from src.domains.intelligence.agents.d_forecaster import _estimate_runway
+from src.domains.intelligence.services.forecast_service import _estimate_runway
 
 
 def test_runway_depletes_within_horizon_days() -> None:

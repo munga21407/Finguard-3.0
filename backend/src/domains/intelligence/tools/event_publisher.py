@@ -11,7 +11,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from src.domains.intelligence.agent_registry import allowed_event_exchanges
+from src.domains.intelligence.agent_registry import allowed_event_exchanges, mutation_kinds
 from src.infrastructure.message_bus.rabbitmq_publisher import (
     BrokerUnavailableError,
     publish,
@@ -30,7 +30,9 @@ def make_event_publisher(mode: str, agent_id: str) -> Any:
     async def publish_event(exchange: str, routing_key: str, payload: dict[str, Any]) -> str:
         """Publish a domain event to RabbitMQ.
 
-        Only available in 'actions' mode. Restricted to approved exchanges,
+        Only available in 'actions' mode, for an agent whose registry entry
+        declares the "event" mutation capability
+        (``agent_registry.mutation_kinds``). Restricted to approved exchanges,
         further narrowed to ``agent_id``'s own grant
         (``agent_registry.allowed_event_exchanges``).
 
@@ -41,6 +43,8 @@ def make_event_publisher(mode: str, agent_id: str) -> Any:
         """
         if mode != "actions":
             return "Event publishing is disabled in 'insights' mode."
+        if "event" not in mutation_kinds(agent_id):
+            return f"Agent '{agent_id}' has no 'event' mutation capability."
         agent_allowed = allowed_event_exchanges(agent_id)
         if exchange not in ALLOWED_EXCHANGES or exchange not in agent_allowed:
             permitted = ALLOWED_EXCHANGES & agent_allowed

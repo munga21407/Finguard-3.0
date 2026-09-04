@@ -81,6 +81,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.domains.finance.models import Payment
 from src.domains.finance.service import FinanceService
 from src.domains.finance.types import VaultType
+from src.domains.intelligence.agent_registry import mutation_kinds
 from src.domains.intelligence.db_tuning import refresh_agent_tuning_from_db
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.models import AgentActionProposal, ProposalStatus
@@ -126,6 +127,25 @@ def _apply_reconciler_tuning() -> None:
     _AMOUNT_TOLERANCE = rc.amount_tolerance_kes
     _DATE_WINDOW_DAYS = rc.date_window_days
     _PASS2_CANDIDATE_CAP = rc.pass2_candidate_cap
+
+
+def _assert_direct_write_capable(agent_id: str) -> None:
+    """Guard Pass 1's auto-apply against a registry/code drift.
+
+    Pass 1 is hardcoded to auto-apply for Agent C specifically — this isn't a
+    per-request, agent-configurable choice, so a failure here can only mean
+    ``agent_registry.AGENT_REGISTRY``'s declared ``mutations`` for C no longer
+    matches what this module actually does. Raise loudly rather than silently
+    leaving transactions unreconciled with no error (the failure mode a
+    tool-style string-return would produce, which is wrong for a background
+    batch job — see ``agent_registry.AgentDescriptor.mutations``).
+    """
+    if "direct_write" not in mutation_kinds(agent_id):
+        raise RuntimeError(
+            f"Agent {agent_id!r} is not declared 'direct_write'-capable in "
+            "agent_registry, but reconciliation_service's Pass 1 auto-apply "
+            "requires it — registry/code have drifted apart."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +565,7 @@ async def run_reconciliation(session: AsyncSession) -> ReconciliationReport:
             # commits, not applied inline — see _propose_semantic_matches.
             # If apply_confirmed_match raises on any exact match, session.begin()
             # rolls back the entire batch automatically; no partial state commits.
+            _assert_direct_write_capable("C")
             txn_dates = {t["id"]: t["created_at"] for t in transactions}
             for match in exact_matches:
                 try:
@@ -686,6 +707,7 @@ async def run_bank_reconciliation(session: AsyncSession) -> ReconciliationReport
             # Pass 2 (fuzzy/semantic) is queued for human sign-off after this
             # transaction commits, not applied inline — see run_reconciliation's
             # matching comment and _propose_semantic_matches.
+            _assert_direct_write_capable("C")
             line_dates = {t["id"]: t["created_at"] for t in transactions}
             for match in exact_matches:
                 try:

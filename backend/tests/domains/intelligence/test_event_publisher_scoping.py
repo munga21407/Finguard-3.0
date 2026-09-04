@@ -83,3 +83,28 @@ def test_ungranted_agent_has_no_publishable_exchanges() -> None:
     from src.domains.intelligence.agent_registry import allowed_event_exchanges
 
     assert allowed_event_exchanges("D") == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_agent_without_event_mutation_capability_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D has no 'event' entry in AgentDescriptor.mutations (it's read_only) —
+    must be rejected before even reaching the exchange-grant check, even for
+    an exchange that would otherwise be globally allowed."""
+    published: list[object] = []
+
+    async def fake_publish(*_a: object, **_k: object) -> None:
+        published.append(_a)
+
+    monkeypatch.setattr(ep, "publish", fake_publish)
+    publisher = ep.make_event_publisher("actions", agent_id="D")
+
+    result = await publisher.ainvoke({
+        "exchange": "finguard.intelligence",
+        "routing_key": "some.key",
+        "payload": {},
+    })
+
+    assert "mutation capability" in result
+    assert published == []

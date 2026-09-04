@@ -20,8 +20,10 @@ how-to-land-them plan, grounded in the existing code patterns.*
 > (returns None if settled) — so double-settle is impossible and the up-front
 > invoice lock is an *optimisation*, not a safety requirement. That makes the
 > candidate-join pushdown safe to add; the exact `FOR UPDATE OF i SKIP LOCKED`
-> query + lazy-Pass-2 plan is now documented in `c_reconciler`'s docstring as a
-> turn-key spec. The code rewrite itself is **not shipped** because it's the money
+> query + lazy-Pass-2 plan is now documented in `services/reconciliation_service.py`'s
+> module docstring as a turn-key spec (moved there from `c_reconciler.py` in
+> Sprint 8's agent-decomposition pass — see `AGENTS_REMEDIATION_SPRINTS.md` §Sprint 8).
+> The code rewrite itself is **not shipped** because it's the money
 > path and can't be validated without a live DB, and its benefit is bounded (the
 > invoice fetch is already capped at `_INV_LIMIT=500` and the amount-bucketing
 > already fixed the O(txn×invoice) compute). Recommended: implement behind a config

@@ -4,13 +4,31 @@ Verifiable Credential (VC) issuer for AI agent audit trails (Sprint 6).
 Two credential types
 ---------------------
 1. **Audit VCs** (``issue_vc``) — long-lived (365 days), written to ``trust_log``
-   for SOC-2 / compliance requirements. Used by Agent E and other agents to record
-   every significant operation in a tamper-evident audit trail.
+   for SOC-2 / compliance requirements. Used by Agent E and ``ProposalService``
+   to record every significant operation / human decision in a tamper-evident
+   audit trail. This one is live and load-bearing.
 
-2. **Task-scoped VCs** (``issue_task_scoped_vc``) — short-lived (5 minutes), bound
-   to a specific ``transaction_id``. Agents MUST call ``validate_task_vc()`` before
-   executing any database write to prove they hold a valid, in-scope credential for
-   that exact transaction.
+2. **Task-scoped VCs** (``issue_task_scoped_vc`` / ``validate_task_vc``) —
+   short-lived (5 minutes), bound to a specific ``transaction_id``; designed
+   to be issued and immediately validated, right before a write, by a caller
+   proving it holds a fresh, in-scope credential for that exact transaction.
+   **Not currently wired into any live write path.** The one place that looks
+   like an obvious fit — ``ProposalService`` gating a human-reviewed
+   write — deliberately does *not* use it: a proposal can sit pending for
+   hours to days awaiting a reviewer, which the 5-minute TTL cannot span, and
+   since issuance and validation would both happen inside the same trusted
+   process either way, a self-issued-and-self-validated token adds no
+   protection against an external attacker today. ``ProposalService`` instead
+   pins a ``payload_hash`` (this module's ``payload_hash``) at proposal
+   creation and re-checks it at approval — the right primitive for a
+   *long-window integrity* guarantee, which is what that flow actually needs
+   (see ``AGENTS_REMEDIATION_SPRINTS.md`` Sprint 8 for the full reasoning).
+   These two functions remain the right tool for a *different* problem: if
+   agent execution and write execution ever become separate trust domains
+   (they aren't today — one process, one trust boundary), a caller in the
+   agent domain would mint one of these right before asking the write domain
+   to act, and validation happens there. Exercised only by
+   ``test_vc_issuer.py`` until that boundary exists.
 
 Signing (Ed25519, asymmetric — EdDSA only)
 ------------------------------------------
@@ -258,8 +276,10 @@ async def issue_task_scoped_vc(
     """
     Issue a task-scoped VC valid **only** for a specific ``transaction_id``.
 
-    The credential expires in TASK_VC_TTL_SECONDS (5 minutes). Agents MUST
-    call ``validate_task_vc()`` before executing any database write.
+    The credential expires in TASK_VC_TTL_SECONDS (5 minutes) — meant to be
+    issued and checked with ``validate_task_vc()`` immediately before a write,
+    by a caller proving it holds a fresh, in-scope credential. See the module
+    docstring for why nothing calls this today and what it's actually for.
 
     The ``jti`` (JWT ID) claim is set to ``transaction_id`` so validators can
     confirm the credential was issued for exactly the right transaction.

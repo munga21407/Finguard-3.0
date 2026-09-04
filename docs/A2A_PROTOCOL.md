@@ -17,8 +17,12 @@ LLM re-deciding one hop at a time. Companion to
 > ran them first**, folding their signals into the credit narrative + findings
 > and recording provenance (`credit_forecast.consumed_upstream`) — defensively,
 > so single-agent flows are unchanged and the bankability score stays
-> ledger-derived. Other agents declare no `consumes`, so G is the whole surface
-> today. Every phase is backward-compatible with the existing single-agent flows.
+> ledger-derived. **Agent H** also declares soft `consumes` edges on `forecast`
+> (D) and `audit_result` (F) — it already folded them in ad hoc
+> (`ctx.get("forecast")` / `ctx.get("audit_result")`, both defaulting to `{}`),
+> so this made an existing behavior plan-visible rather than adding a new one.
+> Every other agent declares no `consumes`. Every phase is backward-compatible
+> with the existing single-agent flows.
 >
 > **Since (DeepSeek-harness-inspired hardening):** a **P0 fast-path** now sits
 > ahead of tier 1 (§2.3) — a clean single-agent, `read_only=True` intent (D, F
@@ -365,6 +369,15 @@ fast path untouched.
 - **Bounds.** Keep the `_RECURSION_LIMIT` backstop; a planned DAG is finite by
   construction, so the recursion ceiling only fires on a registry bug or a
   runaway replan.
+- **Observability for the staging rollout.** `agent_planner_stage_outcome_total`
+  (labelled `run` / `already_produced` / `missing_required`) and
+  `agent_planner_replans_total` (`core/metrics.py`) are the only planner-specific
+  Prometheus metrics — everything else the planner touches is measured by each
+  dispatched agent's own existing instrumentation. Two Grafana panels
+  ("Planner Stage Outcome (rate)", "Planner Replan Rate") sit in
+  `monitoring/dashboards/finguard_ai_overview.json`, reading zero until a given
+  environment sets `A2A_PLANNER_ENABLED=True` — these are what the P4 go/no-go
+  bake (§6) actually reads.
 
 ### 4.5 Capability discovery (optional, later)
 
@@ -387,7 +400,7 @@ more than `ledger_entries`/`invoices`, but nothing stopped it). Generalized:
 # agent_registry.py
 @dataclass(frozen=True)
 class ToolGrant:
-    tool: Literal["sql", "http", "events"]
+    tool: Literal["sql", "http", "events", "mongo"]
     allowed: frozenset[str]
 
 TOOL_GRANTS: dict[str, tuple[ToolGrant, ...]] = {
@@ -401,21 +414,75 @@ TOOL_GRANTS: dict[str, tuple[ToolGrant, ...]] = {
 }
 ```
 
-`allowed_sql_tables`/`allowed_http_hosts`/`allowed_event_exchanges` are the
-accessors; an agent with no entry for a tool is granted nothing (fail-closed,
-matching `sql_executor`'s pre-existing posture). Enforcement is **additive**,
-never a replacement for an existing safety check: `sql_executor.execute_readonly_sql`
-still runs the same sqlglot AST walk, just against the *caller's* table set
-instead of the global union; `http_caller.make_http_caller`'s per-agent host
-check runs strictly after the SSRF/DNS-pinning guard; `event_publisher`'s
-per-agent exchange check narrows, never widens, the existing hardcoded
-`ALLOWED_EXCHANGES` ceiling. `inventory_tools`/`mongo_reader`/`vision_ocr`
-deliberately have no grant — the first's only write path is already gated by
-mandatory `ProposalService` HITL (a stronger control), the second has zero
-callers, the third never touches SQL/HTTP/events directly.
+`allowed_sql_tables`/`allowed_http_hosts`/`allowed_event_exchanges`/
+`allowed_mongo_collections` are the accessors; an agent with no entry for a
+tool is granted nothing (fail-closed, matching `sql_executor`'s pre-existing
+posture). Enforcement is **additive**, never a replacement for an existing
+safety check: `sql_executor.execute_readonly_sql` still runs the same sqlglot
+AST walk, just against the *caller's* table set instead of the global union;
+`http_caller.make_http_caller`'s per-agent host check runs strictly after the
+SSRF/DNS-pinning guard; `event_publisher`'s per-agent exchange check narrows,
+never widens, the existing hardcoded `ALLOWED_EXCHANGES` ceiling.
+`inventory_tools` deliberately has no grant — its only write path is already
+gated by mandatory `ProposalService` HITL (a stronger control) — and
+`vision_ocr` never touches SQL/HTTP/events/Mongo directly, so it needs none
+either. `mongo_reader` **now has a `"mongo"` grant type** (closed ahead of any
+adopter — it had zero callers and zero grant enforcement at the same time,
+the exact gap `sql_executor` had before S7-1, so this shuts the door before
+anyone walks through it): `make_mongo_reader(db, agent_id)` rejects any
+collection not in `allowed_mongo_collections(agent_id)`, same fail-closed
+posture as the other three tools. No agent holds a `"mongo"` grant yet.
 
 **Files:** `agent_registry.py` (`ToolGrant`, `TOOL_GRANTS`, accessors),
-`tools/sql_executor.py`, `tools/http_caller.py`, `tools/event_publisher.py`.
+`tools/sql_executor.py`, `tools/http_caller.py`, `tools/event_publisher.py`,
+`tools/mongo_reader.py`.
+
+### 4.7 Mutation capability grants (implemented, Sprint 9)
+
+A third axis, distinct from both `consumes` (§4.2, data dependencies) and
+`TOOL_GRANTS` (§4.6, *which resource* within a tool): *what kind of side
+effect* an agent may have at all, in "actions" mode. Before this, B/E/K's
+`mode == "actions"` checks were correct in practice but had no registry-level
+backing — nothing would have caught a future agent copy-pasting one of those
+blocks without the classification being reconsidered.
+
+```python
+# agent_registry.py
+MutationKind = Literal["proposal", "event", "direct_write"]
+
+@dataclass(frozen=True)
+class AgentDescriptor:
+    ...
+    mutations: frozenset[MutationKind] = frozenset()
+```
+
+`"proposal"` — creates an `AgentActionProposal` (human-gated, via
+`ProposalService`). `"event"` — publishes to RabbitMQ. `"direct_write"` —
+persists without human review (inline, or by causing a write via a dispatched
+Celery task); reserved for paths that are either deterministic (no LLM
+judgment in the loop) or non-financial (e.g. an ML background fit), never for
+an LLM-judged financial/inventory mutation applied unreviewed. Declared
+per-agent: B `{"direct_write"}`, C `{"direct_write", "proposal"}`
+(Pass 1 / Pass 2 — see §4.6's sibling doc, `AGENTS_REMEDIATION_SPRINTS.md`
+Sprint 8's C detail), E `{"event", "direct_write"}` (never `"proposal"` — E
+has no financial/inventory write path), K `{"proposal"}`. Every other agent:
+empty — fail-closed, same posture as `TOOL_GRANTS`.
+
+`mutation_kinds(agent_id)` is the accessor. Checked at the actual call site,
+not just documented: `event_publisher.make_event_publisher` (covers any
+agent's RabbitMQ publish, including E's, transitively), the Celery-dispatch
+site in `b_classifier`, the Pass 1 apply loop in `reconciliation_service`
+(raises rather than silently under-reconciling on a registry/code drift — a
+background batch job shouldn't fail that quietly), the background-fit
+trigger in `anomaly_service`, and `ProposalService.create_proposal` (resolves
+`agent_label` → registry `agent_id` first, via the same `_ACTION_AGENT_ID`
+map VC issuance already needed — `agent_label` is a display string, not the
+registry id).
+
+**Files:** `agent_registry.py` (`MutationKind`, `AgentDescriptor.mutations`,
+`mutation_kinds`), `tools/event_publisher.py`, `agents/b_classifier.py`,
+`services/reconciliation_service.py`, `services/anomaly_service.py`,
+`proposal_service.py`.
 
 ---
 

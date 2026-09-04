@@ -18,6 +18,7 @@ from langchain_core.messages import AIMessage
 from sqlalchemy import text
 
 from src.core.logging import logger
+from src.domains.intelligence.agent_registry import mutation_kinds
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.prompts.b_classifier import CLASSIFIER_SYSTEM, TRANSACTION_TAXONOMY
 from src.domains.intelligence.schemas import (
@@ -160,7 +161,10 @@ def make_b_classifier_node(llm: Any = None) -> Any:  # llm kept for signature co
 
         # In actions mode the agent is read-safe; the Celery task owns all DB
         # writes and event publishing so this node stays side-effect-free.
-        if mode == "actions":
+        # Gated on the registry's declared "direct_write" capability (see
+        # agent_registry.AgentDescriptor.mutations) so this dispatch can never
+        # silently drift from what's declared for Agent B.
+        if mode == "actions" and "direct_write" in mutation_kinds("B"):
             try:
                 from src.workers.tasks.batch import (
                     classify_unclassified_ledger_entries,  # noqa: PLC0415

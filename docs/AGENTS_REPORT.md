@@ -59,22 +59,22 @@ Two smaller standalone graphs exist alongside the main loop:
 - **Cons:** Fixed 50-row batch — large backlogs need repeated invocations; zero-shot (no few-shot examples / fine-tuning), so accuracy on ambiguous narratives is capped; no feedback loop from user corrections.
 
 ### Agent C — Reconciliation Detective
-**How:** Two-pass matching of M-Pesa / bank-statement lines to open invoices. **Pass 1** deterministic (amount ±KES 1, date ±2 days, ref substring). **Pass 2** `rapidfuzz` pre-filter (token-sort ≥ 65) → LLM semantic confirmation (score ≥ 0.60). Writes are event-sourced `Payment`s via `FinanceService.apply_reconciled_payment`, all inside a single `session.begin()` with `FOR UPDATE SKIP LOCKED`. Core `run_reconciliation()` is reused by the Celery batch task.
+**How:** Two-pass matching of M-Pesa / bank-statement lines to open invoices. **Pass 1** deterministic (amount ±KES 1, date ±2 days, ref substring) — settles immediately as an event-sourced `Payment` via `FinanceService.apply_reconciled_payment`, inside a single `session.begin()` with `FOR UPDATE SKIP LOCKED`. **Pass 2** `rapidfuzz` pre-filter (token-sort ≥ 65) → LLM semantic confirmation (score ≥ 0.60) — since Sprint 8, an LLM-judged match is queued as an `AgentActionProposal` (`action_type="reconciliation.match"`) for human sign-off via `ProposalService` instead of settling inline; Pass 1 is unaffected. The pipeline itself lives in `services/reconciliation_service.py` (framework-agnostic); `agents/c_reconciler.py` is a thin LangGraph adapter, and the Celery batch task calls the same service functions.
 
-- **Pros:** Deterministic pass handles the common case with no LLM cost; whole-batch atomicity (any failure → full rollback, locks released); rapidfuzz pre-filter keeps LLM payloads small; bank + M-Pesa share the matcher; maker-checker (`review_status='approved'`) on bank lines.
-- **Cons:** Most complex agent (~560 lines) — high maintenance surface; O(txn × invoice) nested loops could scale poorly at high volume; LLM candidate list capped at 50 (residuals silently unscored); thresholds (65/0.60/0.90) are hand-tuned magic numbers.
+- **Pros:** Deterministic pass handles the common case with no LLM cost and no review latency; whole-batch atomicity for Pass 1 (any failure → full rollback, locks released); rapidfuzz pre-filter keeps LLM payloads small; bank + M-Pesa share the matcher; maker-checker on both bank lines (`review_status='approved'`, upstream of matching) *and* Pass 2 matches (`ProposalService`, downstream of matching) — the only agent with a maker-checker gate on both sides of its LLM step.
+- **Cons:** O(txn × invoice) nested loops could scale poorly at high volume (mitigated by amount-bucketing, not eliminated); LLM candidate list capped at 50 (residuals silently unscored); thresholds (65/0.60/0.90) are hand-tuned magic numbers; a Pass 2 match now takes an extra review round-trip before settling (an intentional latency-for-safety tradeoff, not a bug).
 
 ### Agent D — Cash-Flow Forecaster
-**How:** Hybrid. (1) **Holt-Winters** exponential smoothing on ≤12 months of daily net flow, adaptive by data volume (flat < 3 pts, trend 3–13, +weekly seasonal ≥14); invoice due-dates overlaid as known outflows. (2) **LLM regime detector** classifies into Boom/Normal/Stress/Crunch/Recovery. (3) Optional **Chain-of-Verification Text-to-SQL** (Drafter → Explainer → Auditor) gated at confidence ≥ 0.70, executed via the read-only SQL guard. Emits a `CashFlowChart` GenUI payload.
+**How:** Hybrid. (1) **Holt-Winters** exponential smoothing on ≤12 months of daily net flow, adaptive by data volume (flat < 3 pts, trend 3–13, +weekly seasonal ≥14); invoice due-dates overlaid as known outflows. (2) **LLM regime detector** classifies into Boom/Normal/Stress/Crunch/Recovery. (3) Optional **Chain-of-Verification Text-to-SQL** (Drafter → Explainer → Auditor) gated at confidence ≥ 0.70, executed via the read-only SQL guard. Emits a `CashFlowChart` GenUI payload. Since Sprint 9, the pipeline lives in `services/forecast_service.py` (last of the four agents split this way — C/E/G in Sprint 8); `agents/d_forecaster.py` is a thin adapter over it.
 
 - **Pros:** Numbers are statistical, not hallucinated; graceful model downgrade chain (seasonal → trend → linear → flat); CoVe adds a verification layer before any SQL runs; runway estimate + composite widget for the UI.
 - **Cons:** Two LLM calls when CoVe is active (Sprint 3 folded drafter+explainer into one; auditor is the second) → cost & latency; HW assumes some regularity SME data may lack; CoVe auditor is itself an LLM (self-grading, not a formal proof — the same pattern Agent K's stock-adjustment audit now uses, see below); statsmodels import deferred but still heavy.
 
 ### Agent E — Budget Watchdog
-**How:** The most algorithm-dense agent. Fits a 3-state **HMM** (HEALTHY/STABLE/CRITICAL) over spending ratios — log-space **Forward** algorithm for the state distribution + **Viterbi** for the sequence — plus **IsolationForest** anomaly scoring and **rapidfuzz** duplicate detection. Loads a per-customer weekly-retrained IsolationForest from `finguard.agent_e_models`; a brand-new customer degrades to an on-the-fly fit and enqueues a background fit. In `actions` mode: issues a Verifiable Credential to `trust_log` (SOC-2), publishes a RabbitMQ anomaly event, and exports Prometheus gauges. Emits a `BudgetWatchdogMeter` widget.
+**How:** The most algorithm-dense agent. Fits a 3-state **HMM** (HEALTHY/STABLE/CRITICAL) over spending ratios — log-space **Forward** algorithm for the state distribution + **Viterbi** for the sequence — plus **IsolationForest** anomaly scoring and **rapidfuzz** duplicate detection. Loads a per-customer weekly-retrained IsolationForest from `finguard.agent_e_models`; a brand-new customer degrades to an on-the-fly fit and enqueues a background fit. In `actions` mode: issues a Verifiable Credential to `trust_log` (SOC-2), publishes a RabbitMQ anomaly event, and exports Prometheus gauges. Emits a `BudgetWatchdogMeter` widget. Since Sprint 8, the pipeline lives in `services/anomaly_service.py`; `agents/e_watchdog.py` is a thin adapter that fetches DB inputs, then runs the (session-free) analysis — deliberately two functions, so the Postgres session still closes before the slower VC/LLM/event work, exactly as before the split.
 
 - **Pros:** Rich, explainable statistical signal (state probabilities, not a black box); persisted per-customer model + async retrain; VC audit trail on every processed event; anomaly events wired to alerting; every side effect (VC, event, fit) is best-effort and isolated.
-- **Cons:** HMM emission/transition params are hard-coded priors (not learned per business) — a strong modelling assumption; heavy dependency surface (numpy, sklearn, rapidfuzz, statsmodels-adjacent); highest complexity → hardest to reason about; on-the-fly fit path is a silent accuracy degradation for new customers.
+- **Cons:** HMM emission/transition params are hard-coded priors (not learned per business) — a strong modelling assumption; heavy dependency surface (numpy, sklearn, rapidfuzz, statsmodels-adjacent); highest *algorithmic* complexity of any agent (the services/agents split separates that from LangGraph plumbing, it doesn't reduce the maths itself); on-the-fly fit path is a silent accuracy degradation for new customers.
 
 ### Agent F — Tax Auditor
 **How:** Deterministic Kenya tax engine (VAT 16% above KES 5M annual threshold, CIT 30% on net profit, ETR) → **RAG** over the KRA knowledge base (top-3 sections) → LLM produces `compliance_flags` + `kra_references` grounded in the retrieved excerpts. An AML flag (single tx ≥ KES 1M) is **injected deterministically** regardless of what LLM says.
@@ -83,7 +83,7 @@ Two smaller standalone graphs exist alongside the main loop:
 - **Cons:** Tax constants (rates/thresholds) are hard-coded and will drift as Kenyan law changes; RAG quality bounded by KB coverage/freshness; LLM can still miss or over-flag non-AML compliance issues; single-jurisdiction (Kenya only).
 
 ### Agent G — Credit Strategist / Report Generator
-**How:** Holt-Winters forecast of revenue & opex (4 quarters) → **deterministic bankability score** (0–100, four weighted sub-components: trend/expense-ratio/consistency/solvency) → LLM writes only the `strategic_narrative` (numbers passed as read-only context) → generates a **reportlab PDF** and **openpyxl Excel**, base64-encoded for hub_writer to persist. Emits a `BankabilityScoreRadar` widget.
+**How:** Holt-Winters forecast of revenue & opex (4 quarters) → **deterministic bankability score** (0–100, four weighted sub-components: trend/expense-ratio/consistency/solvency) → LLM writes only the `strategic_narrative` (numbers passed as read-only context) → generates a **reportlab PDF** and **openpyxl Excel**, base64-encoded for hub_writer to persist. Emits a `BankabilityScoreRadar` widget. Since Sprint 8, the pipeline lives in `services/bankability_service.py`; `agents/g_reporter.py` is a thin adapter over it.
 
 - **Pros:** Score is fully deterministic and explainable (sub-scores exposed); LLM can't fabricate financial figures; real downloadable PDF/Excel artifacts; graceful export + narrative fallbacks.
 - **Cons:** Scoring weights/tiers are heuristic and unvalidated against real default data; PDF/Excel generation adds heavy deps (reportlab/pandas/openpyxl) inline; base64 blobs in Mongo/context are bulky; forecast reliability depends on ≥4 months of data.
@@ -134,12 +134,14 @@ Two smaller standalone graphs exist alongside the main loop:
 | **Graceful degradation** everywhere — no LLM outage crashes the graph | all |
 | **Structured output** via LLM `response_schema`, not JSON-in-prompt | all LLM agents |
 | **Security boundaries** — read-only SQL role, SSRF-guarded HTTP, RBAC clipping, VC audit trail | B, D, E, F, H, I |
-| **Per-agent tool-capability grants** — SQL tables / HTTP hosts / event exchanges scoped per caller, not a global ceiling (`agent_registry.TOOL_GRANTS`) | D, E, I, K |
-| **Signed audit trail on human decisions, not just agent actions** — proposal approve/reject now issues an Ed25519 VC to `trust_log`, alongside the existing plain `audit_logs` row | K (proposals) |
+| **Per-agent tool-capability grants** — SQL tables / HTTP hosts / event exchanges / Mongo collections scoped per caller, not a global ceiling (`agent_registry.TOOL_GRANTS`) | D, E, I, K |
+| **Signed audit trail on human decisions, not just agent actions** — proposal approve/reject issues an Ed25519 VC to `trust_log`, alongside the plain `audit_logs` row, **plus a payload-integrity check** (`payload_hash`, re-verified at approval) so a proposal can sit pending for days without a short-TTL credential going stale | C, K (proposals) |
+| **Action-type-bound approval** — a reviewer's endpoint pins the `action_type` it's authorized to decide, so holding one domain permission can't approve a different action class by guessing a proposal id | `ProposalService.approve`/`reject` |
+| **Declarative, enforced mutation-capability matrix** — which agents may create a proposal / publish an event / write directly is registry data, checked at the call site, not just a `mode == "actions"` convention (`agent_registry.AgentDescriptor.mutations`) | B, C, E, K |
 | **Provider-agnostic LLM layer** — swap providers in one place (`get_llm_client()`) | `llm/` |
-| **Per-agent observability** — contextvar-attributed latency/token/cost metrics | `_tracked()` |
+| **Per-agent observability** — contextvar-attributed latency/token/cost metrics; the planner has its own stage-outcome/replan counters once `A2A_PLANNER_ENABLED` | `_tracked()`, `agents/planner.py` |
 | **Honest provenance** — external data never faked in prod | I |
-| **Reusable cores** — `run_reconciliation`, `fit_agent_e_model` shared with Celery | C, E |
+| **Reusable, framework-agnostic cores** — `services/reconciliation_service.py`, `services/anomaly_service.py`, `services/bankability_service.py`, `services/forecast_service.py` hold each agent's real logic; the LangGraph node is a thin adapter and Celery calls the same core | C, D, E, G |
 
 ## 4. Cross-cutting weaknesses / risks
 
@@ -169,5 +171,11 @@ Two smaller standalone graphs exist alongside the main loop:
 "new since this report" were added later, tracking `AGENTS_REMEDIATION_SPRINTS.md`
 Sprints 1–6 plus a DeepSeek-harness-inspired hardening pass (fast-path routing,
 hub_writer step registry, Agent K CoVe audit, tool-capability registry, VC-signed
-proposal decisions) — the per-agent tables above are otherwise the original
-point-in-time assessment.*
+proposal decisions), Sprint 8 (payload-integrity + action-type-bound
+proposal approval, Agent C's Pass 2 HITL gate, the `mongo_reader` grant, planner
+adoption + telemetry, the `services/*.py` decomposition of C/E/G, the
+`use_cases.py` application layer, and the cost-telemetry startup guard), and
+Sprint 9 (trust-protocol doc alignment, the declarative mutation-capability
+matrix, Agent D's `services/forecast_service.py` split, and a planner
+integration test against the real `orchestrator.build_graph()`) — the
+per-agent tables above are otherwise the original point-in-time assessment.*

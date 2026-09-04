@@ -22,13 +22,13 @@ import pytest
 from pydantic import ValidationError
 
 from src.domains.intelligence.agents.f_auditor import _ComplianceAnalysis
-from src.domains.intelligence.services.anomaly_service import _WatchdogLLMOutput
 from src.domains.intelligence.schemas import (
     CompositeGenUIPayload,
     GenUIPayload,
     KeyFinding,
     RegimeAnalysis,
 )
+from src.domains.intelligence.services.anomaly_service import _WatchdogLLMOutput
 
 # ── Shared test helpers ────────────────────────────────────────────────────────
 
@@ -186,10 +186,10 @@ class TestAgentDForecaster:
 
         with (
             patch("src.domains.intelligence.agents.d_forecaster.AsyncSessionLocal", _noop_session),
-            patch("src.domains.intelligence.agents.d_forecaster._fetch_daily_cashflow", new_callable=AsyncMock, return_value=daily),
-            patch("src.domains.intelligence.agents.d_forecaster._fetch_current_balance", new_callable=AsyncMock, return_value=75_000.0),
-            patch("src.domains.intelligence.agents.d_forecaster._fetch_upcoming_invoices", new_callable=AsyncMock, return_value=[]),
-            patch("src.domains.intelligence.agents.d_forecaster._detect_regime", new_callable=AsyncMock, return_value=self._mock_regime),
+            patch("src.domains.intelligence.services.forecast_service._fetch_daily_cashflow", new_callable=AsyncMock, return_value=daily),
+            patch("src.domains.intelligence.services.forecast_service._fetch_current_balance", new_callable=AsyncMock, return_value=75_000.0),
+            patch("src.domains.intelligence.services.forecast_service._fetch_upcoming_invoices", new_callable=AsyncMock, return_value=[]),
+            patch("src.domains.intelligence.services.forecast_service._detect_regime", new_callable=AsyncMock, return_value=self._mock_regime),
         ):
             result = await make_d_forecaster_node()(_make_state())
 
@@ -209,10 +209,10 @@ class TestAgentDForecaster:
 
         with (
             patch("src.domains.intelligence.agents.d_forecaster.AsyncSessionLocal", _noop_session),
-            patch("src.domains.intelligence.agents.d_forecaster._fetch_daily_cashflow", new_callable=AsyncMock, return_value=[(date(2024, 1, i), -100.0) for i in range(1, 12)]),
-            patch("src.domains.intelligence.agents.d_forecaster._fetch_current_balance", new_callable=AsyncMock, return_value=10_000.0),
-            patch("src.domains.intelligence.agents.d_forecaster._fetch_upcoming_invoices", new_callable=AsyncMock, return_value=[]),
-            patch("src.domains.intelligence.agents.d_forecaster._detect_regime", new_callable=AsyncMock, return_value=self._mock_regime),
+            patch("src.domains.intelligence.services.forecast_service._fetch_daily_cashflow", new_callable=AsyncMock, return_value=[(date(2024, 1, i), -100.0) for i in range(1, 12)]),
+            patch("src.domains.intelligence.services.forecast_service._fetch_current_balance", new_callable=AsyncMock, return_value=10_000.0),
+            patch("src.domains.intelligence.services.forecast_service._fetch_upcoming_invoices", new_callable=AsyncMock, return_value=[]),
+            patch("src.domains.intelligence.services.forecast_service._detect_regime", new_callable=AsyncMock, return_value=self._mock_regime),
         ):
             result = await make_d_forecaster_node()(_make_state())
 

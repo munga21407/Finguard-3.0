@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from src.domains.intelligence.agents import d_forecaster as d
-from src.domains.intelligence.agents.d_forecaster import _CoVeAudit, _CoVeDraftExplain
+from src.domains.intelligence.services import forecast_service as d
+from src.domains.intelligence.services.forecast_service import _CoVeAudit, _CoVeDraftExplain
 
 
 def _install_mocks(monkeypatch: pytest.MonkeyPatch, calls: list[object], audit_ok: bool = True):

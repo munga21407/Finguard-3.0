@@ -367,9 +367,11 @@ to all 7 tables across D's and K's grants — it just happened to only ever quer
 `get_masked_schema`, `make_http_caller`, and `make_event_publisher` all now take
 the calling `agent_id` and scope to exactly its own grant. Zero behavior change
 for any agent's *actual* queries/calls — every change is a tightening of a
-previously-accidental over-grant. `inventory_tools`/`mongo_reader`/`vision_ocr`
-were deliberately left ungranted (mandatory HITL already covers the one write
-path; zero callers; no SQL/HTTP/events surface, respectively).
+previously-accidental over-grant. `inventory_tools`/`vision_ocr` were
+deliberately left ungranted (mandatory HITL already covers the one write path;
+no SQL/HTTP/events surface, respectively). `mongo_reader` was also left
+ungranted at the time — that gap (zero callers *and* zero enforcement) was
+closed in Sprint 8 below, before any agent adopted it.
 Tests: `test_agent_registry_tool_grants.py` (7), `test_sql_executor_agent_scoping.py`
 (6), 2 new cases in `test_http_caller_ssrf.py`, `test_event_publisher_scoping.py`
 (4) — 19 new tests, full intelligence suite 362 passed (1 pre-existing Redis fail).
@@ -388,6 +390,204 @@ success, never raises on `issue_vc` failure).
 `d_forecaster.py`, `e_watchdog.py`, `i_integrator.py`. See `docs/A2A_PROTOCOL.md`
 §4.6 for the design and `docs/AGENTS_REPORT.md` §3 for the cross-cutting strength
 this adds.
+
+---
+
+## Sprint 8 — Write-policy hardening, planner adoption, agent decomposition
+
+> **Status: DONE.** Like Sprint 7, these don't trace back to a con in
+> `AGENTS_REPORT.md` — they came from an architectural review of the
+> intelligence domain that surfaced seven gaps: an unenforced trust protocol,
+> an inconsistent write policy (Agent C bypassed the HITL gate every other
+> value-changing agent goes through), the A2A planner sitting unused, an
+> ungranted `mongo_reader`, three ~600-line agent files mixing LangGraph
+> plumbing with real business logic, no shared call path for Celery workers,
+> and cost telemetry that silently reads zero. All eight are now closed or
+> explicitly deferred with a stated reason.
+
+| Ticket | Detail | Status |
+|---|---|---|
+| S8-1 | Bind `ProposalService.approve()`/`reject()` to an `expected_action_type`, closing a real cross-action-type authorization gap. | DONE |
+| S8-2 | Payload-integrity check (`payload_hash`) at approval time, in place of task-scoped VC. | DONE |
+| S8-3 | Migrate Agent C's Pass 2 (LLM-judged) reconciliation matches to `ProposalService`; Pass 1 (deterministic) unchanged. | DONE |
+| S8-4 | Close the `mongo_reader` tool-grant gap (§4.6 of `A2A_PROTOCOL.md`). | DONE |
+| S8-5 | Add planner `consumes` edges for Agent H; add the planner's first Prometheus metrics + two Grafana panels. | DONE |
+| S8-6 | Split `c_reconciler.py` / `e_watchdog.py` / `g_reporter.py` into `services/*.py` (framework-agnostic) + thin LangGraph nodes. | DONE |
+| S8-7 | `use_cases.py` — one implementation of the node+hub_writer call sequence, shared by the two Celery call sites that previously hand-assembled it. | DONE |
+| S8-8 | Startup warning when the active LLM model has no cost-telemetry entry. | DONE |
+
+**S8-1/S8-2 detail — the trust-protocol decision.** `security/vc_issuer.py`'s
+task-scoped VC (`issue_task_scoped_vc`/`validate_task_vc`) has a hard 5-minute
+TTL by design — issue-then-immediately-validate, right before a write. But
+`ProposalService` exists precisely so a *human* can take minutes-to-days
+between `create_proposal` and `approve`. Wiring the task-scoped VC into that
+flow as originally scoped would have meant every proposal failed validation
+the moment a reviewer took longer than 5 minutes — caught before writing any
+code, not after. Also: since issuance and validation would both happen inside
+the same trusted process either way, a self-issued-and-self-validated token
+adds no protection against an external attacker today — it only proves the
+same process can sign and check its own tokens. What the flow actually needs
+is a *long-window integrity* guarantee, not a *short-window freshness* one, so
+`AgentActionProposal` gained a `payload_hash` column (SHA-256,
+`vc_issuer.payload_hash` — made public, was `_payload_hash`) set at
+`create_proposal` and re-checked at `approve()` before the write replays.
+`validate_task_vc`/
+`issue_task_scoped_vc` remain test-only after this — that's the correct
+outcome of using the right tool for the actual invariant, not a leftover gap;
+they'd get a real caller if agent execution and write execution ever become
+separate trust domains (they aren't today — one process, one trust boundary).
+Migration `0026_agent_proposal_payload_hash.py`.
+
+Separately, `approve()`/`reject()` now take a required `expected_action_type`
+kwarg and reject a mismatch — found while wiring S8-3's second action type:
+the original single-endpoint design had no structural check that a proposal's
+`action_type` matched the endpoint that decided it, so a reviewer holding only
+`finance:reconcile` could have approved a `stock.adjustment` proposal by
+guessing its id. Each router endpoint now pins its own action type
+(`routers/proposals.py`'s existing split-endpoint comment called this out in
+advance of the second action type arriving).
+
+**S8-3 detail — closing Agent C's HITL gap.** `run_reconciliation`/
+`run_bank_reconciliation` applied every confirmed match — Pass 1 exact AND
+Pass 2 LLM-judged (rapidfuzz + model-scored) — inline, with no human review,
+unlike every other value-changing agent (K's stock adjustments already went
+through `ProposalService`). Only Pass 2 is the actual risk (an LLM judgment
+call moving real ledger state); Pass 1 still settles immediately — Agent C's
+own docstring already established that `apply_reconciled_payment`'s
+`FOR UPDATE` + balance-clamp is the real safety gate, so an unreviewed
+*deterministic* match was never the concern. Pass 2 matches now land as
+`AgentActionProposal(action_type="reconciliation.match")`, created **after**
+Pass 1's `session.begin()` block commits (`ProposalService.create_proposal`
+owns its own transaction and can't nest inside another), with an idempotency
+guard so the same unresolved match isn't re-proposed every batch. New
+`/proposals/reconciliation/{id}/approve|reject` endpoints, gated by
+`finance:reconcile` (the same permission that already gates importing bank
+statements). `ReconciliationReport` gained a `proposed_for_review` field so a
+consumer doesn't have to infer from `matched_fuzzy` that "matched" no longer
+means "settled."
+
+**S8-6/S8-7 detail — decomposition, not a rewrite.**
+`services/reconciliation_service.py`, `services/anomaly_service.py`,
+`services/bankability_service.py` hold everything each agent computes;
+`agents/c_reconciler.py`, `agents/e_watchdog.py`, `agents/g_reporter.py`
+shrank to 53–117 lines each (from 669/608/579) and now only read
+`OrchestratorState`,
+call the service, and shape a GenUI payload. `e_watchdog`'s split preserves an
+easy-to-miss original property: the Postgres session closes *before* the
+slower DB-free work (HMM math, VC issuance, the LLM call, event publish) —
+`fetch_watchdog_inputs` (session-scoped) and `run_watchdog_analysis`
+(session-free) are two functions, not one, specifically to keep that
+lifecycle intact. `use_cases.py` gives `watchdog_consumer.py` and
+`reporting_tasks.py` one shared `run_watchdog_for_expense`/`run_monthly_report`
+instead of each hand-building the node→merge→hub_writer sequence — `batch.py`'s
+reconciliation tasks already delegated cleanly (nothing to consolidate there),
+and its classification path deliberately keeps a separate implementation from
+`agents.b_classifier` to avoid a circular import, so it's untouched.
+
+Tests: 803 passed, 5 skipped, full backend suite (up from 794 at Sprint 7),
+`ruff check` clean on every touched file. Verified against a throwaway
+Postgres + Redis (not the project's shared dev stack) rather than assumed.
+
+**Files:** `proposal_service.py`, `models.py` + migration `0026`,
+`routers/proposals.py`, `agents/c_reconciler.py`, `agents/e_watchdog.py`,
+`agents/g_reporter.py`, `services/reconciliation_service.py`,
+`services/anomaly_service.py`, `services/bankability_service.py`,
+`use_cases.py`, `workers/consumers/watchdog_consumer.py`,
+`workers/tasks/reporting_tasks.py`, `agent_registry.py`,
+`tools/mongo_reader.py`, `agents/planner.py`, `core/metrics.py`,
+`llm/pricing.py`, `main.py`. See `docs/A2A_PROTOCOL.md` §4.6 for the
+`mongo_reader` grant design.
+
+---
+
+## Sprint 9 — Round-2: closing the gaps a follow-up audit found in Sprint 8
+
+> **Status: DONE.** A follow-up audit reviewed the Sprint 8 tree and found it
+> solid but incomplete: `vc_issuer.py` still said agents "MUST" call
+> `validate_task_vc()` (Sprint 8 replaced that flow with `payload_hash` but
+> never updated the docstring saying so); there was no declarative record of
+> *which* agents may mutate state *how* (B/E/K's ad hoc `mode == "actions"`
+> checks had no registry-level backing, unlike the tool grants); and Agent D
+> was the one fat node (~447 lines) the Sprint 8 decomposition pass hadn't
+> reached. Every claim was independently re-verified against the code before
+> planning the fix — one claim (doc staleness on the `consumes` surface) had
+> already been fixed in the intervening "update the docs" pass and was
+> confirmed stale-on-the-audit's-side, not stale-in-the-repo.
+
+| Ticket | Detail | Status |
+|---|---|---|
+| S9-1 | Align `vc_issuer.py` / `agent_cards.py` docstrings with the `payload_hash` reality — no functional change. | DONE |
+| S9-2 | Declarative, *enforced* mutation-capability matrix (`AgentDescriptor.mutations` / `mutation_kinds`) — same posture as `TOOL_GRANTS`. | DONE |
+| S9-3 | Split `d_forecaster.py` into `services/forecast_service.py` + a thin node — last of the four fat agents. | DONE |
+| S9-4 | Integration test exercising the planner through the *real* `orchestrator.build_graph()` (not a stub graph) with `A2A_PLANNER_ENABLED` flipped on. | DONE |
+
+**S9-1 detail.** No code behavior changed — `issue_task_scoped_vc`/
+`validate_task_vc`/`exchange_cards` were already unused (Sprint 8 confirmed
+this), only their docstrings still described them as mandatory. Rewrote both
+modules' docstrings to state plainly: not wired into any live path today;
+`ProposalService`'s `payload_hash` check is what actually gates a write, and
+why (5-minute TTL vs. a review queue spanning hours to days); these functions
+remain the right primitive for a genuine agent-execution/write-execution
+trust-domain split, which doesn't exist yet.
+
+**S9-2 detail — a real enforcement layer, not just documentation.** Added
+`AgentDescriptor.mutations: frozenset[MutationKind]`
+(`MutationKind = Literal["proposal", "event", "direct_write"]`) and
+`agent_registry.mutation_kinds(agent_id)`, mirroring
+`TOOL_GRANTS`'s fail-closed posture. Declares the verified status quo (no
+behavior change): B `{"direct_write"}` (Celery-dispatched category persist,
+no proposal — low blast-radius, metadata not money), C
+`{"direct_write", "proposal"}` (Pass 1 / Pass 2), E `{"event", "direct_write"}`
+(anomaly publish / background ML fit — never "proposal", E has no
+financial/inventory write path), K `{"proposal"}`. Enforced at every actual
+mutation call site: `event_publisher.make_event_publisher` (covers E's
+RabbitMQ publish transitively, and any future agent that reuses it),
+`b_classifier`'s Celery dispatch, `reconciliation_service`'s Pass 1 apply loop
+(a `RuntimeError` guard, not a tool-string return — a background batch job
+should fail loudly on a registry/code drift, not silently under-reconcile),
+`anomaly_service`'s background-fit trigger, and `ProposalService.create_proposal`
+(resolves `agent_label` → registry `agent_id` via the existing
+`_ACTION_AGENT_ID` map before checking — proposals are keyed by a display
+label, not the registry id, a distinction Sprint 8 already had to get right
+for VC issuance). All additive; zero behavior change confirmed by the full
+suite passing unchanged plus new grant tests.
+
+**S9-3 detail.** Same pattern as C/E/G: `services/forecast_service.py` now
+holds Holt-Winters fitting, the regime detector, runway estimation, and the
+CoVe Text-to-SQL workflow, plus two orchestrating entry points —
+`fetch_forecast_inputs` (session-scoped) and `compute_forecast` (session-free)
+— so `agents/d_forecaster.py` (447 → 105 lines) only reads state, calls those
+two functions, and shapes the GenUI payload. Caught and fixed a design bug
+before it shipped: an early draft had the node call the low-level service
+helpers (`_fetch_daily_cashflow`, `_fit_holtwinters`, etc.) directly, which
+technically worked but silently broke test-mock patching (Python resolves a
+bare name via the *importing* module's namespace, not the *defining*
+module's) and would have made D the only one of the four splits with a
+different, more fragile shape. The two-entrypoint design fixes both problems
+at once.
+
+**S9-4 detail.** `test_planner.py` already proves the planner's staging/
+criticality/replan logic and its Send/join/loop wiring against a hand-built
+stub graph; no test exercised `orchestrator.build_graph()` itself — the
+actual function that decides whether `A2A_PLANNER_ENABLED` produces a
+correctly-wired graph. New `test_planner_end_to_end.py` flips the flag,
+stubs D/F/G/J's node factories and hub_writer at the `orchestrator` module
+level (mirroring `test_orchestrator_fast_path.py`'s existing pattern), and
+drives a multi-target board-pack intent through the real compiled graph,
+asserting stage order, one hub_writer call per stage, and that the DAG
+actually drains (`_planner_done`) rather than hitting the recursion ceiling.
+Doesn't flip the flag anywhere real — that decision still needs staging
+traffic data no one has generated yet — but means that decision, whenever
+someone makes it, isn't the first time the real graph wiring gets exercised.
+
+Tests: 811 passed, 5 skipped, full backend suite (up from 803 at the end of
+Sprint 8), `ruff check` clean on every touched file.
+
+**Files:** `security/vc_issuer.py`, `security/agent_cards.py`,
+`agent_registry.py`, `tools/event_publisher.py`, `agents/b_classifier.py`,
+`services/reconciliation_service.py`, `services/anomaly_service.py`,
+`proposal_service.py`, `agents/d_forecaster.py`,
+`services/forecast_service.py` (new).
 
 ---
 
@@ -410,6 +610,13 @@ S4 ──▶ S5 (feedback loop builds on B evals)
 S6 last — vendor-gated + depends on guardrails maturing
 S7 — independent of S1-S6; ran opportunistically alongside an external
      harness-design comparison, addenda folded back into S2/S3/S4 above
+S8 — independent of S1-S7; ran from an architectural review of the
+     intelligence domain, not a con in AGENTS_REPORT.md; extends S7's
+     tool-grant pattern (mongo) and VC/trust-log work (payload integrity)
+S9 — closes the gaps a follow-up audit found in S8 (doc drift, no mutation
+     matrix, D unsplit, planner never exercised end-to-end); extends S8's
+     TOOL_GRANTS pattern to a new axis (mutation kind, not resource) and
+     finishes S8's agent-decomposition pass
 ```
 
 **If you can only do two sprints:** run **S1** then **S2** — together they remove the

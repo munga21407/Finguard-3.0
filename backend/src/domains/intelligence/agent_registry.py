@@ -33,6 +33,10 @@ from urllib.parse import urlparse
 
 from src.core.config import settings
 
+# Capability classes an agent may exercise in "actions" mode — see
+# AgentDescriptor.mutations.
+MutationKind = Literal["proposal", "event", "direct_write"]
+
 
 @dataclass(frozen=True)
 class Dependency:
@@ -84,6 +88,19 @@ class AgentDescriptor:
     # the supervisor graph entirely via orchestrator.try_fast_path. Opt-in and
     # False by default; do not set on any agent capable of proposing a write.
     read_only: bool = False
+    # Declarative capability classes this agent may exercise in "actions" mode
+    # — a different axis from TOOL_GRANTS (which scopes *what resource* within
+    # a tool; this scopes *what kind of side effect* at all), checked at each
+    # mutation call site (create_proposal, make_event_publisher, the direct-
+    # write decision points in b_classifier / reconciliation_service /
+    # anomaly_service). Empty (the default) means no mutation capability —
+    # fail-closed, matching TOOL_GRANTS' posture. "proposal": creates an
+    # AgentActionProposal (human-gated). "event": publishes to RabbitMQ.
+    # "direct_write": persists without human review (inline, or by causing a
+    # write via a dispatched Celery task) — reserved for paths that are
+    # either deterministic (no LLM judgment) or non-financial (e.g. an ML
+    # background fit), never for an LLM-judged financial/inventory mutation.
+    mutations: frozenset[MutationKind] = frozenset()
 
     def build_payload(self, context: dict[str, Any]) -> dict[str, Any]:
         if self.payload_builder is not None:
@@ -197,12 +214,21 @@ AGENT_REGISTRY: tuple[AgentDescriptor, ...] = (
         node_name="e_watchdog", description="Detect budget anomalies via HMM; trigger VC hook",
         ttl=timedelta(minutes=30), priority=5, summary_order=3,
         aux_context_keys=("budget_watchdog_result",),
+        # "event": the RabbitMQ anomaly publish. "direct_write": the background
+        # IsolationForest fit it enqueues for a new customer — an ML retrain,
+        # not a financial mutation, so it's fine unreviewed. Never "proposal":
+        # E has no financial/inventory write path at all.
+        mutations=frozenset({"event", "direct_write"}),
     ),
     AgentDescriptor(
         agent_id="C", context_key="reconciliation_report", intent="RECONCILIATION",
         node_name="c_reconciler", description="Match ledger entries against bank statements",
         ttl=timedelta(minutes=10), priority=4, summary_order=5,
         payload_builder=_reconciliation_payload,
+        # "direct_write": Pass 1 (deterministic exact match) settles inline.
+        # "proposal": Pass 2 (LLM-judged fuzzy/semantic match) — see
+        # services/reconciliation_service.py + ACTION_RECONCILIATION_MATCH.
+        mutations=frozenset({"direct_write", "proposal"}),
     ),
     AgentDescriptor(
         agent_id="I", context_key="external_data", intent="EXTERNAL_SYNC",
@@ -219,11 +245,20 @@ AGENT_REGISTRY: tuple[AgentDescriptor, ...] = (
         node_name="b_classifier", description="Categorise transactions by type/department",
         ttl=timedelta(hours=1), priority=1, summary_order=6,
         payload_builder=_list_payload_classified,
+        # The node itself stays read-safe; in "actions" mode it dispatches a
+        # Celery task that persists categories directly (no proposal) — a
+        # descriptive label, not a review gate. Low blast-radius (a wrong
+        # category is metadata, not a financial/inventory movement), unlike
+        # C/K's mutations.
+        mutations=frozenset({"direct_write"}),
     ),
     AgentDescriptor(
         agent_id="K", context_key="inventory_analysis", intent="INVENTORY",
         node_name="k_stockkeeper",
         description="Analyse stock levels, reorder/stockout risk, valuation; propose corrections",
+        # All stock adjustments go through ProposalService — see
+        # ACTION_STOCK_ADJUSTMENT / _queue_adjustment_proposal.
+        mutations=frozenset({"proposal"}),
         ttl=timedelta(minutes=30), priority=0, summary_order=9,
         # A2A: the Stock Steward *optionally* folds Agent D's cash-flow regime into
         # reorder urgency (a restock is a cash outflow). Soft dependency — single-
@@ -245,6 +280,19 @@ _DEFAULT_TTL = timedelta(hours=1)
 def descriptor_for_agent(agent_id: str) -> AgentDescriptor | None:
     """The registry entry for ``agent_id`` ("A".."K"), or None if unknown."""
     return _BY_AGENT.get(agent_id)
+
+
+def mutation_kinds(agent_id: str) -> frozenset[MutationKind]:
+    """Capability classes ``agent_id`` may exercise (empty if unknown or none).
+
+    Checked at each mutation call site (``ProposalService.create_proposal``,
+    ``event_publisher.make_event_publisher``, and the direct-write decision
+    points in ``b_classifier`` / ``reconciliation_service`` /
+    ``anomaly_service``) — fail-closed, same posture as the tool grants below.
+    See ``AgentDescriptor.mutations``.
+    """
+    desc = _BY_AGENT.get(agent_id)
+    return desc.mutations if desc is not None else frozenset()
 
 
 # ── Tool capability grants ─────────────────────────────────────────────────
