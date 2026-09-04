@@ -38,6 +38,16 @@ from src.domains.notifications.reviewers import notify_reviewers
 # Action types whose approval replays a stock movement through the guarded tool.
 ACTION_STOCK_ADJUSTMENT = "stock.adjustment"
 
+# `agent_label` on the proposal is a human-readable node name for the
+# notification/UI copy (e.g. "k_stockkeeper"), NOT the registry `agent_id`
+# ("K") that `agent_cards`/`vc_issuer` key off of — those two must not be
+# conflated, or `get_card()` raises KeyError (silently swallowed below) and
+# the decision never gets a signed VC. Map action_type -> the canonical
+# registry id here instead of reusing the display label.
+_ACTION_AGENT_ID: dict[str, str] = {
+    ACTION_STOCK_ADJUSTMENT: "K",
+}
+
 
 async def _issue_decision_vc(
     proposal: AgentActionProposal, operation: str, reviewer_id: uuid.UUID
@@ -51,7 +61,7 @@ async def _issue_decision_vc(
     """
     try:
         await issue_vc(
-            agent_id=proposal.agent_label,
+            agent_id=_ACTION_AGENT_ID.get(proposal.action_type, proposal.agent_label),
             operation=operation,
             operation_summary=(
                 f"proposal {proposal.id} ({proposal.action_type}) "

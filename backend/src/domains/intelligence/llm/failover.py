@@ -9,8 +9,11 @@ serves the same Gemma 4 model family serverlessly and is always warm.
 
 Only when *both* providers fail does the neutral :class:`LLMUnavailableError`
 propagate (so LangGraph nodes still degrade gracefully). Embeddings do **not**
-fail over: nomic runs serverless on the primary (always warm, no cold start) and
-the backup may not offer embeddings.
+fail over and do **not** necessarily go to ``primary`` — nomic only runs on
+Fireworks (serverless, always warm, no cold start), so callers pass an explicit
+``embedding_client`` when the generative primary is a provider that doesn't
+serve embeddings (e.g. Gemini). ``embedding_client`` defaults to ``primary`` so
+the common Fireworks-primary case needs nothing extra.
 """
 from __future__ import annotations
 
@@ -39,9 +42,19 @@ class FailoverLLMClient(BaseLLMClient):
     With ``backup=None`` this is a transparent pass-through to the primary.
     """
 
-    def __init__(self, primary: BaseLLMClient, backup: BaseLLMClient | None) -> None:
+    def __init__(
+        self,
+        primary: BaseLLMClient,
+        backup: BaseLLMClient | None,
+        *,
+        embedding_client: BaseLLMClient | None = None,
+    ) -> None:
         self._primary = primary
         self._backup = backup
+        # Defaults to `primary` — correct whenever the generative primary also
+        # serves embeddings (the Fireworks case). Callers whose primary doesn't
+        # (Gemini) must pass a dedicated embeddings-capable client explicitly.
+        self._embedding_client = embedding_client or primary
 
     async def _with_failover(
         self,
@@ -141,8 +154,8 @@ class FailoverLLMClient(BaseLLMClient):
         task_type: str | None = None,
         output_dimensionality: int | None = None,
     ) -> list[float]:
-        # Embeddings do not fail over — nomic is serverless/always-warm on the
-        # primary and the backup may not offer an embeddings endpoint.
-        return await self._primary.embed(
+        # Embeddings do not fail over, and do not necessarily go to `primary` —
+        # see `_embedding_client` in __init__.
+        return await self._embedding_client.embed(
             text, task_type=task_type, output_dimensionality=output_dimensionality
         )

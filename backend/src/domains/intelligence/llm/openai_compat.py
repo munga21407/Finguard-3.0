@@ -9,8 +9,9 @@ the exact shape the policy layer (:mod:`llm.provider`) and
 type. It owns no cross-cutting concern: no retries, timeouts, telemetry, or error
 translation — those are *policy*, one layer up.
 
-Provider-specific quirks handled here (all verified live — see the
-``fireworks-migration`` memory):
+Provider-specific quirks handled here (all verified live — Fireworks/Featherless
+per the ``fireworks-migration`` memory, Gemini per
+``tests/evals/test_gemini_provider_smoke.py``):
 
 * **Thinking mode off.** Gemma's reasoning mode is on by default and consumes the
   token budget, so free-form calls can return empty content. Every request sends
@@ -43,8 +44,9 @@ _DEFAULT_MAX_TOKENS = 8192
 
 # Disable Gemma's thinking mode on every call (see module docstring). This is
 # ProviderSpec.extra_body's default, so Fireworks/Featherless keep sending it
-# unchanged; a provider whose thinking-disable shape differs (or has none
-# verified — e.g. Gemini) overrides ``extra_body`` explicitly in its own spec.
+# unchanged. Gemini has no equivalent verified flag and doesn't need one —
+# empty replies from swallowed reasoning were never observed against it live
+# (test_gemini_provider_smoke.py) — so its spec overrides extra_body to {}.
 _GEMMA_EXTRA_BODY: dict[str, Any] = {"chat_template_kwargs": {"enable_thinking": False}}
 
 # nomic-embed-text-v1.5 requires a task-instruction prefix; without it retrieval

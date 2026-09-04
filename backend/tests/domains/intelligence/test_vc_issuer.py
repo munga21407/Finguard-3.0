@@ -17,6 +17,7 @@ from src.core.config import settings
 from src.domains.intelligence.security import vc_issuer
 from src.domains.intelligence.security.vc_issuer import (
     VCError,
+    _build_audit_vc_claims,
     _encode_vc,
     validate_task_vc,
     verify_vc,
@@ -59,6 +60,21 @@ def test_malformed_and_unknown_alg_rejected() -> None:
     )
     with pytest.raises(VCError, match="Unsupported VC algorithm"):
         verify_vc(bad_alg)
+
+
+@pytest.mark.parametrize("agent_id", ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"])
+def test_build_audit_vc_claims_resolves_every_registered_agent(agent_id: str) -> None:
+    """Every agent_id in agent_registry must have a signable card.
+
+    `_build_audit_vc_claims` calls `get_card(agent_id)`, which raises `KeyError`
+    for an unregistered id — Agent K was missing this entry, which meant
+    `proposal_service._issue_decision_vc` silently failed (best-effort try/except
+    swallowed it) for every K stock-adjustment decision. See
+    `test_proposal_vc_audit.py` for the caller-side regression.
+    """
+    claims = _build_audit_vc_claims(agent_id, "test.op", "summary", {"k": "v"})
+    assert claims["agent_id"] == agent_id
+    assert claims["sub"] == agent_id
 
 
 def test_legacy_hs256_hard_rejected_even_with_correct_secret() -> None:

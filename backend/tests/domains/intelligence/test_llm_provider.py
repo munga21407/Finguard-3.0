@@ -161,10 +161,12 @@ async def test_timeout_maps_to_llm_unavailable() -> None:
 class _StubClient(BaseLLMClient):
     """Minimal BaseLLMClient that returns a fixed answer or raises."""
 
-    def __init__(self, answer: str | None, *, fail: bool = False) -> None:
+    def __init__(self, answer: str | None, *, fail: bool = False, name: str = "stub") -> None:
         self._answer = answer
         self._fail = fail
+        self.name = name
         self.text_calls = 0
+        self.embed_calls = 0
 
     async def generate_text(self, prompt: str, *, temperature: float | None = None) -> str:
         self.text_calls += 1
@@ -186,7 +188,10 @@ class _StubClient(BaseLLMClient):
         raise NotImplementedError
 
     async def embed(self, text, *, task_type=None, output_dimensionality=None):  # type: ignore[no-untyped-def]
-        raise NotImplementedError
+        self.embed_calls += 1
+        if self._fail:
+            raise LLMUnavailableError("stub down")
+        return [1.0, 0.0, 0.0]
 
 
 @pytest.mark.asyncio
@@ -217,3 +222,44 @@ async def test_failover_without_backup_propagates() -> None:
     fo = FailoverLLMClient(_StubClient(None, fail=True), None)
     with pytest.raises(LLMUnavailableError):
         await fo.generate_text("p")
+
+
+# ---------------------------------------------------------------------------
+# Embedding routing — regression coverage for the bug where FailoverLLMClient
+# always called `primary.embed()`, which crashed whenever primary was a
+# provider with no embedding support (e.g. Gemini). See
+# llm_client._build_client's `embedding_client` wiring.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_embed_defaults_to_primary_when_no_embedding_client_given() -> None:
+    """Fireworks-primary case: no separate embedding_client needed."""
+    primary = _StubClient("primary", name="primary")
+    fo = FailoverLLMClient(primary, None)
+    vec = await fo.embed("hello")
+    assert vec == [1.0, 0.0, 0.0]
+    assert primary.embed_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_embed_routes_to_explicit_embedding_client_not_primary() -> None:
+    """Gemini-primary case: embeddings must bypass primary entirely."""
+    primary = _StubClient("primary", name="gemini")
+    embeddings_only = _StubClient("embed", name="fireworks-embeddings")
+    fo = FailoverLLMClient(primary, None, embedding_client=embeddings_only)
+    await fo.embed("hello")
+    assert embeddings_only.embed_calls == 1
+    assert primary.embed_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_embed_does_not_fail_over_even_with_explicit_embedding_client() -> None:
+    """Embeddings never fail over — a failing embedding_client still raises."""
+    primary = _StubClient("primary", name="gemini")
+    backup = _StubClient("backup", name="featherless")
+    failing_embeddings = _StubClient(None, fail=True, name="fireworks-embeddings")
+    fo = FailoverLLMClient(primary, backup, embedding_client=failing_embeddings)
+    with pytest.raises(LLMUnavailableError):
+        await fo.embed("hello")
+    assert backup.embed_calls == 0

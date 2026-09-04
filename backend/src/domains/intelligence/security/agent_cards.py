@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.core.logging import logger
+from src.domains.intelligence.llm_client import active_model_id
 from src.domains.intelligence.security.key_manager import sign_data, verify_signature
 
 
@@ -31,7 +32,12 @@ class AgentCard:
     version: str
     capabilities: tuple[str, ...]
     did: str                                   # W3C DID (did:web:…)
-    model: str = "gemma-4-31b-it"
+    # Resolved from live config at construction time (mirrors
+    # llm_client._build_client's own primary-selection condition) so a signed
+    # card can never claim a model other than the one actually configured —
+    # not a hardcoded literal, which would silently go stale the moment
+    # LLM_MODEL or GEMINI_API_KEY changes.
+    model: str = field(default_factory=active_model_id)
     issuer: str = "finguard-system"
     card_signature: bytes = field(           # Ed25519 sig over canonical JSON
         default=b"",
@@ -196,6 +202,13 @@ _UNSIGNED_CARDS: dict[str, AgentCard] = {
         version="v1.0",
         capabilities=("executive_summary", "locale_translation"),
         did="did:web:finguard.internal:agent:j_summarizer",
+    ),
+    "K": AgentCard(
+        agent_id="K",
+        name="Stock Steward",
+        version="v1.0",
+        capabilities=("inventory_analysis", "stock_adjustment_proposal", "vc_issuance"),
+        did="did:web:finguard.internal:agent:k_stockkeeper",
     ),
 }
 

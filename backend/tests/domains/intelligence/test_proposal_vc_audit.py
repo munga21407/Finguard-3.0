@@ -51,7 +51,11 @@ async def test_issue_decision_vc_signs_approval(monkeypatch: pytest.MonkeyPatch)
 
     assert len(calls) == 1
     call = calls[0]
-    assert call["agent_id"] == "k_stockkeeper"
+    # `agent_id` must be the registry id ("K"), not the display label
+    # ("k_stockkeeper") — `agent_cards`/`vc_issuer` key off the registry id,
+    # so passing the label here used to raise a (silently swallowed) KeyError
+    # out of `get_card()` and no VC was ever actually issued for Agent K.
+    assert call["agent_id"] == "K"
     assert call["operation"] == "proposal.approved"
     payload = call["payload"]
     assert isinstance(payload, dict)

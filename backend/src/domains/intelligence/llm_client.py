@@ -9,9 +9,10 @@ The provider logic lives in :mod:`src.domains.intelligence.llm`: ``base``
 ``agent_context``, ``LLMUnavailableError``, the re-exported metric collectors —
 so agents/workers/services import from here and never touch a vendor SDK.
 
-``get_llm_client`` assembles a Fireworks (Gemma 4) primary with an always-warm
-Featherless backup; the agent call sites that use the ``generate_*`` helpers need
-no edits when the provider set changes.
+``get_llm_client`` assembles a Fireworks (Gemma 4) or Gemini primary — see
+``_build_client`` — with an always-warm Featherless backup; the agent call
+sites that use the ``generate_*`` helpers need no edits when the provider set
+changes.
 """
 from __future__ import annotations
 
@@ -80,6 +81,31 @@ from src.domains.intelligence.llm.telemetry import (
 _provider: BaseLLMClient | None = None
 
 
+def _fireworks_spec() -> ProviderSpec:
+    """The Fireworks provider spec — reused as the primary and, when Gemini is
+    primary instead, as the dedicated embeddings client (see ``_build_client``)."""
+    return ProviderSpec(
+        name="fireworks",
+        api_key=settings.FIREWORKS_API_KEY,
+        base_url=settings.LLM_API_BASE,
+        model=settings.LLM_MODEL,
+        structured_mode="json_schema",
+        embedding_model=settings.EMBEDDING_MODEL,
+        embedding_dimensions=settings.EMBEDDING_DIMENSIONS,
+    )
+
+
+def active_model_id() -> str:
+    """The model id actually serving generative calls right now.
+
+    Mirrors ``_build_client``'s own primary-selection condition exactly (same
+    ``if settings.GEMINI_API_KEY`` check) so the two can never drift apart —
+    used by ``security.agent_cards`` so a signed AgentCard never claims a model
+    other than the one that's actually configured.
+    """
+    return settings.GEMINI_MODEL if settings.GEMINI_API_KEY else settings.LLM_MODEL
+
+
 def _build_client() -> BaseLLMClient:
     """Assemble the failover client: primary + optional Featherless backup.
 
@@ -93,12 +119,17 @@ def _build_client() -> BaseLLMClient:
     blank and nothing will answer; leave FEATHERLESS_API_KEY blank for a
     primary-only (no-failover) setup.
 
-    Gemini's thinking-mode-off request shape isn't verified, so its spec leaves
-    ``extra_body`` empty (Gemini's default thinking behavior applies) rather
-    than guessing at an unconfirmed field. Embeddings are NOT wired for Gemini —
-    ``EMBEDDING_MODEL``/``EMBEDDING_DIMENSIONS`` stay Fireworks-only regardless
-    of which provider is primary, so ``embed()`` still requires FIREWORKS_API_KEY.
+    Gemini has no verified thinking-mode-off flag (and doesn't appear to need
+    one — see ``tests/evals/test_gemini_provider_smoke.py``), so its spec
+    leaves ``extra_body`` empty (Gemini's default thinking behavior applies).
+    Embeddings are NOT wired for Gemini:
+    a Gemini primary's ``ProviderSpec.embedding_model`` is ``None``, so
+    ``FailoverLLMClient`` is given an explicit, always-Fireworks
+    ``embedding_client`` — ``embed()`` never routes to Gemini regardless of
+    which provider is primary, and still requires ``FIREWORKS_API_KEY``.
     """
+    fireworks_spec = _fireworks_spec()
+    embedding_client: BaseLLMClient | None = None
     if settings.GEMINI_API_KEY:
         primary = OpenAICompatLLMClient(
             ProviderSpec(
@@ -111,18 +142,13 @@ def _build_client() -> BaseLLMClient:
                 extra_body={},
             )
         )
+        # Gemini's spec carries no embedding_model — route embed() to a
+        # dedicated Fireworks client instead of the (non-embedding) primary.
+        embedding_client = OpenAICompatLLMClient(fireworks_spec)
     else:
-        primary = OpenAICompatLLMClient(
-            ProviderSpec(
-                name="fireworks",
-                api_key=settings.FIREWORKS_API_KEY,
-                base_url=settings.LLM_API_BASE,
-                model=settings.LLM_MODEL,
-                structured_mode="json_schema",
-                embedding_model=settings.EMBEDDING_MODEL,
-                embedding_dimensions=settings.EMBEDDING_DIMENSIONS,
-            )
-        )
+        primary = OpenAICompatLLMClient(fireworks_spec)
+        # Fireworks-primary already serves embeddings — no separate client
+        # needed; FailoverLLMClient defaults embedding_client to primary.
     backup: BaseLLMClient | None = None
     if settings.FEATHERLESS_API_KEY:
         backup = OpenAICompatLLMClient(
@@ -135,7 +161,7 @@ def _build_client() -> BaseLLMClient:
                 embedding_model=None,
             )
         )
-    return FailoverLLMClient(primary, backup)
+    return FailoverLLMClient(primary, backup, embedding_client=embedding_client)
 
 
 def get_llm_client() -> BaseLLMClient:

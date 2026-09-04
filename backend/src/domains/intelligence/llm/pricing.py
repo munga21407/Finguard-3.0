@@ -34,6 +34,13 @@ class ModelPrice:
 # defaults to zero. Set an effective per-token rate via LLM_PRICING_JSON keyed by
 # the exact model id (the Fireworks deployment path or the Featherless model id)
 # if you want the /metrics cost counter populated.
+#
+# Gemini has no built-in entry here (deliberately — Google's published rates
+# change independently of this codebase and a stale hardcoded number would be
+# worse than an honest zero). If GEMINI_API_KEY is the primary, the cost
+# counter reads 0 for every call until you add a `GEMINI_MODEL`-keyed entry via
+# LLM_PRICING_JSON (see .env.example) — the dashboards won't warn you, so set
+# this before relying on the cost panel with Gemini as primary.
 _DEFAULTS: dict[str, ModelPrice] = {
     "google/gemma-4-31B-it": ModelPrice(0.0, 0.0),
 }

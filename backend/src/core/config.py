@@ -94,8 +94,12 @@ class Settings(BaseSettings):
     LLM_API_BASE: str = "https://api.fireworks.ai/inference/v1"
     # Full deployment path: accounts/<account>/deployments/<id>. This one
     # multimodal model serves BOTH the text/structured and the vision
-    # (receipt OCR) paths, so there is no separate vision model.
-    LLM_MODEL: str = "accounts/elmakobiero-6aueml6p/deployments/o8jewup6"
+    # (receipt OCR) paths, so there is no separate vision model. Defaults to
+    # the serverless model id (works out of the box on any Fireworks account
+    # that offers serverless Gemma 4) rather than a specific dedicated
+    # deployment path, which is account-scoped and wouldn't resolve for a
+    # different Fireworks account.
+    LLM_MODEL: str = "accounts/fireworks/models/gemma-4-31b-it"
     # nomic-embed-text-v1.5 returns unit-norm 768-d vectors natively, matching
     # the pgvector column dimension (no schema change on migration). Task-type is
     # translated to nomic's required "search_document:"/"search_query:" prefixes.
@@ -309,6 +313,16 @@ class Settings(BaseSettings):
             problems.append(
                 "SMTP_USERNAME and SMTP_APP_PASSWORD must be set when MAIL_ENABLED "
                 "(otherwise email silently dry-runs and nothing is delivered)"
+            )
+
+        # Embeddings (pgvector KB / Agent F tax RAG) always run on Fireworks,
+        # regardless of which provider is the generative primary — see
+        # llm_client._build_client. A Gemini primary with no Fireworks key would
+        # otherwise only fail lazily, deep inside the first RAG call.
+        if self.GEMINI_API_KEY and not self.FIREWORKS_API_KEY:
+            problems.append(
+                "FIREWORKS_API_KEY must be set even when GEMINI_API_KEY is used "
+                "(embeddings never route to Gemini — see llm_client._build_client)"
             )
 
         if problems:
