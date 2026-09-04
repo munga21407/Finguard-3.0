@@ -81,3 +81,27 @@ def cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
         prompt_tokens / 1_000_000 * price.input_usd_per_mtok
         + completion_tokens / 1_000_000 * price.output_usd_per_mtok
     )
+
+
+def warn_if_unpriced(model: str, *, environment: str) -> None:
+    """Log a startup warning if the active model's cost telemetry is a silent no-op.
+
+    ``price_for`` degrading an unknown/zero-rate model to ``_ZERO`` is the right
+    call at request time (never guess a wrong rate) — but nothing else ever
+    surfaces that the ``/metrics`` cost counter is quietly recording nothing for
+    every call, which is exactly the blind spot this module's own docstring
+    warns about for a Gemini-primary deployment. Call once at app startup;
+    intentionally a warning, not a startup failure — a missing cost rate isn't a
+    reason to refuse to serve traffic. Skipped in "development" (``settings.
+    ENVIRONMENT``'s default) where an unpriced model is the common case and not
+    worth the noise.
+    """
+    if environment == "development":
+        return
+    if price_for(model) == _ZERO:
+        logger.warning(
+            "LLM cost telemetry is a no-op for the active model %r — the "
+            "/metrics cost counter will read 0 for every call. Set an entry "
+            "for it in LLM_PRICING_JSON if you rely on the cost dashboard.",
+            model,
+        )

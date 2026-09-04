@@ -118,7 +118,9 @@ async def test_approve_applies_adjustment_once(db_session: AsyncSession) -> None
         payload=_adjustment_payload(product.id, "5"),
         triggered_by=requester,
     )
-    applied = await svc.approve(proposal.id, reviewer)
+    applied = await svc.approve(
+        proposal.id, reviewer, expected_action_type=ACTION_STOCK_ADJUSTMENT
+    )
 
     assert applied.status is ProposalStatus.APPLIED
     assert applied.reviewed_by == reviewer.id
@@ -128,7 +130,9 @@ async def test_approve_applies_adjustment_once(db_session: AsyncSession) -> None
 
     # Re-approving a settled proposal is refused by the state machine.
     with pytest.raises(UnprocessableError):
-        await svc.approve(proposal.id, _user())
+        await svc.approve(
+            proposal.id, _user(), expected_action_type=ACTION_STOCK_ADJUSTMENT
+        )
     level_again = await InventoryService(db_session).get_stock_level(product.id)
     assert level_again.quantity_on_hand == Decimal("15")
 
@@ -146,7 +150,9 @@ async def test_requester_cannot_approve_own_proposal(db_session: AsyncSession) -
         triggered_by=requester.id,
     )
     with pytest.raises(ForbiddenError):
-        await svc.approve(proposal.id, requester)
+        await svc.approve(
+            proposal.id, requester, expected_action_type=ACTION_STOCK_ADJUSTMENT
+        )
 
     # Still pending, no write.
     level = await InventoryService(db_session).get_stock_level(product.id)
@@ -164,7 +170,9 @@ async def test_reject_leaves_stock_untouched(db_session: AsyncSession) -> None:
         payload=_adjustment_payload(product.id, "-4"),
         triggered_by=uuid.uuid4(),
     )
-    rejected = await svc.reject(proposal.id, _user())
+    rejected = await svc.reject(
+        proposal.id, _user(), expected_action_type=ACTION_STOCK_ADJUSTMENT
+    )
 
     assert rejected.status is ProposalStatus.REJECTED
     level = await InventoryService(db_session).get_stock_level(product.id)
@@ -172,7 +180,9 @@ async def test_reject_leaves_stock_untouched(db_session: AsyncSession) -> None:
 
     # A rejected proposal cannot then be approved.
     with pytest.raises(UnprocessableError):
-        await svc.approve(proposal.id, _user())
+        await svc.approve(
+            proposal.id, _user(), expected_action_type=ACTION_STOCK_ADJUSTMENT
+        )
 
 
 @pytest.mark.asyncio
@@ -248,3 +258,58 @@ async def test_create_proposal_notifies_adjust_reviewers(db_session: AsyncSessio
     assert row is not None
     assert row.template == "approval_needed"
     assert row.to_email == reviewer.email
+
+
+# ── Trust protocol: payload integrity + action-type binding (remediation A1) ──
+
+@pytest.mark.asyncio
+async def test_approve_rejects_tampered_payload(db_session: AsyncSession) -> None:
+    """A proposal's payload_hash pins it at creation — an altered payload (e.g. a
+    manual DB edit) must be refused at approval, not silently replayed."""
+    product = await _product_with_stock(db_session, on_hand="10")
+    svc = ProposalService(db_session)
+    reviewer = await _persisted_user(db_session)
+
+    proposal = await svc.create_proposal(
+        agent_label="k_stockkeeper",
+        action_type=ACTION_STOCK_ADJUSTMENT,
+        payload=_adjustment_payload(product.id, "5"),
+        triggered_by=uuid.uuid4(),
+    )
+    assert proposal.payload_hash  # set at creation
+
+    # Simulate the payload being altered after the maker proposed it.
+    proposal.payload = {**proposal.payload, "quantity": 999.0}
+    await db_session.commit()
+
+    with pytest.raises(ForbiddenError, match="payload has changed"):
+        await svc.approve(
+            proposal.id, reviewer, expected_action_type=ACTION_STOCK_ADJUSTMENT
+        )
+    level = await InventoryService(db_session).get_stock_level(product.id)
+    assert level.quantity_on_hand == Decimal("10")  # untouched
+
+
+@pytest.mark.asyncio
+async def test_approve_rejects_mismatched_action_type(db_session: AsyncSession) -> None:
+    """A reviewer authorized for one action class cannot approve a proposal of a
+    different class through the wrong endpoint's service call."""
+    from src.domains.intelligence.proposal_service import ACTION_RECONCILIATION_MATCH
+
+    product = await _product_with_stock(db_session, on_hand="10")
+    svc = ProposalService(db_session)
+    reviewer = await _persisted_user(db_session)
+
+    proposal = await svc.create_proposal(
+        agent_label="k_stockkeeper",
+        action_type=ACTION_STOCK_ADJUSTMENT,
+        payload=_adjustment_payload(product.id, "5"),
+        triggered_by=uuid.uuid4(),
+    )
+
+    with pytest.raises(ForbiddenError, match="does not match"):
+        await svc.approve(
+            proposal.id, reviewer, expected_action_type=ACTION_RECONCILIATION_MATCH
+        )
+    level = await InventoryService(db_session).get_stock_level(product.id)
+    assert level.quantity_on_hand == Decimal("10")  # untouched

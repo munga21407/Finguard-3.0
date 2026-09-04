@@ -12,7 +12,7 @@ import math
 
 import pytest
 
-from src.domains.intelligence.agents.e_watchdog import (
+from src.domains.intelligence.services.anomaly_service import (
     STATE_CRITICAL,
     STATE_HEALTHY,
     _detect_duplicate,

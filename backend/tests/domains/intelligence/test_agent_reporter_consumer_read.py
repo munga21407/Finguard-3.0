@@ -53,13 +53,13 @@ async def _run(context: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         "src.domains.intelligence.agents.g_reporter.refresh_agent_tuning_from_db",
         new=AsyncMock(return_value=None),
     ), patch(
-        "src.domains.intelligence.agents.g_reporter.generate_text_content",
+        "src.domains.intelligence.services.bankability_service.generate_text_content",
         new=_fake_narrative,
     ), patch(
-        "src.domains.intelligence.agents.g_reporter._generate_pdf_report",
+        "src.domains.intelligence.services.bankability_service._generate_pdf_report",
         return_value=b"",
     ), patch(
-        "src.domains.intelligence.agents.g_reporter._generate_forecast_excel",
+        "src.domains.intelligence.services.bankability_service._generate_forecast_excel",
         return_value=b"",
     ):
         result = await node(_state(context))

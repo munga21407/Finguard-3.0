@@ -83,27 +83,27 @@ def test_agent_module_constants_bind_to_defaults() -> None:
     (Agent F no longer keeps module-level tax constants — it resolves period-
     correct rates at invocation via db_tuning.get_effective_auditor_tuning.)
     """
-    from src.domains.intelligence.agents import c_reconciler, e_watchdog
+    from src.domains.intelligence.services import anomaly_service, reconciliation_service
 
-    assert c_reconciler._FUZZY_THRESHOLD == 65.0
-    assert c_reconciler._SEMANTIC_THRESHOLD == 0.60
-    assert e_watchdog.DUPLICATE_THRESHOLD == 88.0
-    assert list(e_watchdog.INITIAL_PI) == [0.80, 0.15, 0.05]
+    assert reconciliation_service._FUZZY_THRESHOLD == 65.0
+    assert reconciliation_service._SEMANTIC_THRESHOLD == 0.60
+    assert anomaly_service.DUPLICATE_THRESHOLD == 88.0
+    assert list(anomaly_service.INITIAL_PI) == [0.80, 0.15, 0.05]
 
 
 def test_watchdog_apply_tuning_rebinds_from_overlay() -> None:
     """_apply_watchdog_tuning picks up a runtime overlay change (no restart)."""
-    from src.domains.intelligence.agents import e_watchdog
+    from src.domains.intelligence.services import anomaly_service
     from src.domains.intelligence.tuning import clear_db_overlay, set_db_overlay
 
     try:
         set_db_overlay({"watchdog": WatchdogTuning(duplicate_threshold=95.0)})
-        e_watchdog._apply_watchdog_tuning()
-        assert e_watchdog.DUPLICATE_THRESHOLD == 95.0
+        anomaly_service._apply_watchdog_tuning()
+        assert anomaly_service.DUPLICATE_THRESHOLD == 95.0
     finally:
         clear_db_overlay()
-        e_watchdog._apply_watchdog_tuning()  # restore module globals to defaults
-    assert e_watchdog.DUPLICATE_THRESHOLD == 88.0
+        anomaly_service._apply_watchdog_tuning()  # restore module globals to defaults
+    assert anomaly_service.DUPLICATE_THRESHOLD == 88.0
 
 
 # ---------------------------------------------------------------------------

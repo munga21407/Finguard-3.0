@@ -17,14 +17,12 @@ from typing import Any
 
 import aio_pika
 from aio_pika.abc import AbstractIncomingMessage
-from langchain_core.messages import HumanMessage
 
 from src.core.config import settings
 from src.core.logging import logger
 from src.core.metrics import AMQP_MESSAGES_CONSUMED
 from src.domains.alerts.service import AlertService, alert_from_watchdog
-from src.domains.intelligence.agents.e_watchdog import make_e_watchdog_node
-from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
+from src.domains.intelligence.use_cases import run_watchdog_for_expense
 from src.infrastructure.cache.redis import get_redis
 from src.infrastructure.database.postgres import AsyncSessionLocal
 
@@ -55,46 +53,16 @@ async def _mark_processed(expense_id: str) -> None:
 
 async def _handle_expense_created(body: dict[str, Any]) -> None:
     """
-    Unpack an `expenses.created` payload, build a minimal OrchestratorState,
-    and invoke Agent E's watchdog node.
+    Unpack an `expenses.created` payload and run Agent E's watchdog analysis.
     """
     payload = body.get("payload", {})
     expense_id = str(payload.get("expense_id", "unknown"))
     sme_id = str(payload.get("sme_id", ""))
     amount = float(payload.get("amount", 0.0))
 
-    # Build a minimal OrchestratorState for Agent E
-    state = {
-        "messages": [HumanMessage(content=f"Expense created: {expense_id}")],
-        "error_messages": [],
-        "next": "e_watchdog",
-        "context": {
-            "account_id": sme_id,
-            "watchdog_period_days": 30,
-            "candidate_invoice": {
-                "vendor": sme_id,
-                "amount": amount,
-                "invoice_number": expense_id,
-            },
-        },
-        "session_id": expense_id,
-        "user_id": None,
-        "mode": "actions",
-    }
-
-    node = make_e_watchdog_node()
-    result = await node(state)
-
-    # Merge the updated context back into state and persist to intelligence_hub
-    updated_state = {
-        **state,
-        "context": result.get("context", state["context"]),
-        "messages": state["messages"] + result.get("messages", []),
-    }
-    hub_node = make_hub_writer_node()
-    await hub_node(updated_state)
-
-    analysis = result.get("context", {}).get("budget_watchdog_result", {})
+    analysis = await run_watchdog_for_expense(
+        expense_id=expense_id, sme_id=sme_id, amount=amount
+    )
     logger.info(
         "Watchdog analysis complete",
         expense_id=expense_id,

@@ -586,11 +586,20 @@ class ReconciliationMatch(BaseModel):
 
 
 class ReconciliationReport(BaseModel):
-    """Written to context["reconciliation_report"] after Agent C completes."""
+    """Written to context["reconciliation_report"] after Agent C completes.
+
+    ``matched_exact`` (Pass 1) settle immediately. ``matched_fuzzy`` (Pass 2 —
+    rapidfuzz + LLM-confirmed) are an LLM judgment call and are queued for human
+    sign-off rather than applied inline; ``proposed_for_review`` is that same
+    count, named explicitly so a consumer of this report doesn't have to know
+    that "matched_fuzzy" no longer implies "settled" — see
+    ``services.reconciliation_service._propose_semantic_matches``.
+    """
 
     total_transactions: int
     matched_exact: int
     matched_fuzzy: int
+    proposed_for_review: int = 0
     unmatched: int
     matches: list[ReconciliationMatch]
     run_at: str              # ISO-8601 timestamp

@@ -203,6 +203,22 @@ SUPERVISOR_ROUTES = Counter(
     labelnames=["method"],
 )
 
+# ── A2A planner (multi-domain DAG) rollout ────────────────────────────────────
+# Gated behind A2A_PLANNER_ENABLED — no traffic until the flag is on for a given
+# environment. Tracks the staging bake's go/no-go criteria (docs/A2A_PROTOCOL.md
+# §5): dispatch volume/skip-reason mix, and how often a replan fires.
+
+PLANNER_STAGE_OUTCOME = Counter(
+    "agent_planner_stage_outcome_total",
+    "Planner per-agent stage resolution: dispatched vs skipped and why",
+    labelnames=["outcome"],  # "run" | "already_produced" | "missing_required"
+)
+
+PLANNER_REPLANS = Counter(
+    "agent_planner_replans_total",
+    "Planner replans triggered by a consumer's _replan_targets",
+)
+
 # ── Helper: LLM call timer ─────────────────────────────────────────────────────
 
 

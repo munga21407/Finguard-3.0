@@ -55,3 +55,31 @@ def test_malformed_override_falls_back_to_defaults(monkeypatch: pytest.MonkeyPat
     pricing._table.cache_clear()
     p = pricing.price_for(_BACKUP_MODEL)
     assert (p.input_usd_per_mtok, p.output_usd_per_mtok) == (0.0, 0.0)
+
+
+# ── warn_if_unpriced (remediation C3) ─────────────────────────────────────────
+
+def test_warn_if_unpriced_silent_in_development(caplog: pytest.LogCaptureFixture) -> None:
+    pricing.warn_if_unpriced(_BACKUP_MODEL, environment="development")
+    assert "cost telemetry is a no-op" not in caplog.text
+
+
+def test_warn_if_unpriced_warns_for_zero_rate_model_outside_dev(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("WARNING"):
+        pricing.warn_if_unpriced(_BACKUP_MODEL, environment="production")
+    assert "cost telemetry is a no-op" in caplog.text
+    assert _BACKUP_MODEL in caplog.text
+
+
+def test_warn_if_unpriced_silent_when_model_is_priced(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "LLM_PRICING_JSON", f'{{"{_DEPLOYMENT}": {{"input": 0.30, "output": 2.50}}}}'
+    )
+    pricing._table.cache_clear()
+    with caplog.at_level("WARNING"):
+        pricing.warn_if_unpriced(_DEPLOYMENT, environment="staging")
+    assert "cost telemetry is a no-op" not in caplog.text

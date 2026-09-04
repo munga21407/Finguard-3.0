@@ -158,8 +158,13 @@ def _decode_vc(token: str) -> dict[str, Any]:
 # Shared utilities
 # ---------------------------------------------------------------------------
 
-def _payload_hash(payload: dict[str, Any]) -> str:
-    """SHA-256 fingerprint of a JSON payload, key-sorted for determinism."""
+def payload_hash(payload: dict[str, Any]) -> str:
+    """SHA-256 fingerprint of a JSON payload, key-sorted for determinism.
+
+    Public (not ``_``-prefixed): also used by ``proposal_service`` to pin an
+    ``AgentActionProposal``'s payload at creation time and detect tampering
+    before it is replayed on approval — see ``ProposalService.approve``.
+    """
     canonical = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -191,7 +196,7 @@ def _build_audit_vc_claims(
         "operation": operation,
         "operation_summary": operation_summary,
         "timestamp": now.isoformat(),
-        "payload_hash": _payload_hash(payload),
+        "payload_hash": payload_hash(payload),
     }
 
 
@@ -288,7 +293,7 @@ async def issue_task_scoped_vc(
         "operation": operation,
         "transaction_id": transaction_id,
         "timestamp": now.isoformat(),
-        "payload_hash": _payload_hash(payload),
+        "payload_hash": payload_hash(payload),
     }
 
     token = _encode_vc(claims)

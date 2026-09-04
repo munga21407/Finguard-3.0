@@ -148,6 +148,14 @@ AGENT_REGISTRY: tuple[AgentDescriptor, ...] = (
         agent_id="H", context_key="advice", intent="ADVISORY_REQUEST",
         node_name="h_advisor", description="Give personalised financial advice",
         ttl=timedelta(hours=1), priority=9, summary_order=0,
+        # H already folds these in ad hoc when present (`ctx.get("forecast")` /
+        # `ctx.get("audit_result")`, both defaulting to `{}`) — both soft: a
+        # single-agent advice request runs unchanged with neither produced.
+        # Consumed by the planner (A2A P4); see docs/A2A_PROTOCOL.md §4.2/§5.
+        consumes=(
+            Dependency("forecast", required=False),
+            Dependency("audit_result", required=False),
+        ),
         aux_context_keys=("crm_profile",),
     ),
     AgentDescriptor(
@@ -243,12 +251,13 @@ def descriptor_for_agent(agent_id: str) -> AgentDescriptor | None:
 # Generalizes the pattern sql_executor.py's per-agent table allowlist already
 # proved out for one tool: a single declarative source recording which agent
 # may use which tool, and under what constraint (SQL tables / HTTP hosts /
-# RabbitMQ exchanges). An agent with no entry for a given tool is granted
-# nothing — fail-closed, matching sql_executor's existing posture.
+# RabbitMQ exchanges / MongoDB collections). An agent with no entry for a given
+# tool is granted nothing — fail-closed, matching sql_executor's existing
+# posture.
 
 @dataclass(frozen=True)
 class ToolGrant:
-    tool: Literal["sql", "http", "events"]
+    tool: Literal["sql", "http", "events", "mongo"]
     allowed: frozenset[str]
 
 
@@ -298,6 +307,14 @@ def allowed_http_hosts(agent_id: str) -> frozenset[str]:
 def allowed_event_exchanges(agent_id: str) -> frozenset[str]:
     """RabbitMQ exchanges ``agent_id`` may publish to (empty if ungranted)."""
     return _grant(agent_id, "events")
+
+
+def allowed_mongo_collections(agent_id: str) -> frozenset[str]:
+    """MongoDB collections ``agent_id`` may read via the mongo_reader tool
+    (empty if ungranted). No agent is wired to this tool yet — the grant table
+    is seeded ahead of any adopter so the door is closed before anyone walks
+    through it (mirrors the sql/http/events posture above)."""
+    return _grant(agent_id, "mongo")
 
 
 # ── Deterministic keyword router (Sprint 3 — cut per-hop LLM routing cost) ─────

@@ -6,7 +6,7 @@ non-negativity guarantee, the small-sample fallback, and the score/tier rubric.
 """
 from __future__ import annotations
 
-from src.domains.intelligence.agents.g_reporter import (
+from src.domains.intelligence.services.bankability_service import (
     _compute_bankability_score,
     _forecast_series,
 )

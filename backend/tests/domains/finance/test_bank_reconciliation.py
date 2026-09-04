@@ -39,7 +39,7 @@ from src.domains.finance.schemas import BankStatementLineImport, InvoiceCreate
 from src.domains.finance.service import FinanceService
 from src.domains.finance.types import VaultType
 from src.domains.identity.models import User, UserRole
-from src.domains.intelligence.agents.c_reconciler import (
+from src.domains.intelligence.services.reconciliation_service import (
     run_bank_reconciliation,
     run_reconciliation,
 )
@@ -243,12 +243,19 @@ async def test_bank_reconciliation_pass2_semantic_match(
     seed_customer: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Pass 2: a fuzzy bill-ref that fails the deterministic pass is confirmed by
-    the (mocked) Gemini scorer and applied as a semantic match."""
-    from src.domains.intelligence.agents import c_reconciler
+    the (mocked) Gemini scorer — but, being an LLM judgment call, it is queued
+    for human sign-off (an AgentActionProposal) rather than applied inline. The
+    invoice only settles once a reviewer approves it via ProposalService."""
+    from src.domains.intelligence.models import AgentActionProposal, ProposalStatus
+    from src.domains.intelligence.proposal_service import (
+        ACTION_RECONCILIATION_MATCH,
+        ProposalService,
+    )
     from src.domains.intelligence.schemas import (
         ReconciliationCandidate,
         ReconciliationScoringResult,
     )
+    from src.domains.intelligence.services import reconciliation_service
 
     invoice_id, invoice_number = await _make_sent_invoice(seed_customer, subtotal="1000")
 
@@ -284,12 +291,40 @@ async def test_bank_reconciliation_pass2_semantic_match(
             ]
         )
 
-    monkeypatch.setattr(c_reconciler, "_llm_score_candidates", _fake_score)
+    monkeypatch.setattr(reconciliation_service, "_llm_score_candidates", _fake_score)
 
     async with TestingSessionLocal() as session:
-        report = await c_reconciler.run_bank_reconciliation(session)
+        report = await reconciliation_service.run_bank_reconciliation(session)
     assert report.matched_exact == 0
     assert report.matched_fuzzy >= 1
+    assert report.proposed_for_review >= 1
+
+    async with TestingSessionLocal() as session:
+        # No Payment yet — Pass 2 never applies inline.
+        payments = (
+            await session.execute(select(Payment).where(Payment.invoice_id == invoice_id))
+        ).scalars().all()
+        assert payments == []
+
+        proposal = (
+            await session.execute(
+                select(AgentActionProposal).where(
+                    AgentActionProposal.action_type == ACTION_RECONCILIATION_MATCH,
+                    AgentActionProposal.status == ProposalStatus.PROPOSED,
+                )
+            )
+        ).scalar_one()
+        assert proposal.payload["invoice_id"] == str(invoice_id)
+        assert proposal.payload["source"] == "bank"
+
+        # A reviewer approves it — only now does the invoice settle.
+        reviewer = _fake_user()
+        session.add(reviewer)
+        await session.commit()
+        applied = await ProposalService(session).approve(
+            proposal.id, reviewer, expected_action_type=ACTION_RECONCILIATION_MATCH
+        )
+        assert applied.status == ProposalStatus.APPLIED
 
     async with TestingSessionLocal() as session:
         payment = (

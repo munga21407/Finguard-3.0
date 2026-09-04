@@ -336,7 +336,9 @@ async def _run_batch_reconciliation_async() -> dict[str, Any]:
     await init_mongo()
 
     # Lazy import avoids loading agent dependencies at module import time
-    from src.domains.intelligence.agents.c_reconciler import run_reconciliation  # noqa: PLC0415
+    from src.domains.intelligence.services.reconciliation_service import (  # noqa: PLC0415
+        run_reconciliation,
+    )
 
     async with AsyncSessionLocal() as session:
         report = await run_reconciliation(session)
@@ -387,7 +389,7 @@ async def _run_batch_bank_reconciliation_async() -> dict[str, Any]:
     """
     await init_mongo()
 
-    from src.domains.intelligence.agents.c_reconciler import (  # noqa: PLC0415
+    from src.domains.intelligence.services.reconciliation_service import (  # noqa: PLC0415
         run_bank_reconciliation,
     )
 

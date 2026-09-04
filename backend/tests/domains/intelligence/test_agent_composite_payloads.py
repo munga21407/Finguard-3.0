@@ -21,8 +21,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.domains.intelligence.agents.e_watchdog import _WatchdogLLMOutput
 from src.domains.intelligence.agents.f_auditor import _ComplianceAnalysis
+from src.domains.intelligence.services.anomaly_service import _WatchdogLLMOutput
 from src.domains.intelligence.schemas import (
     CompositeGenUIPayload,
     GenUIPayload,
@@ -240,15 +240,15 @@ class TestAgentEWatchdog:
         """Context manager applying the standard set of patches for Agent E."""
         with ExitStack() as stack:
             stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog.AsyncSessionLocal", _noop_session))
-            stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog._fetch_spending_ratios", new_callable=AsyncMock, return_value=ratios or [0.55, 0.60, 0.58, 0.62, 0.50]))
-            stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog._fetch_recent_amounts", new_callable=AsyncMock, return_value=amounts or [1000.0, 1200.0, 800.0, 1500.0, 900.0, 1100.0]))
-            stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog._fetch_recent_invoices", new_callable=AsyncMock, return_value=invoices or [{"invoice_number": "INV-001", "amount": 1000.0, "vendor": "Acme"}]))
+            stack.enter_context(patch("src.domains.intelligence.services.anomaly_service._fetch_spending_ratios", new_callable=AsyncMock, return_value=ratios or [0.55, 0.60, 0.58, 0.62, 0.50]))
+            stack.enter_context(patch("src.domains.intelligence.services.anomaly_service._fetch_recent_amounts", new_callable=AsyncMock, return_value=amounts or [1000.0, 1200.0, 800.0, 1500.0, 900.0, 1100.0]))
+            stack.enter_context(patch("src.domains.intelligence.services.anomaly_service._fetch_recent_invoices", new_callable=AsyncMock, return_value=invoices or [{"invoice_number": "INV-001", "amount": 1000.0, "vendor": "Acme"}]))
             stack.enter_context(_structured(
-                "src.domains.intelligence.agents.e_watchdog",
+                "src.domains.intelligence.services.anomaly_service",
                 _WatchdogLLMOutput.model_validate_json(self._llm_json),
             ))
-            stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog.AGENT_E_ANOMALY_SCORE"))
-            stack.enter_context(patch("src.domains.intelligence.agents.e_watchdog.AGENT_E_STATE_PROBABILITY"))
+            stack.enter_context(patch("src.domains.intelligence.services.anomaly_service.AGENT_E_ANOMALY_SCORE"))
+            stack.enter_context(patch("src.domains.intelligence.services.anomaly_service.AGENT_E_STATE_PROBABILITY"))
             yield
 
     @pytest.mark.asyncio
@@ -419,9 +419,9 @@ class TestAgentGReporter:
     @contextmanager
     def _patches(self):
         with ExitStack() as stack:
-            stack.enter_context(_text("src.domains.intelligence.agents.g_reporter", self._narrative))
-            stack.enter_context(patch("src.domains.intelligence.agents.g_reporter._generate_pdf_report", return_value=b""))
-            stack.enter_context(patch("src.domains.intelligence.agents.g_reporter._generate_forecast_excel", return_value=b""))
+            stack.enter_context(_text("src.domains.intelligence.services.bankability_service", self._narrative))
+            stack.enter_context(patch("src.domains.intelligence.services.bankability_service._generate_pdf_report", return_value=b""))
+            stack.enter_context(patch("src.domains.intelligence.services.bankability_service._generate_forecast_excel", return_value=b""))
             yield
 
     @pytest.mark.asyncio

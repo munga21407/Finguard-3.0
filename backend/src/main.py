@@ -25,6 +25,8 @@ from src.domains.crm.router import router as crm_router
 from src.domains.finance.router import router as finance_router
 from src.domains.identity.router import limiter
 from src.domains.identity.router import router as identity_router
+from src.domains.intelligence.llm.pricing import warn_if_unpriced
+from src.domains.intelligence.llm_client import active_model_id
 from src.domains.intelligence.router import router as intelligence_router
 from src.domains.intelligence.security.vc_issuer import ensure_trust_log_ttl_index
 from src.domains.inventory.router import router as inventory_router
@@ -64,6 +66,7 @@ async def verify_metrics_token(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
+    warn_if_unpriced(active_model_id(), environment=settings.ENVIRONMENT)
     await init_db()
     # Fail fast if the schema hasn't been migrated to head (prod) — never serve
     # traffic against a drifted/empty schema.

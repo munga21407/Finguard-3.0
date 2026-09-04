@@ -74,6 +74,11 @@ class AgentActionProposal(Base):
     action_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     # Exact tool arguments to replay the guarded write on approval.
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # SHA-256 of `payload` at creation time (vc_issuer.payload_hash). Re-checked at
+    # approval so a proposal whose payload was altered after the maker proposed it
+    # (a manual DB edit, a future bug) is refused rather than silently replayed —
+    # see ProposalService.approve.
+    payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[ProposalStatus] = mapped_column(
         Enum(ProposalStatus, native_enum=False, length=20),
         default=ProposalStatus.PROPOSED,

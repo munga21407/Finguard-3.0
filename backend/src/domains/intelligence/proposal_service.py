@@ -31,12 +31,13 @@ from src.core.logging import logger
 from src.domains.identity.models import User
 from src.domains.identity.permissions import Permission
 from src.domains.intelligence.models import AgentActionProposal, ProposalStatus
-from src.domains.intelligence.security.vc_issuer import issue_vc
+from src.domains.intelligence.security.vc_issuer import issue_vc, payload_hash
 from src.domains.intelligence.tools.inventory_tools import propose_stock_movement
 from src.domains.notifications.reviewers import notify_reviewers
 
-# Action types whose approval replays a stock movement through the guarded tool.
+# Action types whose approval replays a write through a guarded tool path.
 ACTION_STOCK_ADJUSTMENT = "stock.adjustment"
+ACTION_RECONCILIATION_MATCH = "reconciliation.match"
 
 # `agent_label` on the proposal is a human-readable node name for the
 # notification/UI copy (e.g. "k_stockkeeper"), NOT the registry `agent_id`
@@ -46,6 +47,16 @@ ACTION_STOCK_ADJUSTMENT = "stock.adjustment"
 # registry id here instead of reusing the display label.
 _ACTION_AGENT_ID: dict[str, str] = {
     ACTION_STOCK_ADJUSTMENT: "K",
+    ACTION_RECONCILIATION_MATCH: "C",
+}
+
+# Authority to *release* a proposal is per-action-type (see routers/proposals.py's
+# split-endpoint rationale) — this dict only drives who gets the "needs your
+# review" notification at creation; it never gates the approve/reject call
+# itself (that's the router's job, via a Require* dependency per action type).
+_ACTION_NOTIFY_PERMISSION: dict[str, Permission] = {
+    ACTION_STOCK_ADJUSTMENT: Permission.INVENTORY_ADJUST,
+    ACTION_RECONCILIATION_MATCH: Permission.FINANCE_RECONCILE,
 }
 
 
@@ -107,6 +118,7 @@ class ProposalService:
             agent_label=agent_label,
             action_type=action_type,
             payload=payload,
+            payload_hash=payload_hash(payload),
             triggered_by=triggered_by,
             rationale=rationale,
             status=ProposalStatus.PROPOSED,
@@ -114,10 +126,13 @@ class ProposalService:
         self._session.add(proposal)
         await self._session.flush()  # assign proposal.id before notifying
         # Notify reviewers who can release this action class (inventory:adjust for
-        # a stock adjustment), except whoever triggered the agent. Enqueue-only.
+        # a stock adjustment, finance:reconcile for a reconciliation match), except
+        # whoever triggered the agent. Enqueue-only.
         await notify_reviewers(
             self._session,
-            permission=Permission.INVENTORY_ADJUST,
+            permission=_ACTION_NOTIFY_PERMISSION.get(
+                action_type, Permission.INVENTORY_ADJUST
+            ),
             subject="An agent action needs your review",
             template="approval_needed",
             context={
@@ -143,9 +158,20 @@ class ProposalService:
         return list(result.scalars().all())
 
     async def approve(
-        self, proposal_id: uuid.UUID, current_user: User
+        self,
+        proposal_id: uuid.UUID,
+        current_user: User,
+        *,
+        expected_action_type: str,
     ) -> AgentActionProposal:
         """Release a pending proposal: apply its write, exactly once, mark APPLIED.
+
+        ``expected_action_type`` binds this call to one action class — the router
+        endpoint that gates authority (e.g. ``inventory:adjust`` vs.
+        ``finance:reconcile``) passes the action type *it* is authorized for, so a
+        reviewer holding only one domain permission can never approve a proposal
+        of a different, unrelated action type by guessing its id (see
+        ``routers/proposals.py``'s split-endpoint rationale).
 
         Enforces strict segregation of duties (reviewer ≠ the human who triggered
         the agent) and, critically, applies the write **exactly once** under
@@ -157,6 +183,11 @@ class ProposalService:
         rolled back to PROPOSED so it can be re-decided.
         """
         proposal = await self._get_for_update(proposal_id)
+        if proposal.action_type != expected_action_type:
+            raise ForbiddenError(
+                f"Proposal action_type {proposal.action_type!r} does not match "
+                f"this endpoint ({expected_action_type!r})"
+            )
         if proposal.status is not ProposalStatus.PROPOSED:
             raise UnprocessableError(f"Proposal is already {proposal.status}")
         if (
@@ -171,6 +202,17 @@ class ProposalService:
         # (async lazy-load of an expired attribute would raise).
         action_type = proposal.action_type
         payload = dict(proposal.payload)
+
+        # Integrity check: the payload must be byte-for-byte what the maker
+        # proposed. A proposal can sit PROPOSED for hours or days awaiting a
+        # human, so this — not a short-TTL task-scoped credential — is the right
+        # tamper check for this window; see docs on why validate_task_vc isn't
+        # used here (5-minute TTL, meant for an immediate issue-then-write, not a
+        # human-review queue).
+        if proposal.payload_hash is not None and payload_hash(payload) != proposal.payload_hash:
+            raise ForbiddenError(
+                "Proposal payload has changed since it was proposed — refusing to apply"
+            )
 
         # ── Claim (atomic under the row lock): flip PROPOSED → APPLIED, commit ──
         proposal.status = ProposalStatus.APPLIED
@@ -197,10 +239,23 @@ class ProposalService:
         return proposal
 
     async def reject(
-        self, proposal_id: uuid.UUID, current_user: User
+        self,
+        proposal_id: uuid.UUID,
+        current_user: User,
+        *,
+        expected_action_type: str,
     ) -> AgentActionProposal:
-        """Reject a pending proposal (no write). Reviewer must differ from requester."""
+        """Reject a pending proposal (no write). Reviewer must differ from requester.
+
+        ``expected_action_type`` — see :meth:`approve`'s docstring; prevents a
+        reviewer authorized for one action class from deciding a different one.
+        """
         proposal = await self._get_for_update(proposal_id)
+        if proposal.action_type != expected_action_type:
+            raise ForbiddenError(
+                f"Proposal action_type {proposal.action_type!r} does not match "
+                f"this endpoint ({expected_action_type!r})"
+            )
         if proposal.status is not ProposalStatus.PROPOSED:
             raise UnprocessableError(f"Proposal is already {proposal.status}")
         if (
@@ -256,5 +311,24 @@ class ProposalService:
                     f"Cannot apply proposal: {result.get('detail', 'rejected by service')}"
                 )
             return str(result.get("detail", ""))
+
+        if action_type == ACTION_RECONCILIATION_MATCH:
+            from src.domains.intelligence.schemas import (  # noqa: PLC0415
+                ReconciliationMatch,
+            )
+            from src.domains.intelligence.services.reconciliation_service import (  # noqa: PLC0415
+                apply_confirmed_match,
+            )
+
+            match = ReconciliationMatch.model_validate(payload)
+            occurred_at = datetime.fromisoformat(payload["occurred_at"])
+            payment = await apply_confirmed_match(self._session, match, occurred_at)
+            if payment is None:
+                # The invoice was already fully settled by the time this proposal
+                # was released (e.g. paid another way while it sat pending review).
+                raise UnprocessableError(
+                    "Cannot apply proposal: invoice already settled"
+                )
+            return str(payment.id)
 
         raise UnprocessableError(f"Unknown action_type {action_type!r}")

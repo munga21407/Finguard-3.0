@@ -27,16 +27,13 @@ Task return shape:
 from __future__ import annotations
 
 import asyncio
-import uuid
 from typing import Any
 
 import structlog
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.domains.intelligence.agents.f_auditor import make_f_auditor_node
-from src.domains.intelligence.agents.g_reporter import make_g_reporter_node
-from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
+from src.domains.intelligence.use_cases import run_monthly_report
 from src.infrastructure.database.mongodb import init_mongo
 from src.infrastructure.database.postgres import AsyncSessionLocal
 from src.workers.tasks.celery_app import celery_app
@@ -113,25 +110,12 @@ async def _fetch_monthly_cashflows(sme_id: str) -> dict[str, Any]:
     }
 
 
-# ── Minimal state builder ─────────────────────────────────────────────────────
-
-def _make_state(context: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "messages": [],
-        "next": "FINISH",
-        "context": context,
-        "session_id": str(uuid.uuid4()),
-        "user_id": None,
-        "mode": "actions",
-    }
-
-
 # ── Core async runner ─────────────────────────────────────────────────────────
 
 async def _run_intelligence_report(sme_id: str) -> dict[str, Any]:
     """
     Async coroutine that runs Agent F then Agent G and writes both artifacts
-    to MongoDB intelligence_hub via hub_writer_node.
+    to MongoDB intelligence_hub.
 
     Returns the two MongoDB _id values so the UI can poll for them.
     """
@@ -141,57 +125,11 @@ async def _run_intelligence_report(sme_id: str) -> dict[str, Any]:
     ledger_snapshot = await _fetch_ledger_snapshot(sme_id)
     raw_ledger_data = await _fetch_monthly_cashflows(sme_id)
 
-    f_node = make_f_auditor_node()
-    g_node = make_g_reporter_node()
-    hub_node = make_hub_writer_node()
-
-    artifact_f: str | None = None
-    artifact_g: str | None = None
-
-    # ── Agent F ────────────────────────────────────────────────────────────
-    ctx_f: dict[str, Any] = {
-        "sme_id": sme_id,
-        "ledger_snapshot": ledger_snapshot,
-        "raw_ledger_data": raw_ledger_data,
-        "tax_regime": "COMPREHENSIVE",
-        "audit_period_days": 365,
-    }
-    state = _make_state(ctx_f)
-
-    f_update = await f_node(state)
-    state["context"] = f_update.get("context", state["context"])
-    state["messages"] = state["messages"] + f_update.get("messages", [])
-
-    hub_f_update = await hub_node(state)
-    if hub_f_update:
-        state["context"] = hub_f_update.get("context", state["context"])
-    artifact_f = state["context"].get("hub_artifact_id")
-
-    # ── Agent G ────────────────────────────────────────────────────────────
-    # Clear F-specific keys so hub_writer writes G's slot on next call.
-    ctx_g: dict[str, Any] = {
-        k: v for k, v in state["context"].items()
-        if k not in ("audit_result", "hub_artifact_id")
-    }
-    ctx_g["sme_id"] = sme_id
-    ctx_g["raw_ledger_data"] = raw_ledger_data
-    state["context"] = ctx_g
-
-    g_update = await g_node(state)
-    state["context"] = g_update.get("context", state["context"])
-    state["messages"] = state["messages"] + g_update.get("messages", [])
-
-    hub_g_update = await hub_node(state)
-    if hub_g_update:
-        state["context"] = hub_g_update.get("context", state["context"])
-    artifact_g = state["context"].get("hub_artifact_id")
-
-    return {
-        "sme_id": sme_id,
-        "agent_f_artifact_id": artifact_f,
-        "agent_g_artifact_id": artifact_g,
-        "status": "ok" if (artifact_f and artifact_g) else "partial",
-    }
+    return await run_monthly_report(
+        sme_id=sme_id,
+        ledger_snapshot=ledger_snapshot,
+        raw_ledger_data=raw_ledger_data,
+    )
 
 
 # ── Celery task ───────────────────────────────────────────────────────────────

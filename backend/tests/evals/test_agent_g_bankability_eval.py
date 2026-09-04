@@ -8,7 +8,7 @@ tuning ``BankabilityTuning`` (weights / tier cutoffs) without silent drift.
 """
 from __future__ import annotations
 
-from src.domains.intelligence.agents.g_reporter import _compute_bankability_score
+from src.domains.intelligence.services.bankability_service import _compute_bankability_score
 
 # ── Immutable labeled profiles (monthly KES, oldest-first) ────────────────────
 # Healthy: strong revenue growth, opex ~40% of revenue, consistent, solvent.

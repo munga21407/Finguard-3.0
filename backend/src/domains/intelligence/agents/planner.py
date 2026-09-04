@@ -32,6 +32,7 @@ from langgraph.types import Send
 
 from src.core.config import settings
 from src.core.logging import logger
+from src.core.metrics import PLANNER_REPLANS, PLANNER_STAGE_OUTCOME
 from src.domains.intelligence.agent_registry import (
     agent_node_names,
     build_plan,
@@ -81,12 +82,15 @@ def resolve_stage(stage_agents: list[str], context: dict[str, Any]) -> StageReso
         own_key = context_key_for(agent_id)
         if own_key is not None and own_key in context:
             skipped.append((agent_id, "already_produced"))
+            PLANNER_STAGE_OUTCOME.labels(outcome="already_produced").inc()
             continue
         missing = [k for k in required_dependency_keys(agent_id) if k not in context]
         if missing:
             skipped.append((agent_id, f"missing_required:{','.join(missing)}"))
+            PLANNER_STAGE_OUTCOME.labels(outcome="missing_required").inc()
             continue
         run.append(agent_id)
+        PLANNER_STAGE_OUTCOME.labels(outcome="run").inc()
     return StageResolution(run=run, skipped=skipped)
 
 
@@ -133,6 +137,7 @@ def make_planner_node() -> Any:
                 updates["_replans_used"] = used + 1
                 updates["_replan_targets"] = []          # consumed
                 stage = 0
+                PLANNER_REPLANS.inc()
                 logger.info(
                     "planner: replanning", replan_targets=replan, replans_used=used + 1
                 )
