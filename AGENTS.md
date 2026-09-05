@@ -35,7 +35,7 @@ Prefer the `Makefile` (run from repo root) — it's the source of truth.
 | Task | Command |
 |---|---|
 | Install everything | `make install` (`uv sync --all-extras` + `npm ci`) |
-| Start local stack | `make up` / `make down` / `make logs` |
+| Start local stack | `make up` / `make down` / `make logs` (base compose file only — production-shaped, datastores not host-exposed; add `-f infrastructure/docker-compose.dev.yml` yourself for host-exposed ports + dev `ENVIRONMENT`) |
 | Backend tests | `make backend-test` (`cd backend && uv run pytest tests/ -q`) |
 | Backend lint | `make backend-lint` (`ruff check src tests`) |
 | Backend types | `make backend-typecheck` (`mypy --explicit-package-bases src`) |
@@ -120,9 +120,18 @@ Backend uses **`uv`**. To run a single test:
   refuses to boot with placeholder secrets, `DEBUG`, `*` CORS, or unset security
   boundaries. The read-only DB engine and schema-migration guards follow the same
   pattern. Keep new hard requirements inside that validator.
-- **Secrets are decoupled:** `JWT_SECRET_KEY` (auth tokens), `SECRET_KEY` (general +
-  legacy HS256 VC verify), `FINGUARD_CA_PRIVATE_KEY_HEX` (Ed25519 CA — required in
-  prod). Don't reuse one for another.
+- **Secrets are decoupled:** `JWT_SECRET_KEY` (auth tokens), `SECRET_KEY` (general —
+  no longer a VC trust root; the legacy HS256 fallback is gone, see gotcha #5),
+  `FINGUARD_CA_PRIVATE_KEY_HEX` (Ed25519 CA — required in prod). Don't reuse one
+  for another.
+- **Local feature-flag overrides for `infrastructure/` compose** — the shared
+  `x-backend-env` anchor in `docker-compose.yml` reads `A2A_PLANNER_ENABLED` /
+  `TASK_VC_ENFORCEMENT_ENABLED` / `LANGGRAPH_CHECKPOINTING_ENABLED` /
+  `CSRF_ENABLED` from a gitignored `.env` next to the compose files (see
+  `infrastructure/.env.example`) — every backend-family service picks up the
+  same value. Defaults match `config.py` (all off, CSRF on); this is the only
+  supported way to flip them for a local Docker run, staging/prod use their
+  own env vars instead.
 - **Commit messages** end with the `Co-Authored-By: Claude …` trailer. Branch
   before committing on `main` unless told otherwise.
 

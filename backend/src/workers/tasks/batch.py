@@ -33,6 +33,7 @@ from sqlalchemy import CursorResult, text
 
 from src.core.config import settings
 from src.core.logging import logger
+from src.core.metrics import CHECKPOINT_RETENTION_DELETED_THREADS
 from src.domains.intelligence.agents.hub_writer import make_hub_writer_node
 from src.domains.intelligence.llm_client import generate_structured_content
 from src.domains.intelligence.ml.model_store import save_model, train_isolation_forest
@@ -587,6 +588,7 @@ async def _run_checkpoint_retention_async() -> dict[str, Any]:
             )
         await session.commit()
 
+    CHECKPOINT_RETENTION_DELETED_THREADS.inc(len(thread_ids))
     logger.info(
         "Checkpoint retention: purge complete",
         deleted_threads=len(thread_ids),

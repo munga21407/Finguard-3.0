@@ -957,6 +957,93 @@ request regardless of the flag, so the bake's job is watching for a real
 running). No code changed; `TASK_VC_ENFORCEMENT_ENABLED` is still `False`
 everywhere.
 
+### Checkpointing observability (2026-09-05)
+
+> **Status: DONE.** Added the two Prometheus counters the new
+> [`CHECKPOINTING_STAGING_BAKE.md`](./CHECKPOINTING_STAGING_BAKE.md) runbook
+> needed but didn't have when first written (that runbook initially shipped
+> with a "no metrics exist" known gap for this feature — same pattern as the
+> planner and task-VC bakes getting their Grafana panels only after their
+> own runbooks existed).
+
+`agent_checkpoint_resume_total{outcome}` (`routers/conversations.py`'s
+`conversation_resume` — `dispatched`/`not_found`/`not_resumable`) and
+`agent_checkpoint_retention_deleted_threads_total`
+(`workers/tasks/batch.py::_run_checkpoint_retention_async`). Deliberately did
+**not** add a raw checkpoint-write counter — that would mean wrapping
+LangGraph's `AsyncPostgresSaver` itself, a bigger and riskier change than
+this bake needs; the runbook's existing direct-SQL row-count query already
+covers that observation. Two Grafana panels added alongside ("Checkpoint
+Resume Outcome (rate)", "Checkpoint Retention — Threads Deleted (7d)" —
+dashboard `version` 4→5, tag `d4`→`d5`, `uid` unchanged, same pattern as the
+task-VC panel addition above).
+
+Tests: 3 new (`test_conversation_resume_metrics.py` — one per resume
+outcome, via the real endpoint + test client, not a mocked router) + 1
+extended (`test_checkpoint_retention.py`'s existing purge test now also
+asserts the deleted-threads counter). Full suite: 836 passed, 5 skipped (up
+from 833), `ruff check` and `mypy --explicit-package-bases src` both clean.
+
+**Files:** `core/metrics.py`, `workers/tasks/batch.py`,
+`domains/intelligence/routers/conversations.py`,
+`monitoring/dashboards/finguard_ai_overview.json`,
+`docs/CHECKPOINTING_STAGING_BAKE.md` (updated — Known gap narrowed, new
+Observation queries section),
+`tests/domains/intelligence/test_conversation_resume_metrics.py` (new),
+`tests/domains/intelligence/test_checkpoint_retention.py`.
+
+### Local Docker bake — A2A planner + task VC (2026-09-05)
+
+> **Status: DONE.** `A2A_PLANNER_ENABLED` and `TASK_VC_ENFORCEMENT_ENABLED`
+> flipped and exercised for real against the local `infrastructure/`
+> docker-compose stack — not staging, but a genuine live run (real Postgres/
+> Mongo/Redis/RabbitMQ containers, real backend + celery-worker processes,
+> real Gemini calls), closing several audit residual items concretely rather
+> than just by code review. Both flags stay `False` everywhere else
+> (config.py default, staging, prod) — this was a local exercise only.
+
+**Docker files.** `docker-compose.yml`'s shared `x-backend-env` anchor
+gained `A2A_PLANNER_ENABLED`/`TASK_VC_ENFORCEMENT_ENABLED`/
+`LANGGRAPH_CHECKPOINTING_ENABLED`/`CSRF_ENABLED`, each `${VAR:-<config.py's
+default>}` — so every backend-family service (API, migrate, celery-worker,
+celery-beat, flower) picks up the same value, overridable via a gitignored
+`.env` next to the compose files (`infrastructure/.env.example` documents
+it). `docker-compose.dev.yml`'s previously-hardcoded host ports
+(mongodb/redis/backend/frontend — postgres already had this) became
+`${..._HOST_PORT:-<default>}` too, needed because this machine already runs
+unrelated containers on 5432/6379/8000/3000.
+
+**What was actually run, live:** `docker compose build` (the cached
+`dev`-target image predated `langgraph-checkpoint-postgres` being added to
+`pyproject.toml` — a real staleness bug this surfaced, fixed by rebuilding,
+not a code change), migrations `0025`→`0026` applied cleanly against a fresh
+Postgres, backend booted with both flags confirmed `True` via
+`settings.A2A_PLANNER_ENABLED`/`TASK_VC_ENFORCEMENT_ENABLED` read inside the
+running container.
+
+- **Planner:** a real "board pack" request (`intent` field — not `message`,
+  a request-schema mismatch worth noting since it silently fell back to the
+  single-agent default the first time) produced the full 3-stage DAG in
+  logs — `[planner] Stage 0: dispatching d_forecaster, f_auditor` →
+  `Stage 1: dispatching g_reporter` → `Stage 2: dispatching j_summarizer` →
+  `DAG complete` — with real GenUI payloads (CashFlowChart, TaxLiabilityDonut,
+  BankabilityScoreRadar) computed from real (empty-ledger) data. Metrics:
+  `agent_planner_stage_outcome_total{outcome="run"} 4`,
+  `agent_planner_replans_total 0`.
+- **Task VC:** `require_task_vc(agent_id="C", ...)` called directly inside
+  the live celery-worker container (`TASK_VC_ENFORCEMENT_ENABLED=true`
+  confirmed) — minted, self-validated, and wrote a real `trust_log` document
+  with `retain_until` as an actual BSON datetime (not the ISO-string
+  `expires_at`). `ensure_trust_log_ttl_index()` run against this same live
+  Mongo confirmed both partial indexes exist with the correct filters
+  (`trust_log_ttl_90d` on `vc_type=audit`, `trust_log_task_vc_retain_until`
+  on `vc_type=task_scoped`) — this closes the "confirm TTL index / retain_until
+  live on Mongo" residual finding, at least for this local instance.
+
+**Files:** `infrastructure/docker-compose.yml`, `docker-compose.dev.yml`,
+`infrastructure/.env.example` (new; `.env` itself is gitignored, not
+committed).
+
 ---
 
 ## 7. Backlog / not-yet-scheduled
@@ -968,13 +1055,21 @@ everywhere.
 - **LangGraph checkpointing / conversation resume** (`LANGGRAPH_CHECKPOINTING_ENABLED`,
   default off). Surfaced in the architectural review that led to Sprint 8/9 but
   never selected into either sprint's scope — not a delivery gap in S8/S9, a
-  standalone product decision nobody has made yet: is resumable conversation a
-  committed feature, or should the resume endpoint (`routers/conversations.py`)
-  be treated as experimental until it is? Message-history reconstructability
-  (§2's hub_writer entry, `AGENTS_REPORT.md`'s "Unbounded message history" row)
-  already depends on this flag being on; the resume endpoint itself fails
-  honestly (HTTP 409) when it's off rather than pretending to succeed, so
-  nothing is broken by leaving it off — it's just an unmade decision, not a bug.
+  standalone product decision. **Update:** the feature itself is now fully
+  built (config knob + `CHECKPOINT_RETENTION_DAYS`, migration `0025`'s
+  `checkpoints`/`checkpoint_blobs`/`checkpoint_writes` tables, the weekly
+  `enforce_checkpoint_retention` Celery-beat job, `/status`'s `resumable`
+  field + `/resume` endpoint, and the frontend Resume button/mutation) — this
+  bullet was never updated to say so when that work landed. What's still
+  unmade is the product decision itself: is resumable conversation a
+  committed feature, or should `routers/conversations.py`'s resume endpoint
+  stay experimental? See
+  [`CHECKPOINTING_STAGING_BAKE.md`](./CHECKPOINTING_STAGING_BAKE.md) for the
+  staging bake that precedes that decision. Message-history
+  reconstructability (§2's hub_writer entry, `AGENTS_REPORT.md`'s "Unbounded
+  message history" row) already depends on this flag being on; the resume
+  endpoint fails honestly (HTTP 409) when it's off rather than pretending to
+  succeed, so nothing is broken by leaving it off in the meantime.
 
 - **Agent C's SQL candidate-join pushdown** — see `DEFERRED_ITEMS_STRATEGY.md`
   item D. Pre-existing, unrelated to S8/S9; indexes shipped (migration `0016`),

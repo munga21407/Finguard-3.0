@@ -511,9 +511,15 @@ exposure, and our credit-readiness score, summarised."*
 | 5 | stage 2 | **J** distils all three via `executive_summary_keys()` |
 | 6 | END | `OrchestrationResponse` with `agents_invoked = [D,F,G,J]` |
 
-Today this same intent runs **D→F→G→J strictly serially**, with ordering left to
-the LLM's discretion on each hop. The DAG makes stage 0 parallel and the
-D+F→G dependency explicit and type-checked.
+With `A2A_PLANNER_ENABLED` off (the default everywhere), this same intent runs
+**D→F→G→J strictly serially**, with ordering left to the LLM's discretion on
+each hop. The DAG makes stage 0 parallel and the D+F→G dependency explicit and
+type-checked — verified live, not just designed: this exact intent, run
+against a local Docker stack with the flag on (2026-09-05), produced
+`Stage 0: dispatching d_forecaster, f_auditor` → `Stage 1: dispatching
+g_reporter` → `Stage 2: dispatching j_summarizer` → `DAG complete`, with real
+GenUI payloads back (see `AGENTS_REMEDIATION_SPRINTS.md`'s "Local Docker
+bake" entry). Not a staging bake — that's still open, see §6 below.
 
 ---
 

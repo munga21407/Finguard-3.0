@@ -373,7 +373,91 @@ Finguard-3.0/
 | Charts | Recharts | ≥2.13.0 |
 | Markdown | react-markdown + remark-gfm | ≥10.1.0 / ≥4.0.1 |
 | Forms | React Hook Form + Zod | ≥7.54.0 / ≥3.23.0 |
-| Icons | lucide-react | ≥0.460.0 |
+| Icons | lucide-react | ≥0.460.0 | You are working in the Finguard 3.0 monorepo. Read AGENTS.md,
+  docs/AGENTS_REMEDIATION_SPRINTS.md (S8/S9 trust notes), docs/A2A_PROTOCOL.md,
+  and these modules before proposing anything:
+  - backend/src/domains/intelligence/security/vc_issuer.py
+    (issue_vc, issue_task_scoped_vc, validate_task_vc, payload_hash)
+  - backend/src/domains/intelligence/security/agent_cards.py
+    (get_card, verify_card, exchange_cards)
+  - backend/src/domains/intelligence/proposal_service.py
+    (HITL uses payload_hash — NOT task VCs; do not break that)
+  - backend/src/domains/intelligence/agent_registry.py
+    (mutations / TOOL_GRANTS)
+  - Live mutators: reconciliation_service (Pass 1), b_classifier, anomaly_service,
+    event_publisher, k_stockkeeper → ProposalService
+  - Workers: use_cases.py, watchdog_consumer, batch, reporting_tasks
+  - Tests: test_vc_issuer.py, test_agent_cards.py, test_agent_proposal_workflow.py
+  ## Goal
+  Prepare the system to implement **end-to-end** use of:
+  1) issue_task_scoped_vc + validate_task_vc on appropriate write paths
+  2) exchange_cards on agent-to-agent / agent-to-writer handoffs
+  “Prepare” means: discover current trust boundaries, design the target flow,
+  list code/docs/test/ops gaps, ask me clarifying questions, then produce an
+  implementation blueprint + sequenced tickets. Do **not** implement yet unless
+  I explicitly say “implement phase N” after approving the plan.
+  ## Hard constraints
+  - Do NOT flip A2A_PLANNER_ENABLED or LANGGRAPH_CHECKPOINTING_ENABLED unless I ask.
+  - Do NOT replace ProposalService payload_hash / HITL with 5-minute task VCs
+    (TTL cannot span human review). Task VCs are for immediate issue→validate→write.
+  - Fail-closed: missing/invalid VC must block the write, with clear errors/metrics.
+  - Keep Ed25519 / EdDSA-only verification; no HS256 revival.
+  - Match existing patterns; prefer smallest coherent design over a grand rewrite.
+  - Secrets stay out of git; prod still requires FINGUARD_CA_PRIVATE_KEY_HEX.
+  ## Phase 0 — Ask me clarifying questions FIRST (wait for answers)
+  Ask at least:
+  1. **Trust topology:** Are we staying single-process for v1 (API+agents+writes in one
+     app), or simulating a split (e.g. agent mints VC, a separate “write gateway”
+     validates)? If single-process, what security property do we still want task VCs
+     to prove (audit? defense-in-depth? rehearsal for a later split)?
+  2. **Which write paths in v1?** Choose among:
+     - C Pass 1 direct_write (deterministic reconcile apply)
+     - B actions-mode Celery classification persist
+     - E anomaly event publish and/or ML fit enqueue
+     - K/C proposal *creation* (mint only) vs *approve* (must stay payload_hash)
+     - Other (specify)
+  3. **Who issues the VC?** Supervisor/planner at dispatch, the agent node just
+     before mutate, or a dedicated issuer service/helper?
+  4. **Who validates?** Same process immediately before DB/Rabbit write, or a
+     future write service? Must validation be mandatory in `actions` mode only,
+     or also `insights` where no writes occur?
+  5. **exchange_cards scope:** On every hub_writer hop? Only planner Send fan-out?
+     Only before cross-agent context consume (G/H/K)? Only agent→writer?
+  6. **Failure UX:** On invalid/expired VC — fail the agent node with degradation
+     message, fail the whole graph (508/4xx), or dead-letter + alert?
+  7. **Observability:** Required metrics/logs (issue count, validate fail reasons,
+     agent_id, operation)? Any compliance retention beyond trust_log TTL?
+  8. **Rollout:** Feature flag name/default? Shadow mode (issue+log validate, don’t
+     enforce) then enforce? Staging-only first?
+  9. **Success criteria for “E2E done”:** e.g. one happy-path integration test that
+     mints → validates → write succeeds, plus negative tests (wrong jti, wrong agent,
+     expired, bad sig) on a real mutator path — confirm what you want.
+  Wait for my answers before designing.
+  ## Phase 1 — After my answers: discovery report (read-only)
+  Produce:
+  - Current call graph for each selected mutator (who writes, mode gates, mutations)
+  - Why task VC helps or does not help on each path
+  - Where exchange_cards would sit without breaking LangGraph Send/hub_writer
+  - Gaps: missing flags, helper APIs, IDOR/tenant binding, worker parity, docs lies
+  - Risks: double-write, TTL races with Celery delay, proposal approve confusion
+  ## Phase 2 — Blueprint (still no code unless I approve)
+  Deliver:
+  1. Sequence diagrams: issue → handoff/exchange_cards → validate → write → audit VC
+  2. API/helper surface (e.g. require_task_vc(...), mint_for_operation(...))
+  3. File-by-file change list
+  4. Flag + config
+  5. Test plan (unit + integration + one E2E)
+  6. Rollout plan (shadow → enforce)
+  7. Explicit non-goals (HITL stays on payload_hash, etc.)
+  8. Tickets ordered P0/P1/P2 with acceptance criteria
+  ## Phase 3 — Implement only when I say so
+  When I reply “implement P0” / “implement phase 3”, then make the smallest diff that
+  meets the approved blueprint, with tests green (make backend-test for touched areas
+  or targeted pytest), and summarize what shipped vs still flagged off.
+  Start now with Phase 0 questions only.
+
+  Tip: If you only want prep for one path first, add a line at the top:
+  V1 scope lock: C Pass 1 + exchange_cards on planner handoffs only.
 | Date Utilities | date-fns | ≥4.1.0 |
 | E2E Testing | Playwright | ≥1.60.0 |
 

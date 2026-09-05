@@ -22,6 +22,15 @@ flip it. This is the how-to for making that decision.*
   (`monitoring/dashboards/finguard_ai_overview.json`): `agent_planner_stage_outcome_total`
   (labelled `run` / `already_produced` / `missing_required`) and
   `agent_planner_replans_total`.
+- Beyond the test suite, the board-pack intent has now been run for real
+  against a local Docker stack with the flag on (2026-09-05) — real
+  containers, a real chat request, the actual 3-stage DAG in logs, real
+  metrics incremented. See `AGENTS_REMEDIATION_SPRINTS.md`'s "Local Docker
+  bake" entry for the full trace. That's a local exercise, not this staging
+  bake — but it's one more layer of confidence than the test suite alone
+  going in. `infrastructure/.env.example` documents how to reproduce it
+  (`A2A_PLANNER_ENABLED=true` picked up by `docker-compose.yml`'s shared
+  env anchor).
 
 ## Known gap (read before running the bake)
 

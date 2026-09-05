@@ -1130,6 +1130,124 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Conversation resume attempts by outcome (agent_checkpoint_resume_total) — dispatched vs. not_found (unknown/expired/not-yours session) vs. not_resumable (status isn't a resumable failure). Zero data until LANGGRAPH_CHECKPOINTING_ENABLED is on for this environment and someone actually hits /resume. Part of the staging bake (docs/CHECKPOINTING_STAGING_BAKE.md).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 71
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Checkpoint Resume Outcome (rate)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (outcome) (rate(agent_checkpoint_resume_total[5m]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Threads whose checkpoint history was purged by the weekly retention sweep (agent_checkpoint_retention_deleted_threads_total), summed over the trailing 7 days. Zero every week is expected and fine while checkpointing is off or traffic is low; a check worth doing during the bake is that this isn't growing unboundedly relative to CHECKPOINT_RETENTION_DAYS.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 71
+      },
+      "id": 16,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.2.0",
+      "title": "Checkpoint Retention — Threads Deleted (7d)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(increase(agent_checkpoint_retention_deleted_threads_total[7d]))",
+          "legendFormat": "deleted threads",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "30s",
@@ -1138,7 +1256,7 @@
     "finguard",
     "sre",
     "ai-agents",
-    "d4"
+    "d5"
   ],
   "templating": {
     "list": [
@@ -1164,6 +1282,6 @@
   "timezone": "browser",
   "title": "FinGuard AI — Agent Overview",
   "uid": "finguard-ai-overview-d3",
-  "version": 4,
+  "version": 5,
   "weekStart": ""
 }

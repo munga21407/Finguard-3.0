@@ -20,8 +20,13 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.metrics import CHECKPOINT_RETENTION_DELETED_THREADS
 from src.workers.tasks import batch
 from tests.conftest import TestingSessionLocal, engine
+
+
+def _sample_deleted_threads() -> float:
+    return CHECKPOINT_RETENTION_DELETED_THREADS._value.get()
 
 
 @pytest_asyncio.fixture
@@ -147,8 +152,10 @@ async def test_old_thread_purged_recent_thread_kept(
         )
         await session.commit()
 
+    before = _sample_deleted_threads()
     result = await batch._run_checkpoint_retention_async()
     assert result == {"status": "ok", "deleted_threads": 1}
+    assert _sample_deleted_threads() == before + 1
 
     async with TestingSessionLocal() as session:
         assert await _thread_row_counts(session, "old-thread") == {

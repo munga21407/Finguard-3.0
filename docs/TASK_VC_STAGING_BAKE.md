@@ -55,6 +55,17 @@ is acceptable.
   these five call sites — a `reason=PermissionError` in the fail-rate panel
   means the CA signing key (`FINGUARD_CA_PRIVATE_KEY_HEX` / the dev-derived
   fallback) is misconfigured for this environment, not a VC-logic bug.
+- Beyond the test suite, `require_task_vc` under enforce mode has now been
+  run for real against a local Docker stack (2026-09-05) — real Mongo, real
+  Ed25519 signing, a real `trust_log` write with `retain_until` as an actual
+  datetime, and `ensure_trust_log_ttl_index()`'s two partial indexes
+  confirmed present with the right filters. See
+  `AGENTS_REMEDIATION_SPRINTS.md`'s "Local Docker bake" entry.
+  `infrastructure/.env.example` documents how to reproduce it
+  (`TASK_VC_ENFORCEMENT_ENABLED=true` picked up by `docker-compose.yml`'s
+  shared env anchor) — a local Docker bake isn't a substitute for the
+  staging bake below (different Mongo, different traffic), but it's one
+  more layer of confidence going in.
 
 ## Known gap (read before running the bake)
 

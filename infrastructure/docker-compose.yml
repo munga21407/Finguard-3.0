@@ -50,6 +50,13 @@ x-backend-env: &backend-env
   MAIL_FROM_NAME: ${MAIL_FROM_NAME:-Finguard}
   MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-}
   MAIL_REPLY_TO: ${MAIL_REPLY_TO:-}
+  # Feature flags — off by default everywhere (matches config.py), overridable
+  # per environment via a .env file next to this compose file. See
+  # docs/A2A_PLANNER_STAGING_BAKE.md / docs/TASK_VC_STAGING_BAKE.md.
+  A2A_PLANNER_ENABLED: ${A2A_PLANNER_ENABLED:-false}
+  TASK_VC_ENFORCEMENT_ENABLED: ${TASK_VC_ENFORCEMENT_ENABLED:-false}
+  LANGGRAPH_CHECKPOINTING_ENABLED: ${LANGGRAPH_CHECKPOINTING_ENABLED:-false}
+  CSRF_ENABLED: ${CSRF_ENABLED:-true}
 
 # depends_on block reused by celery-worker (needs the schema migrated + DB and
 # both brokers healthy).

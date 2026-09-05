@@ -17,6 +17,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
 from src.core.config import settings
+from src.core.metrics import CHECKPOINT_RESUME_OUTCOME
 from src.domains.identity.dependencies import RequireIntelligenceRead
 from src.domains.intelligence.routers._common import (
     _TASK_STATUS_TTL,
@@ -492,6 +493,7 @@ async def conversation_resume(
 
     owner: str | None = await redis_client.get(f"task_owner:{session_id}")  # type: ignore[assignment]
     if owner is not None and owner != str(current_user.id):
+        CHECKPOINT_RESUME_OUTCOME.labels(outcome="not_found").inc()
         raise HTTPException(
             status_code=404,
             detail="Session not found or status has expired.",
@@ -499,6 +501,7 @@ async def conversation_resume(
 
     raw: str | None = await redis_client.get(f"task_status:{session_id}")  # type: ignore[assignment]
     if raw is None:
+        CHECKPOINT_RESUME_OUTCOME.labels(outcome="not_found").inc()
         raise HTTPException(
             status_code=404,
             detail="Session not found or status has expired.",
@@ -510,6 +513,7 @@ async def conversation_resume(
         payload = {}
 
     if payload.get("status") != "failed" or not payload.get("resumable"):
+        CHECKPOINT_RESUME_OUTCOME.labels(outcome="not_resumable").inc()
         raise HTTPException(
             status_code=409,
             detail="Session is not in a resumable failed state.",
@@ -522,6 +526,7 @@ async def conversation_resume(
     )
     background_tasks.add_task(_graph_background_task, None, session_id)
 
+    CHECKPOINT_RESUME_OUTCOME.labels(outcome="dispatched").inc()
     logger.info("conversation: background resume dispatched", session_id=session_id)
 
     return TaskStatusResponse(session_id=session_id, status="pending")

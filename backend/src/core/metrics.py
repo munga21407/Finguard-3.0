@@ -236,6 +236,22 @@ TASK_VC_VALIDATE_FAIL = Counter(
     labelnames=["agent_id", "operation", "reason"],
 )
 
+# ── LangGraph checkpointing / conversation resume ──────────────────────────────
+# Gated behind LANGGRAPH_CHECKPOINTING_ENABLED — no traffic until the flag is on
+# for a given environment. Part of the staging bake
+# (docs/CHECKPOINTING_STAGING_BAKE.md).
+
+CHECKPOINT_RETENTION_DELETED_THREADS = Counter(
+    "agent_checkpoint_retention_deleted_threads_total",
+    "Threads whose checkpoint history was purged by the weekly retention sweep",
+)
+
+CHECKPOINT_RESUME_OUTCOME = Counter(
+    "agent_checkpoint_resume_total",
+    "Conversation resume attempts by outcome",
+    labelnames=["outcome"],  # "dispatched" | "not_found" | "not_resumable"
+)
+
 # ── Helper: LLM call timer ─────────────────────────────────────────────────────
 
 

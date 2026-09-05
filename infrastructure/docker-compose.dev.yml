@@ -25,16 +25,16 @@ services:
 
   mongodb:
     ports:
-      - "27017:27017"
+      - "${MONGODB_HOST_PORT:-27017}:27017"
 
   redis:
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
 
   rabbitmq:
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "${RABBITMQ_HOST_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_HOST_PORT:-15672}:15672"
 
   backend:
     build:
@@ -44,7 +44,7 @@ services:
     # Expose directly to the host for local debugging (the base file only routes
     # through nginx). Dev runs without the prod config validation.
     ports:
-      - "8000:8000"
+      - "${BACKEND_HOST_PORT:-8000}:8000"
     volumes:
       - ../backend:/app
       - /app/.venv
@@ -61,7 +61,7 @@ services:
       target: dev
     command: npm run dev
     ports:
-      - "3000:3000"
+      - "${FRONTEND_HOST_PORT:-3000}:3000"
     volumes:
       - ../frontend:/app
       - /app/node_modules
